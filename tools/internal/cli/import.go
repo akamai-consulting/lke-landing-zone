@@ -54,7 +54,6 @@ func brownfieldDeps() brownfield.Deps {
 		SetSpecPath: yamledit.SetSpecPath,
 		Render:      func(env string) error { return render.Run(cliopts.Global.DryRun, env, false, false, false) },
 		KubectlOut:  kubectlprobe.Out,
-		Confirm:     func() bool { return cliopts.Global.Yes },
 		// A CLOSURE, read at call time — not `cliopts.Global.DryRun` captured here.
 		// The command tree is built before cobra parses persistent flags, so a
 		// snapshot would freeze this at false forever. That exact defect shipped in

@@ -125,7 +125,7 @@ func planObjectStorage(b *strings.Builder, rep importReport) {
 // persistence is a primary store and this scan cannot tell which it is looking at.
 // Anything not listed, INCLUDING an engine this scanner could not identify, is
 // treated as durable: the failure that matters here is one-directional.
-var cacheEngines = map[string]bool{"redis": true, "memcached": true}
+var cacheEngines = map[string]bool{"redis": true, "valkey": true, "memcached": true}
 
 func planDatabases(b *strings.Builder, rep importReport) {
 	w := func(format string, a ...any) { fmt.Fprintf(b, format, a...) }

@@ -1512,7 +1512,14 @@ categories:
     #                       so the documented adoption path wrote no report and
     #                       scaffolded an instance with every discovered component
     #                       off.
-    budget: 1967
+    #   1,966 / 129 files  -1 retiring `Deps.Confirm` for `llz import`. Once both
+    #                       of that package's steps moved to DryRun above, nothing
+    #                       in it read Confirm — and an authorisation seam with no
+    #                       reader is worse than no seam: it reads as "this package
+    #                       asks before it writes" while nothing in it does. Banked
+    #                       rather than left as slack, which is the whole point of
+    #                       `exact`.
+    budget: 1966
     exact: true
     include:
       - "tools/internal/cli/*.go"

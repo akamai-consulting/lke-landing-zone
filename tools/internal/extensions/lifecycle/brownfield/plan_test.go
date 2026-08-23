@@ -74,10 +74,13 @@ func TestMigrationPlanDoesNotCallASelfManagedDatabaseEphemeral(t *testing.T) {
 		before := p[:i]
 		cacheAt := strings.LastIndex(before, "Likely caches")
 		migrateAt := strings.LastIndex(before, "Self-managed databases — MIGRATE")
-		if cacheAt > migrateAt {
-			t.Errorf("%s is listed under the caches heading — a self-managed database (or one whose "+
-				"engine could not be identified) told to rebuild rather than migrate is data loss by "+
-				"documentation", name)
+		// migrateAt >= 0 first: with both at -1 the `>` comparison is FALSE, so
+		// deleting the MIGRATE section entirely would satisfy this gate. "Neither
+		// heading precedes it" is not the same as "the right heading does".
+		if migrateAt < 0 || cacheAt > migrateAt {
+			t.Errorf("%s is not under the MIGRATE heading (migrateAt=%d cacheAt=%d) — a self-managed "+
+				"database (or one whose engine could not be identified) told to rebuild rather than "+
+				"migrate is data loss by documentation", name, migrateAt, cacheAt)
 		}
 	}
 	if !strings.Contains(p, "Treat every one as holding data that matters") {
@@ -104,5 +107,39 @@ func TestReportBucketsFallbackToApl(t *testing.T) {
 func TestSanitizeEnvKey(t *testing.T) {
 	if got := sanitizeEnvKey("lke579582-loki"); got != "lke579582_loki" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// TestAnUnrecognisedStatefulSetReachesThePlan.
+//
+// planDatabases has a branch that reads "engine not identified — inspect it
+// before deciding anything", and until detectDBWorkloads emitted unmatched
+// StatefulSets that branch could not be reached from a real scan: dbInfo was
+// appended only when dbEngineForImages had already named the engine. A valkey,
+// cassandra or etcd StatefulSet holding production data was therefore not
+// mis-classified, it was ABSENT — and an operator working the plan migrates
+// nothing they were never told about. The sibling test above hand-built its
+// `legacy-store` fixture, so it proved the renderer and nothing upstream of it.
+func TestAnUnrecognisedStatefulSetReachesThePlan(t *testing.T) {
+	got := map[string]string{}
+	for _, d := range detectDBWorkloads([]workload{
+		{Namespace: "team-payments", Name: "ledger", Kind: "StatefulSet", Images: []string{"docker.io/cockroachdb/cockroach:v23"}},
+		{Namespace: "team-payments", Name: "sessions", Kind: "StatefulSet", Images: []string{"docker.io/valkey/valkey:8"}},
+		{Namespace: "team-payments", Name: "web", Kind: "Deployment", Images: []string{"nginx:1.27"}},
+	}) {
+		got[d.Name] = d.Engine
+	}
+	if _, ok := got["ledger"]; !ok {
+		t.Error("a StatefulSet whose engine this scanner cannot name must still reach the plan — " +
+			"absent from the report is absent from the migration, and nobody reviews what they cannot see")
+	}
+	if got["ledger"] != "" {
+		t.Errorf("an unrecognised engine must be reported as unknown, not guessed at: %q", got["ledger"])
+	}
+	if got["sessions"] != "valkey" {
+		t.Errorf("valkey is what a modern chart installs in place of Redis; engine=%q", got["sessions"])
+	}
+	if _, ok := got["web"]; ok {
+		t.Error("a stateless Deployment must not be listed as a database to migrate")
 	}
 }

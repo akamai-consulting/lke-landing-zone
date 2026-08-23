@@ -51,7 +51,11 @@ func RunScan(d Deps, o ScanOpts) error {
 	// STEP OF THE DOCUMENTED ADOPTION PATH printed "(dry-run) … would write
 	// import-report.yaml", exited 0, and wrote nothing — and the next step,
 	// `llz import init`, then failed on a report that was never created.
-	if d.DryRun != nil && d.DryRun() {
+	// Called unguarded, like every other Deps func field. `d.DryRun != nil && …`
+	// fails OPEN: an unwired seam turns --dry-run silently off and this command
+	// scans a live cluster having promised not to. A nil panic names the wiring
+	// bug at the first invocation; the guard hides it behind correct-looking output.
+	if d.DryRun() {
 		fmt.Println(color.Dim("→ (dry-run) read-only inventory scan via kubectl (current context); would write " + o.Output))
 		return nil
 	}

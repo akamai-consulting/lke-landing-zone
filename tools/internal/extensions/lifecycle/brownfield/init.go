@@ -56,6 +56,21 @@ func RunInit(d Deps, o InitOpts) error {
 		return err
 	}
 
+	// --dry-run covers THE WHOLE FUNCTION, at the top, because it is a request to
+	// describe rather than act and every step below acts. Honouring it inside step
+	// 3 alone — where it started, as the fix for that step being gated on --yes —
+	// left `llz import init --dry-run` scaffolding a real instance and writing a
+	// real MIGRATION-TODO.md while announcing "(dry-run)" for the component
+	// toggles in the middle of it. A flag that half the steps observe is worse than
+	// one none of them do: the "(dry-run)" line is then evidence for a claim that
+	// is false.
+	if d.DryRun() {
+		fmt.Printf("  %s would scaffold %s from %s, author the spec for env %q, set %d component "+
+			"toggle(s), and write %s. Nothing written.\n",
+			color.Dim("(dry-run)"), o.Dir, o.Report, o.Env, len(enabledComponentAssignments(rep)), migrationTodoFile)
+		return nil
+	}
+
 	// 1. Scaffold the instance (copier prompts for identity the report can't supply).
 	if err := d.New(o.Org, o.Ref, o.Dir); err != nil {
 		return err
@@ -121,16 +136,12 @@ func withinDir(dir string, fn func() error) error {
 // env spec file (preserving comments, the same building blocks `llz env set` uses)
 // and re-renders.
 func applyComponentToggles(d Deps, env string, assigns []string) error {
-	// DryRun, NOT !Confirm — and this one was the odd step out in its OWN function.
-	// RunInit's other three steps (scaffold, author the spec, write
-	// MIGRATION-TODO.md) all run for real without --yes, so gating this on Confirm
-	// meant the documented `llz import init` produced a complete instance with
-	// EVERY component the scan discovered left off, announcing it with a
-	// "(dry-run)" line in the middle of a run that plainly was not one.
-	if d.DryRun != nil && d.DryRun() {
-		fmt.Printf("  %s would set: %s\n", color.Dim("(dry-run)"), strings.Join(assigns, " "))
-		return nil
-	}
+	// No --dry-run branch here: RunInit returns before this is reached. This step
+	// used to be gated on Confirm (`--yes`), so the documented `llz import init`
+	// produced a complete instance with EVERY component the scan discovered left
+	// OFF, announcing it with a "(dry-run)" line in a run that plainly was not one.
+	// The gate that replaced it belongs at the top of RunInit, where it covers the
+	// scaffold and the checklist too rather than describing one step of four.
 	envFile, err := d.EnvSpecFile(env)
 	if err != nil {
 		return err

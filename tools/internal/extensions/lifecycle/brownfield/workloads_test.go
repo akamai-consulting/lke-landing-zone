@@ -149,14 +149,18 @@ func TestParsePodSecretRefsAndAttachDBClients(t *testing.T) {
 		{"metadata":{"name":"keycloak-keycloakx-0","namespace":"keycloak","ownerReferences":[{"kind":"StatefulSet","name":"keycloak-keycloakx"}]},
 		 "spec":{"containers":[{"envFrom":[{"secretRef":{"name":"keycloak-db-app"}}]}]}},
 		{"metadata":{"name":"random","namespace":"harbor"},
-		 "spec":{"containers":[{"env":[{"valueFrom":{"secretKeyRef":{"name":"some-other-secret"}}}]}]}}
+		 "spec":{"containers":[{"env":[{"valueFrom":{"secretKeyRef":{"name":"some-other-secret"}}}]}]}},
+		{"metadata":{"name":"api-7c9-z","namespace":"team-gsap","ownerReferences":[{"kind":"ReplicaSet","name":"api-7c9"}]},
+		 "spec":{"containers":[{"envFrom":[{"secretRef":{"name":"redis-cache-auth"}}]}]}},
+		{"metadata":{"name":"redis-cache-0","namespace":"team-gsap","ownerReferences":[{"kind":"StatefulSet","name":"redis-cache"}]},
+		 "spec":{"containers":[{"envFrom":[{"secretRef":{"name":"redis-cache-auth"}}]}]}}
 	]}`
 	uses := parsePodSecretRefs(pods)
 
 	dbs := []dbInfo{
 		{Namespace: "harbor", Name: "harbor-otomi-db", Kind: "CNPG", Engine: "postgres"},
 		{Namespace: "keycloak", Name: "keycloak-db", Kind: "CNPG", Engine: "postgres"},
-		{Namespace: "team-gsap", Name: "redis-cache", Kind: "workload", Engine: "redis"}, // not CNPG → no clients
+		{Namespace: "team-gsap", Name: "redis-cache", Kind: "workload", Engine: "redis"},
 	}
 	got := attachDBClients(dbs, uses)
 
@@ -166,8 +170,14 @@ func TestParsePodSecretRefsAndAttachDBClients(t *testing.T) {
 	if !reflect.DeepEqual(got[1].Clients, []string{"StatefulSet/keycloak-keycloakx"}) {
 		t.Errorf("keycloak clients=%v", got[1].Clients)
 	}
-	if got[2].Clients != nil { // workload-kind DBs are left alone
-		t.Errorf("workload DB should have no clients, got %v", got[2].Clients)
+	// A SELF-MANAGED DB GETS THE SAME HEURISTIC. The Kind != "CNPG" skip that used
+	// to sit here left every one of them with an empty client list, which the
+	// migration plan then rendered as "no client detected" — a negative nothing had
+	// looked for, on exactly the databases the plan tells an operator to migrate by
+	// hand. The database mounting its OWN secret (redis-cache-0) is not a client of
+	// itself and must not appear.
+	if !reflect.DeepEqual(got[2].Clients, []string{"Deployment/api"}) {
+		t.Errorf("self-managed DB clients=%v, want the workload that mounts its secret and not the DB itself", got[2].Clients)
 	}
 }
 

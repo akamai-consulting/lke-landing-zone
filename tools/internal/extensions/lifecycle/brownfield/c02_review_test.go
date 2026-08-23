@@ -8,7 +8,6 @@ package brownfield
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	yamlv3 "gopkg.in/yaml.v3"
@@ -26,9 +25,8 @@ func TestScanWritesTheReportWithoutYes(t *testing.T) {
 	out := filepath.Join(dir, "import-report.yaml")
 
 	d := Deps{
-		// Neither set: this is what `llz import scan` with no --yes and no
+		// Not set: this is what `llz import scan` with no --yes and no
 		// --dry-run looks like.
-		Confirm:    func() bool { return false },
 		DryRun:     func() bool { return false },
 		KubectlOut: func(...string) (string, error) { return "", nil },
 	}
@@ -47,7 +45,6 @@ func TestScanHonoursDryRun(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "import-report.yaml")
 	d := Deps{
-		Confirm:    func() bool { return true },
 		DryRun:     func() bool { return true },
 		KubectlOut: func(...string) (string, error) { return "", nil },
 	}
@@ -67,10 +64,20 @@ func TestScanHonoursDryRun(t *testing.T) {
 // component the scan had discovered left OFF, announcing it with a "(dry-run)"
 // line in the middle of a run that plainly was not one.
 func TestComponentTogglesApplyWithoutYes(t *testing.T) {
+	// The assignments come from the real producer, not a hand-written literal.
+	// A literal `spec.components.harbor.enabled=true` compiles and passes while
+	// stating a contract that does not exist — enabledComponentAssignments emits
+	// no `spec.` prefix — so the test would keep passing across a change to either
+	// side of a split neither side owns alone.
+	assigns := enabledComponentAssignments(importReport{
+		Platform: importPlatform{Components: map[string]bool{"harbor": true}},
+	})
+	if len(assigns) != 1 {
+		t.Fatalf("fixture drift: enabledComponentAssignments produced %v", assigns)
+	}
 	var edited bool
 	var setPaths []string
 	d := Deps{
-		Confirm:     func() bool { return false },
 		DryRun:      func() bool { return false },
 		EnvSpecFile: func(string) (string, error) { return "environments/prod.yaml", nil },
 		EditSpec: func(_ string, mutate func(*yamlv3.Node) error, _ func([]byte) error) error {
@@ -87,28 +94,48 @@ func TestComponentTogglesApplyWithoutYes(t *testing.T) {
 		},
 		Render: func(string) error { return nil },
 	}
-	if err := applyComponentToggles(d, "prod", []string{"spec.components.harbor.enabled=true"}); err != nil {
+	if err := applyComponentToggles(d, "prod", assigns); err != nil {
 		t.Fatalf("applying toggles must not need --yes: %v", err)
 	}
-	if !edited || len(setPaths) != 1 {
+	if !edited || len(setPaths) != 1 || setPaths[0] != assigns[0] {
 		t.Errorf("the toggles the scan found were not applied (edited=%v set=%v) — the operator gets an "+
 			"instance with every discovered component off", edited, setPaths)
 	}
 }
 
-// TestComponentTogglesHonourDryRun pins the other side.
-func TestComponentTogglesHonourDryRun(t *testing.T) {
+// TestInitHonoursDryRunForEVERYStep pins the other side, at the level the flag
+// actually has to hold. --dry-run started life inside applyComponentToggles
+// alone, which meant `llz import init --dry-run` scaffolded a real instance and
+// wrote a real MIGRATION-TODO.md while printing "(dry-run)" about the toggles in
+// the middle of it — a flag half the steps observe makes the "(dry-run)" line
+// evidence for a claim that is false.
+func TestInitHonoursDryRunForEVERYStep(t *testing.T) {
+	dir := t.TempDir()
+	report := filepath.Join(dir, "import-report.yaml")
+	if err := os.WriteFile(report, []byte("platform:\n  components:\n    harbor: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	d := Deps{
-		Confirm: func() bool { return true },
-		DryRun:  func() bool { return true },
-		EditSpec: func(string, func(*yamlv3.Node) error, func([]byte) error) error {
-			t.Fatal("--dry-run must not edit the spec")
+		DryRun:          func() bool { return true },
+		ValidateEnvName: func(string) error { return nil },
+		New: func(string, string, string) error {
+			t.Error("--dry-run must not scaffold an instance")
 			return nil
 		},
-		EnvSpecFile: func(string) (string, error) { return "environments/prod.yaml", nil },
+		EnvAdd: func(string, EnvSpec) error {
+			t.Error("--dry-run must not author a spec")
+			return nil
+		},
+		EditSpec: func(string, func(*yamlv3.Node) error, func([]byte) error) error {
+			t.Error("--dry-run must not edit the spec")
+			return nil
+		},
 	}
-	if err := applyComponentToggles(d, "prod", []string{"spec.components.harbor.enabled=true"}); err != nil {
+	if err := RunInit(d, InitOpts{Report: report, Dir: filepath.Join(dir, "inst"), Env: "prod"}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "inst", migrationTodoFile)); err == nil {
+		t.Error("--dry-run wrote MIGRATION-TODO.md — the checklist is a real file the operator then edits")
 	}
 }
 
@@ -127,5 +154,4 @@ func TestDryRunSeamIsAClosureNotASnapshot(t *testing.T) {
 	if !d.DryRun() {
 		t.Error("Deps.DryRun must read the flag when CALLED, not when the Deps were built")
 	}
-	_ = strings.TrimSpace("")
 }

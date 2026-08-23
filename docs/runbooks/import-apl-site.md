@@ -104,7 +104,23 @@ copy-pasteable commands generated from the inventory:
 - **Databases** — per CNPG cluster, the **owning app** (from the DB-clients
   mapping) with its preferred app-native export/import, plus a CNPG-aware
   `pg_dump`/`pg_restore` fallback (same-version only).
-- **Caches** (redis/valkey) — listed as rebuild-don't-migrate.
+- **Self-managed databases — MIGRATE** — databases running as ordinary
+  workloads rather than CNPG clusters. The plan cannot write their commands (it
+  does not know their credentials or topology) and lists them for you to move by
+  hand. **Treat every entry as holding data that matters**, including one whose
+  engine the scan could not identify: any StatefulSet the scan cannot name is
+  listed here rather than dropped, because absent from the plan is absent from
+  the migration.
+- **Likely caches — VERIFY, then rebuild** (redis/valkey/memcached) — usually
+  nothing to migrate, but the scan reads the **image name, not the
+  configuration**, and Redis with AOF or RDB persistence is a primary store.
+  Check each for a persistence volume and for clients treating it as a system of
+  record before skipping it.
+
+> An earlier version of this plan put everything that was not CNPG under
+> "Caches — rebuild, do NOT migrate" and called it ephemeral, so a self-managed
+> Postgres StatefulSet holding production data was handed over as throwaway in a
+> document meant to be followed literally.
 
 Target endpoints/credentials/bucket names are `${PLACEHOLDER}` env vars you fill.
 The plan still does **not** cover block-PV contents (see below).
