@@ -1435,6 +1435,22 @@ categories:
     #                       build-images.yml and judges whether a MUTABLE tag can be
     #                       published from a non-default ref (#451), which is a
     #                       decision with fail-closed arms rather than a wiring line.
+    #   1,967 / 129 files  ±0 registering `llz ci k8s-minor-coherence`: +1 for the
+    #                       import, paid by −1 collapsing the `callerperms` and
+    #                       `runinjection` AddCommand calls onto one line. WRITTEN OUT
+    #                       BECAUSE THE NUMBER DID NOT MOVE — a net-zero change leaves
+    #                       no trace in the budget, and a verb that arrives without a
+    #                       ledger line is the paydown-by-relabelling this category's
+    #                       header warns about, just with the relabelling done in a
+    #                       neighbouring call. The two collapsed lines register two
+    #                       guards over this repo's own workflows and were already a
+    #                       pair; nothing was moved out of the layer to make room.
+    #                       The denominator moved 113 → 129 on `main`, which adds
+    #                       test files under these globs; `matched` counts files the
+    #                       globs SELECT, tests included. The guard itself is
+    #                       extensions/guards/k8sminorcoherence under unit test — it
+    #                       holds lint.yml's kind node image to the LKE-E minor the
+    #                       cluster root pins (#427).
     budget: 1967
     exact: true
     include:

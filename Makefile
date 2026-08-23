@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site mutable-tag-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard   untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -154,6 +154,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/runinjection=92 \
 	internal/extensions/guards/budget=87 \
 	internal/extensions/guards/chartguard=71 \
+	internal/extensions/guards/k8sminorcoherence=99 \
 	internal/shared/cli=98 \
 	internal/extensions/assertions/assertnetwork=52 \
 	internal/extensions/assertions/assertplatform=53 \
@@ -307,6 +308,7 @@ help:
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
 	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
 	@echo "  mutable-tag-guard  build-images.yml may publish :latest / :<version> only from the default branch"
+	@echo "  k8s-minor-coherence  lint.yml's kind node image must run the k8s minor we deploy to LKE-E"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -1051,6 +1053,32 @@ version-pins-check: export LLZ_FORCE_SOURCE := 1
 version-pins-check:
 	$(call LLZ_CI,gates --only version-pins,)
 
+# k8s-minor-coherence: `llz ci k8s-minor-coherence` — the kind cluster lint.yml
+# server-side dry-runs against must run the Kubernetes MINOR we deploy.
+#
+# THE GATE WAS ANSWERING THE WRONG QUESTION FOR THREE MINORS (#427). lint.yml
+# pinned kind's VERSION and never its NODE IMAGE, so `kubectl apply
+# --dry-run=server -f rendered/` — the only check in the repo that asks a real API
+# server whether the manifests are acceptable — ran against kind v0.25.0's default
+# image, v1.31.2, while the cluster root pinned v1.34.6+lke2. An API removed in
+# 1.32/1.33/1.34, or a field only a newer server validates, passed here and would
+# have failed on a real cluster. Lint was green throughout, which is the point: a
+# 1.31 server accepting those manifests is an entirely ordinary thing for it to do.
+#
+# NOTHING COULD SEE IT. `KIND_VERSION: v0.25.0` is a real kind release and
+# `k8s_version = "v1.34.6+lke2"` is a real LKE-E build; only the RELATION between
+# them is wrong, which is the same shape as version-pins, setup-go-sole-site and
+# mutable-tag-guard. And it was created by a change to neither site — bumping
+# kubectl (#425) broke a kubectl-1.31 ↔ kind-1.31.2 pairing nobody had written
+# down, so that diff gave no reviewer anything to notice.
+#
+# FROM SOURCE, for version-pins-check's reason: it compares the working tree
+# against itself, and the prebuilt image binary is built from the merge-base (so
+# it lacks this verb on the PR that introduces it).
+k8s-minor-coherence: export LLZ_FORCE_SOURCE := 1
+k8s-minor-coherence:
+	$(call LLZ_CI,gates --only k8s-minor-coherence,)
+
 # docs-guard runs on a DOC change, yes — but also on a CLI or workflow-input
 # change, which is what actually causes doc rot. A renamed flag makes a doc wrong
 # without touching the doc, so scoping this to *.md would miss precisely the drift
@@ -1199,7 +1227,7 @@ symbol-ref-guard:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet staticcheck shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet staticcheck shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check k8s-minor-coherence docs-guard untestable-loc-check core-surface-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \

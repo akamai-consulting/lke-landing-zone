@@ -127,9 +127,12 @@ var componentless = map[string]bool{
 	"template-sustain":                     true,
 	"tofu-driver":                          true,
 	"token-inventory":                      true,
-	"version-pins":                         true,
-	"wave-health":                          true,
-	"wedge-gameday":                        true,
+	// Its subject is this repo's own Lint workflow against this repo's own cluster
+	// root — neither is a component an instance can turn off.
+	"k8s-minor-coherence": true,
+	"version-pins":        true,
+	"wave-health":         true,
+	"wedge-gameday":       true,
 }
 
 func TestComponentlessExtensionsAreRatcheted(t *testing.T) {

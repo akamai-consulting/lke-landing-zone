@@ -41,6 +41,7 @@ import (
 var incompleteNotes = map[string]int{
 	"credential-state-passphrase": 1,
 	"import-brownfield":           1,
+	"k8s-minor-coherence":         2,
 	"obj-encryption":              1,
 	"openbao":                     2,
 	"pin-coherence":               1,

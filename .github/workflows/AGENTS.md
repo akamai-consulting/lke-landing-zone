@@ -106,9 +106,30 @@ On GitHub-hosted runners, install CLI tools with the official marketplace setup 
 | helm | `azure/setup-helm` |
 | kubectl | `azure/setup-kubectl` |
 | yq | `dcarbone/install-yq-action` |
-| kind (+ cluster) | `helm/kind-action` |
+| kind (+ cluster) | `helm/kind-action` — see the extra inputs below |
 
 Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-tofu` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-tofu` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step.
+
+**`helm/kind-action` needs two more inputs than `version:`, and `llz ci
+k8s-minor-coherence` enforces both** (#427). `version:` pins *kind*, not the
+cluster: without `node_image:` kind boots its own default node image, which is
+how a server-side dry-run came to validate against Kubernetes 1.31 for three
+minors while we deployed 1.34. And the action installs its own kubectl and
+prepends it to `PATH`, so without `kubectl_version:` it silently shadows the
+`azure/setup-kubectl` step above it.
+
+```yaml
+  version: ${{ env.KIND_VERSION }}
+  node_image: ${{ env.KIND_NODE_IMAGE }}        # tag AND digest, from kind's release notes
+  kubectl_version: v${{ env.KUBECTL_VERSION }}  # or the action's default shadows the job's
+```
+
+There may be **one** such step in the repo — counting `instance-template/`'s
+workflows and both composite trees, all of which the guard reads. It refuses a
+second, because a second cluster is a second answer to "which minor does CI
+validate against". It equally refuses a cluster stood up outside the action
+(`kind create` in a `run:` or in a script under `template-scripts/` or
+`.github/`): that declares no `node_image:` for the guard to hold to anything.
 
 **Carve-out — do not "clean up" `setup-llz` inside a container job.** A PR that
 changes `tools/` runs BEFORE the image carrying that change is rebuilt, and the

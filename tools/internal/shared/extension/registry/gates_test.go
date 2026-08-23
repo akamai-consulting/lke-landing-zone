@@ -449,7 +449,7 @@ func TestTheDefaultedMajorityIsStillTheMajority(t *testing.T) {
 		}
 		custom = append(custom, g.Extension)
 	}
-	const wantDefaulted, wantCustom = 25, 3
+	const wantDefaulted, wantCustom = 26, 3
 	if len(defaulted) != wantDefaulted || len(custom) != wantCustom {
 		t.Errorf("%d gates take the default subject and %d differ; gates.go's header says %d and %d.\n"+
 			"\tThe rows that differ are %v. Update that comment in this commit — a count nothing "+
@@ -701,6 +701,7 @@ var coveredElsewhere = map[string]string{
 	"chart-version-guard": "its own workflow runs `llz ci chart-version-guard` directly (chart-version-guard.yml)",
 	"instance-test":       "lint.yml's instantiate job runs template-scripts/ci/instance-test.sh",
 	"version-pins-check":  "the `version-pins` gate is driven by `llz ci gates` (registry/gates.go)",
+	"k8s-minor-coherence": "the `k8s-minor-coherence` gate is driven by `llz ci gates` (registry/gates.go)",
 	"vet":                 "lint.yml's go-tests job runs `gofmt + go vet` as its own step",
 }
 
