@@ -91,10 +91,41 @@ type objProxyCounters struct {
 	loops     atomic.Uint64
 	resigned  atomic.Uint64
 	resignErr atomic.Uint64
+	// resignSkipped counts writes that needed the repair and did NOT get it because
+	// they were not ours to repair — a different access key, or no usable
+	// credential. Without it, "every write needed repair and none got it" and
+	// "nothing needed repair" are the same reading: all counters at zero.
+	resignSkipped atomic.Uint64
 	// misdirected counts virtual-host-style requests refused rather than written
 	// unencrypted. Non-zero means something is addressing object storage in a form
 	// this gateway cannot protect.
 	misdirected atomic.Uint64
+}
+
+// loadResignCreds reads the re-signing credential once and returns it together
+// with the live loader that re-reads it on rotation.
+//
+// EXTRACTED SO A TEST CAN REACH THE REAL PATH. The defect it fixes is entirely in
+// the CONSTRUCTION — credsLoader was built with a zero `cur`, so its three "keep
+// what works" error paths all returned an unusable credential on the FIRST call,
+// and one transient stat() failure turned the #397 re-signing repair off for that
+// request with every counter still at zero. A test that builds a seeded loader by
+// hand proves the loader behaves; it does not prove the caller seeds it, and a
+// first cut of exactly that test stayed green while this call site was reverted.
+func loadResignCreds(path string) (objProxyCreds, func() objProxyCreds, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return objProxyCreds{}, nil, fmt.Errorf("read object-storage credentials: %w", err)
+	}
+	creds := parseObjProxyCreds(raw)
+	if !creds.usable() {
+		return objProxyCreds{}, nil, fmt.Errorf("%s holds no usable AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY pair — "+
+			"the #397 re-signing repair would be silently off", path)
+	}
+	// cur is SEEDED with what was just read, so "keep the last known-good on a read
+	// error" is true from the first call rather than from the second.
+	loader := &credsLoader{path: path, cur: creds}
+	return creds, loader.get, nil
 }
 
 func RunProxy(ctx context.Context, o ProxyOpts) error {
@@ -127,17 +158,11 @@ func RunProxy(ctx context.Context, o ProxyOpts) error {
 	// #397. An UNREADABLE file is a fault, though — it means someone intended the
 	// repair and it silently would not happen.
 	if o.CredsFile != "" {
-		rawCreds, err := os.ReadFile(o.CredsFile)
+		creds, fn, err := loadResignCreds(o.CredsFile)
 		if err != nil {
-			return fmt.Errorf("read object-storage credentials: %w", err)
+			return err
 		}
-		o.Creds = parseObjProxyCreds(rawCreds)
-		loader := &credsLoader{path: o.CredsFile}
-		o.CredsFn = loader.get
-		if !o.Creds.usable() {
-			return fmt.Errorf("%s holds no usable AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY pair — "+
-				"the #397 re-signing repair would be silently off", o.CredsFile)
-		}
+		o.Creds, o.CredsFn = creds, fn
 		fmt.Printf("obj-proxy: re-signing enabled for access key %s (repairs the aws-chunked trailer framing Linode rejects)\n",
 			o.Creds.AccessKeyID)
 	}
@@ -227,6 +252,16 @@ func parseSSECKeyFile(raw []byte) ([]byte, error) {
 	if len(trimmed) == sseCustomerKeyRawBytes {
 		return trimmed, nil // a raw key written by hand
 	}
+	// THE TRIM CAN EAT A KEY BYTE, and for a raw key that is a CrashLoop rather
+	// than a warning. AES key bytes are uniform, so roughly 1 in 128 raw keys ends
+	// in 0x0A or 0x0D — trimmed to 31 bytes, matched by neither branch above, and
+	// rejected, so every obj-proxy pod on the node fails to start. Checking the
+	// UNTRIMMED length last recovers exactly that case and changes nothing else: a
+	// 32-byte file that survived the trim already returned above, and base64 of a
+	// 32-byte key is 44 characters, so a 32-byte file is never the base64 form.
+	if len(raw) == sseCustomerKeyRawBytes {
+		return raw, nil
+	}
 	return nil, fmt.Errorf(
 		"the SSE-C key file is neither base64 of %d bytes nor %d raw bytes (got %d bytes on disk). "+
 			"The in-cluster path is base64: `llz ci seed-ssec-key` writes it that way because a KV "+
@@ -283,6 +318,12 @@ func buildObjProxy(o ProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.Rev
 				fmt.Fprintf(os.Stderr, "obj-proxy: could not re-sign %s %s (%v) — forwarding as-is\n", r.Method, r.URL.Path, err)
 			} else if ok {
 				c.resigned.Add(1)
+			} else if needsResign(r.Header) {
+				// Needed the repair and did not get it — not ours to repair (a
+				// different access key, or no usable credential). Counted, because
+				// without it this outcome is indistinguishable from "nothing needed
+				// repairing": both leave every resign counter at zero.
+				c.resignSkipped.Add(1)
 			}
 			if injectSSEC(r.Header, r.Method, r.URL.Path, key) {
 				c.injected.Add(1)
@@ -494,6 +535,11 @@ func objProxyHealth(c *objProxyCounters) http.Handler {
 		// writes are reaching the upstream in a form it will refuse.
 		fmt.Fprintf(w, "llz_objproxy_resigned_total %d\n", c.resigned.Load())
 		fmt.Fprintf(w, "llz_objproxy_resign_failed_total %d\n", c.resignErr.Load())
+		// Requests that arrived needing the repair and were passed through because
+		// they were not ours to repair. A climbing value here alongside a flat
+		// resigned_total is the shape of a credential that has stopped matching —
+		// which, without this counter, looks exactly like an idle cluster.
+		fmt.Fprintf(w, "llz_objproxy_resign_skipped_total %d\n", c.resignSkipped.Load())
 		fmt.Fprintf(w, "llz_objproxy_misdirected_total %d\n", c.misdirected.Load())
 	})
 	return mux

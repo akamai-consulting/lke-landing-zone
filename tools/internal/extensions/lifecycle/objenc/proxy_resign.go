@@ -201,6 +201,17 @@ func canonicalHeaderValue(values []string) string {
 	return strings.Join(parts, ",")
 }
 
+// decodeLimit is how many decoded bytes decodeAWSChunked will buffer: the
+// client's declared length when it gave one and it is within the repair cap, and
+// the cap itself otherwise. Never unbounded — an absent or nonsensical
+// declaration is exactly the case where trusting the stream is worst.
+func decodeLimit(expected int64) int64 {
+	if expected >= 0 && expected <= objProxyResignMaxBody {
+		return expected
+	}
+	return objProxyResignMaxBody
+}
+
 // decodeAWSChunked unwraps aws-chunked framing to the raw payload.
 //
 //	<hex-len>[;chunk-signature=…]\r\n <data> \r\n … 0[;…]\r\n <trailers> \r\n
@@ -213,6 +224,24 @@ func canonicalHeaderValue(values []string) string {
 func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 	br := bufio.NewReader(r)
 	var out bytes.Buffer
+	// THE DECODE IS BOUNDED, NOT ONLY THE DECLARATION. The caller gates on
+	// x-amz-decoded-content-length — the client's own STATEMENT of the size — and
+	// nothing here held the decode to it. The equality check at the bottom fires
+	// only after every chunk has been buffered, so a request declaring 1 MiB and
+	// sending chunks summing to 64 MiB was rejected having already allocated the
+	// 64 MiB. With the raw body held alongside it for the restore path, peak
+	// footprint ran to several times the documented 32 MiB cap, and a handful of
+	// concurrent repairs OOMKilled a DaemonSet with a 512Mi limit — taking object
+	// storage down for every pod on the node, which is far worse than the write
+	// this repair exists to fix.
+	//
+	// Checking each chunk header BEFORE copying its bytes also turns a late,
+	// expensive rejection into an early, cheap one that names the same defect.
+	if expected >= 0 && expected <= objProxyResignMaxBody {
+		// Right-sized in one allocation. bytes.Buffer grows by doubling, so a
+		// 32 MiB payload otherwise lands in a 64 MiB backing array.
+		out.Grow(int(expected))
+	}
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -228,6 +257,11 @@ func decodeAWSChunked(r io.Reader, expected int64) ([]byte, error) {
 		}
 		if n == 0 {
 			break // terminal chunk; whatever follows is trailers, deliberately discarded
+		}
+		if lim := decodeLimit(expected); int64(out.Len())+n > lim {
+			return nil, fmt.Errorf("chunked body exceeds %d bytes at chunk %d (already decoded %d) — "+
+				"refusing to buffer past the bound; x-amz-decoded-content-length said %d",
+				lim, n, out.Len(), expected)
 		}
 		if _, err := io.CopyN(&out, br, n); err != nil {
 			return nil, fmt.Errorf("reading %d chunk bytes: %w", n, err)
