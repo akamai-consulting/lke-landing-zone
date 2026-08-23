@@ -1499,7 +1499,20 @@ categories:
     #                       undecidable matchExpressions selector) rather than a
     #                       wiring line, and it found openbao-cert-watcher, which had
     #                       been reaching nothing at all since it shipped.
-    budget: 1966
+    #   1,967 / 129 files  +1 wiring `Deps.DryRun` for `llz import`: one closure,
+    #                       `func() bool { return cliopts.Global.DryRun }`, beside
+    #                       the Confirm closure that was already there. Spending one
+    #                       of the two lines the entries above banked, and named
+    #                       rather than absorbed. It belongs in this layer by
+    #                       definition — reading a persistent flag is exactly what
+    #                       the wiring layer is for, and it has to be a CLOSURE
+    #                       because the command tree is built before cobra parses
+    #                       flags. `llz import scan` and the component-toggle step
+    #                       had their read-only behaviour gated on `--yes` instead,
+    #                       so the documented adoption path wrote no report and
+    #                       scaffolded an instance with every discovered component
+    #                       off.
+    budget: 1967
     exact: true
     include:
       - "tools/internal/cli/*.go"

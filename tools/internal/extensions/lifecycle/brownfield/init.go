@@ -121,7 +121,13 @@ func withinDir(dir string, fn func() error) error {
 // env spec file (preserving comments, the same building blocks `llz env set` uses)
 // and re-renders.
 func applyComponentToggles(d Deps, env string, assigns []string) error {
-	if !d.Confirm() {
+	// DryRun, NOT !Confirm — and this one was the odd step out in its OWN function.
+	// RunInit's other three steps (scaffold, author the spec, write
+	// MIGRATION-TODO.md) all run for real without --yes, so gating this on Confirm
+	// meant the documented `llz import init` produced a complete instance with
+	// EVERY component the scan discovered left off, announcing it with a
+	// "(dry-run)" line in the middle of a run that plainly was not one.
+	if d.DryRun != nil && d.DryRun() {
 		fmt.Printf("  %s would set: %s\n", color.Dim("(dry-run)"), strings.Join(assigns, " "))
 		return nil
 	}

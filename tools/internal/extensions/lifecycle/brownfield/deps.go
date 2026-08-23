@@ -56,6 +56,15 @@ type Deps struct {
 	// owns, so being able to and being asked to are different questions here too.
 	Confirm func() bool
 
+	// DryRun is `--dry-run`, and it is NOT the negation of Confirm. `--yes` is
+	// AUTHORISATION for something destructive; `--dry-run` is a request to describe
+	// rather than act. Two of this package's steps had the read-only one gated on
+	// the destructive one — `llz import scan`, whose own help says "Purely
+	// read-only; no --yes needed", printed "(dry-run) … would write" and exited 0
+	// on every documented invocation, and `llz import init` scaffolded a whole
+	// instance while silently skipping the component toggles the scan had found.
+	DryRun func() bool
+
 	// ── defaults that live in core because other verbs read them too ──
 
 	DefaultAplChartVersion string

@@ -32,7 +32,7 @@ func TestBuildMigrationPlan(t *testing.T) {
 		"Keycloak **realm export/import**",                                  // app-native hint
 		"cnpg.io/instanceRole=primary",                                      // CNPG-aware dump
 		"pg_dump -Fc -U postgres",                                           // fallback dump
-		"Caches — rebuild, do NOT migrate",                                  // redis bucketed as cache
+		"Likely caches — VERIFY, then rebuild",                              // redis, stated as a default to check
 		"argocd/argocd-redis",                                               //
 	}
 	for _, s := range mustContain {
@@ -43,6 +43,50 @@ func TestBuildMigrationPlan(t *testing.T) {
 	// A cache (workload-kind) must NOT get a CNPG dump block.
 	if strings.Contains(p, "SRC_CLUSTER=argocd-redis") {
 		t.Error("redis cache should not get a CNPG dump block")
+	}
+}
+
+// TestMigrationPlanDoesNotCallASelfManagedDatabaseEphemeral is the one finding in
+// this file that could cost an operator their data.
+//
+// planDatabases bucketed everything that was not `Kind: "CNPG"` into "Caches —
+// rebuild, do NOT migrate", each line reading "ephemeral; the new cluster
+// provisions a fresh instance". detectDBWorkloads sets Kind: "workload" for EVERY
+// self-managed database it finds — so a postgres:15 StatefulSet holding production
+// data was handed to the operator as throwaway, in a document whose entire purpose
+// is to be followed literally. The engine was recorded correctly the whole time
+// and simply not consulted.
+func TestMigrationPlanDoesNotCallASelfManagedDatabaseEphemeral(t *testing.T) {
+	rep := planFixture()
+	rep.Storage.Databases = append(rep.Storage.Databases,
+		dbInfo{Namespace: "team-payments", Name: "orders-db", Kind: "workload", Engine: "postgres",
+			Clients: []string{"Deployment/orders-api"}},
+		dbInfo{Namespace: "team-payments", Name: "legacy-store", Kind: "workload"}, // engine unidentified
+	)
+	p := buildMigrationPlan(rep)
+
+	for _, name := range []string{"orders-db", "legacy-store"} {
+		i := strings.Index(p, name)
+		if i < 0 {
+			t.Fatalf("%s missing from the plan entirely", name)
+		}
+		// The section heading that precedes it decides what the operator does.
+		before := p[:i]
+		cacheAt := strings.LastIndex(before, "Likely caches")
+		migrateAt := strings.LastIndex(before, "Self-managed databases — MIGRATE")
+		if cacheAt > migrateAt {
+			t.Errorf("%s is listed under the caches heading — a self-managed database (or one whose "+
+				"engine could not be identified) told to rebuild rather than migrate is data loss by "+
+				"documentation", name)
+		}
+	}
+	if !strings.Contains(p, "Treat every one as holding data that matters") {
+		t.Error("the self-managed section must say plainly that these hold real data")
+	}
+	// And the cache section must stop asserting ephemerality it cannot know.
+	if strings.Contains(p, "ephemeral; the new cluster provisions a fresh instance") {
+		t.Error("Redis with AOF/RDB persistence is a primary store, and this scan reads the image name, " +
+			"not the configuration — it must ask the operator to verify, not assert")
 	}
 }
 

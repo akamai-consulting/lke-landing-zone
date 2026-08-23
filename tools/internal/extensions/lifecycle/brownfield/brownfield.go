@@ -45,7 +45,13 @@ type ScanOpts struct {
 }
 
 func RunScan(d Deps, o ScanOpts) error {
-	if !d.Confirm() {
+	// DryRun, NOT !Confirm. This is a read-only inventory — the command's own help
+	// says "Purely read-only; no --yes needed", and every example in
+	// docs/runbooks/import-apl-site.md omits --yes. Gated on Confirm, the FIRST
+	// STEP OF THE DOCUMENTED ADOPTION PATH printed "(dry-run) … would write
+	// import-report.yaml", exited 0, and wrote nothing — and the next step,
+	// `llz import init`, then failed on a report that was never created.
+	if d.DryRun != nil && d.DryRun() {
 		fmt.Println(color.Dim("→ (dry-run) read-only inventory scan via kubectl (current context); would write " + o.Output))
 		return nil
 	}
