@@ -91,16 +91,42 @@ func (s *ESStoreRecovery) Reconcile(ctx context.Context, client capability.KubeA
 		}
 		bump = stale
 	}
-	s.lastReady = fmt.Sprintf("%t", ready)
 	if !bump {
+		s.lastReady = fmt.Sprintf("%t", ready)
 		return nil
 	}
 
+	// THE TRANSITION IS CONSUMED ONLY BY A FAN-OUT THAT SUCCEEDED, and recording it
+	// first is what made this lane lose work permanently. lastReady was set before
+	// forceSyncESKinds, so a failed or PARTIAL fan-out — one MergePatch 409, one
+	// list 403, a CRD version drift on pushsecrets — still left lastReady "true".
+	// The next poll then reads neither `ready && lastReady == "false"` nor the
+	// first-observation amnesty branch, so it never bumps again: the
+	// notReady->Ready transition this lane exists to catch is spent, and every
+	// ExternalSecret the fan-out missed is left to ESO's own ~16-minute backoff
+	// with nothing retrying it.
+	//
+	// The restart-amnesty branch above already gets this ordering right (it only
+	// bumps when something is observably stale), which is what makes the
+	// difference legible: one path re-derives its trigger from the world, the other
+	// held its trigger in memory and threw it away before doing the work.
 	bumped, err := forceSyncESKinds(ctx, client)
+	if err != nil {
+		// lastReady deliberately UNCHANGED: the next poll re-enters this branch and
+		// re-runs the fan-out. force-sync is an annotation write with a fresh
+		// timestamp, so repeating it is free.
+		fmt.Printf("es-store-recovery: store Ready — force-sync incomplete after %d object(s) (%v); "+
+			"leaving the transition unconsumed so the next poll retries\n", bumped, err)
+		return err
+	}
+	s.lastReady = fmt.Sprintf("%t", ready)
+	// COUNTED ONLY ON SUCCESS. Incrementing before the error check made a fan-out
+	// that patched nothing indistinguishable from one that patched everything, on
+	// the one counter an operator would consult to ask which it was.
 	reg.AddCounter("llz_es_recovery_nudges_total",
 		"count of store-recovery force-sync fan-outs (one per Ready transition)", nil, 1)
 	fmt.Printf("es-store-recovery: store Ready — force-synced %d ExternalSecret/PushSecret object(s)\n", bumped)
-	return err
+	return nil
 }
 
 // ObjReadyStatus is EXPORTED for one reason: package main's

@@ -1,6 +1,7 @@
 package reconcilelanes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -21,6 +22,10 @@ type esRecoveryServer struct {
 	storeNF bool   // serve 404 for the store
 	esReady string // Ready status every listed ExternalSecret reports
 	patched []string
+	// patchFails makes the next patchFails PATCHes 409, so a PARTIAL fan-out can
+	// be driven — which is the state that used to consume the recovery transition
+	// and then never retry it.
+	patchFails int
 }
 
 func (s *esRecoveryServer) start(t *testing.T) *kube.Client {
@@ -52,6 +57,11 @@ func (s *esRecoveryServer) start(t *testing.T) *kube.Client {
 				obj("harbor", "harbor-admin-push", s.esReady),
 			}})
 		case r.Method == http.MethodPatch:
+			if s.patchFails > 0 {
+				s.patchFails--
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
 			s.patched = append(s.patched, r.URL.Path)
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -151,5 +161,75 @@ func TestESStoreRecoveryStoreAbsentIsObservedNotError(t *testing.T) {
 	}
 	if lane.lastReady != "false" {
 		t.Fatalf("absent store must record lastReady=false, got %q", lane.lastReady)
+	}
+}
+
+// TestESStoreRecoveryRetriesAfterAPartialFanOut.
+//
+// s.lastReady was assigned BEFORE forceSyncESKinds, so a failed or PARTIAL fan-out
+// — one MergePatch 409, one list 403, a CRD version drift on pushsecrets — still
+// recorded the store as Ready. The next poll then matched neither
+// `ready && lastReady == "false"` nor the first-observation amnesty branch, so it
+// never bumped again: the notReady->Ready transition this lane exists to catch was
+// spent, and every ExternalSecret the fan-out missed was left to ESO's own
+// ~16-minute backoff with nothing retrying it.
+func TestESStoreRecoveryRetriesAfterAPartialFanOut(t *testing.T) {
+	fixedNow(t, 4242)
+	srv := &esRecoveryServer{ready: "False", esReady: "False"}
+	client := srv.start(t)
+	reg := metrics.NewRegistry()
+	lane := &ESStoreRecovery{}
+
+	// Poll 1: store not ready — observe, no bump.
+	if err := lane.Reconcile(context.Background(), client, reg); err != nil {
+		t.Fatal(err)
+	}
+	// Poll 2: store goes Ready, but the fan-out fails on the first object.
+	srv.set("True")
+	srv.mu.Lock()
+	srv.patchFails = 1
+	srv.mu.Unlock()
+	if err := lane.Reconcile(context.Background(), client, reg); err == nil {
+		t.Fatal("a fan-out that could not patch every object must report it")
+	}
+	partial := len(srv.patchedPaths())
+
+	// Poll 3: nothing about the world changed — the store is still Ready. The
+	// transition must NOT have been consumed.
+	if err := lane.Reconcile(context.Background(), client, reg); err != nil {
+		t.Fatalf("the retry must succeed: %v", err)
+	}
+	if len(srv.patchedPaths()) <= partial {
+		t.Errorf("no objects were patched on the retry (%d then %d) — the recovery transition was "+
+			"consumed by a fan-out that did not finish, so the ExternalSecrets it missed now wait on "+
+			"ESO's ~16-minute backoff with nothing retrying them",
+			partial, len(srv.patchedPaths()))
+	}
+}
+
+// TestESStoreRecoveryCountsOnlyCompletedFanOuts. The nudge counter was incremented
+// before the error was checked, so a fan-out that patched nothing was
+// indistinguishable from one that patched everything — on the one counter an
+// operator would consult to ask which it was.
+func TestESStoreRecoveryCountsOnlyCompletedFanOuts(t *testing.T) {
+	fixedNow(t, 4242)
+	srv := &esRecoveryServer{ready: "False", esReady: "False"}
+	client := srv.start(t)
+	reg := metrics.NewRegistry()
+	lane := &ESStoreRecovery{}
+
+	_ = lane.Reconcile(context.Background(), client, reg)
+	srv.set("True")
+	srv.mu.Lock()
+	srv.patchFails = 99 // every patch fails
+	srv.mu.Unlock()
+	_ = lane.Reconcile(context.Background(), client, reg)
+
+	var buf bytes.Buffer
+	if _, err := reg.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "llz_es_recovery_nudges_total 1") {
+		t.Error("a fan-out in which every patch failed must not count as a nudge")
 	}
 }
