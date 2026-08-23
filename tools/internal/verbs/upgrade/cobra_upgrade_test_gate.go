@@ -192,11 +192,43 @@ var releaseTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // The AGENTS.md link regression lived in step two: copier produced the right file
 // and the policy pass put an older one back over it.
 //
-// --no-render and --no-doctor are what keep the gate offline; neither is part of
-// what an upgrade DELIVERS. Nothing else may be added here lightly — every flag is
-// a way in which the thing under test stops being the command an adopter runs.
+// --no-doctor is what keeps the gate offline: the readiness check wants gh and the
+// Linode API, and it is advisory rather than part of what an upgrade DELIVERS.
+//
+// --no-render IS GONE, AND ITS ABSENCE IS THE POINT. It was here for the same
+// "keeps the gate offline" reason, on the belief that render is not part of the
+// delivery either. That belief was wrong twice over. `llz upgrade` re-renders on
+// purpose (Lever 2): the pin copier just rewrote is what every committed
+// apl-values `?ref=` resolves to, so skipping the render leaves the whole
+// kustomize tree pointing at the PREVIOUS release — which is what ArgoCD syncs.
+// A live instance ran three releases behind on what it DEPLOYS for exactly that
+// reason. And render is not online: it reads the spec and writes files, so the
+// only thing --no-render bought was skipping the step most likely to break.
+//
+// Nothing else may be added here lightly — every flag is a way in which the thing
+// under test stops being the command an adopter runs.
 func UpgradeUnderTestArgv(llzBin, ref string) []string {
-	return []string{llzBin, "upgrade", "--ref", ref, "--no-render", "--no-doctor"}
+	return []string{llzBin, "upgrade", "--ref", ref, "--no-doctor"}
+}
+
+// probeEnv is the deployment the gate seeds so there is a spec to render from.
+// Its region and object-storage cluster are never contacted: without a
+// LINODE_TOKEN `llz env add` skips every account-side check and warns, which is
+// the documented offline behaviour and is what keeps this gate cloud-free.
+const probeEnv = "probe"
+
+// SeedSpecArgv authors a deployment in the probe instance.
+//
+// WHY THE GATE NEEDS A SPEC AT ALL. Without one, clusterspec.InstancePresent is
+// false and `llz upgrade`'s renderAfter returns immediately — so dropping
+// --no-render above would change nothing, and the gate would still be measuring
+// an upgrade that renders nothing. The spec is what makes the render reachable.
+//
+// --yes because the gate closes stdin; `env add` commits its own output, which is
+// what the hop's later `git commit` would otherwise have to do anyway.
+func SeedSpecArgv(llzBin string) []string {
+	return []string{llzBin, "env", "add", probeEnv,
+		"--region", "us-ord", "--obj-cluster", "us-ord-1", "--yes"}
 }
 
 // CopierScaffoldArgv builds the SCAFFOLD invocation. It cannot reuse
@@ -424,6 +456,16 @@ func RunUpgradeTest(o upgradeTestOpts) error {
 	if err := assertTasksRan(root, fresh); err != nil {
 		return err
 	}
+	// THE COMPARISON INSTANCE GETS A SPEC TOO, and it has to: the upgraded side
+	// now renders, so without this the two trees differ by every rendered artifact
+	// and convergence would report a wall of gaps about the harness. Seeding both
+	// also widens what convergence covers — the generated TF roots and the
+	// apl-values overlay are compared between a fresh instance and an upgraded one
+	// for the first time.
+	if out, err := runCopier(fresh, SeedSpecArgv(llzBin)); err != nil {
+		return fmt.Errorf("seed a spec in the comparison instance at %s failed:\n%s",
+			ShortRef(to), IndentedTail(string(out), 20))
+	}
 	freshFiles, err := DigestTree(fresh)
 	if err != nil {
 		return fmt.Errorf("digest the comparison instance: %w", err)
@@ -503,7 +545,14 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read scaffolded answers: %w", err)
 	}
-	fmt.Printf("  ✓ scaffolded at %s\n", o.from)
+	// A DEPLOYMENT, authored by the OLDER release's scaffold. Everything the
+	// upgrade's render then has to reconcile — the tfvars, the generated roots and
+	// the apl-values `?ref=` — is pinned at `from` at this moment, which is the
+	// state a real adopter is in the instant before they upgrade.
+	if out, err := runCopier(inst, SeedSpecArgv(o.llzBin)); err != nil {
+		return nil, fmt.Errorf("seed a spec at %s failed:\n%s", o.from, IndentedTail(string(out), 20))
+	}
+	fmt.Printf("  ✓ scaffolded at %s and seeded a deployment\n", o.from)
 
 	// copier update diffs against a committed tree, so the scaffold has to be one.
 	// --no-verify: the scaffold arms a pre-commit hook that runs the full `llz
@@ -619,6 +668,36 @@ func runUpgradeHop(o hopOpts) ([]string, error) {
 		failures = append(failures, b.String())
 	default:
 		fmt.Println("  ✓ clean-merge — no conflict markers, no .rej/.orig files")
+	}
+
+	// ── The render the upgrade just performed ────────────────────────────────
+	//
+	// Both of these are unreachable without the spec seeded above, and both were
+	// unreachable for as long as this gate passed --no-render.
+
+	// `llz render --check` is the SAME predicate the instance's own apply runs as a
+	// pre-flight (apply-vpc, "committed apl-values match the spec + pin"). Asserting
+	// it here means a red one is caught on the PR that caused it rather than at the
+	// first apply after an adopter upgrades — and it is the consumer's real check,
+	// not a restatement of what a render ought to produce.
+	if out, err := runCopier(inst, []string{o.llzBin, "render", "--check"}); err != nil {
+		failures = append(failures, fmt.Sprintf("render-fresh [from %s]: `llz render --check` fails on the "+
+			"upgraded tree:\n%s\n    Every terraform op an adopter runs starts with this check (llz-terraform.yml's\n"+
+			"    apply-vpc pre-flight), so an upgrade that leaves it red blocks their next apply.",
+			o.from, IndentedTail(string(out), 15)))
+	} else {
+		fmt.Println("  ✓ render-fresh — `llz render --check` clean on the upgraded tree")
+	}
+
+	// The refs the render was supposed to move.
+	usage, err := ScanKustomizeRefs(filepath.Join(inst, "apl-values"), o.to)
+	if err != nil {
+		return failures, fmt.Errorf("scan the upgraded instance's kustomize refs: %w", err)
+	}
+	if msg := CheckRepinned(o.from, usage, ShortRef(o.to)); msg != "" {
+		failures = append(failures, msg)
+	} else {
+		fmt.Printf("  ✓ pin-repointed — %d committed `?ref=` now name %s\n", usage.Wanted, ShortRef(o.to))
 	}
 
 	// 3. THE delivery check: is this now the same instance a new adopter gets?
