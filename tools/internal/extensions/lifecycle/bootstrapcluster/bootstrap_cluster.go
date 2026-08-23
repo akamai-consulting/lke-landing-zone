@@ -478,10 +478,10 @@ var lkeStockStorageClasses = []string{"linode-block-storage", "linode-block-stor
 //   - promoting block-storage-retain to cluster default does nothing, because an
 //     explicit storageClassName never consults the default;
 //   - a Kyverno mutation cannot win the race. apl-core installs Kyverno AND creates
-//     the PVCs, and it creates most of them FIRST. Measured on lke637888:
-//     kyverno-admission-controller went Available at 15:59:50, by which point 11 of
-//     the 13 PVCs already existed (first at 15:57:10). A policy applied the instant
-//     Kyverno can admit one still arrives too late for 11 of 13.
+//     the PVCs, and it creates most of them FIRST. Measured live:
+//     kyverno-admission-controller went Available roughly three minutes after the
+//     first PVC, by which point 11 of the 13 already existed. A policy applied the
+//     instant Kyverno can admit one still arrives too late for 11 of 13.
 //
 // What DOES have a head start is this command. bootstrap-cluster applied its
 // StorageClass at 15:56:03 — 67 seconds before the first PVC — and needs nothing

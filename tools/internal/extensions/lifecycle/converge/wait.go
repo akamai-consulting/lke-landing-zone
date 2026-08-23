@@ -129,8 +129,8 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 			//   TLS/x509                -> kubeconfig or CA mismatch
 			//   NotFound/Forbidden      -> reachable; an RBAC or resource problem
 			//
-			// Observed on run 30485106067 only because a DIFFERENT command happened
-			// to log it: "couldn't get current server API group list: ... EOF".
+			// Seen in the wild only because a DIFFERENT command happened to log it:
+			// "couldn't get current server API group list: ... EOF".
 			// execCombined, NOT the captured stdout: kubectl writes these errors to
 			// STDERR, so reading stdout alone prints "exit status 1: " with an empty
 			// reason on every poll — a diagnostic that looks like one and carries
