@@ -3,13 +3,12 @@ package assertregistry
 // roundtrip_chart_test.go — "is llz-cert-automation deployed here" is answered by
 // the chart's ExternalSecret, not by its namespace.
 //
-// THE REGRESSION THIS PINS. The lane used to read a present namespace as a
-// deployed component, which was true until argoWorkflows began shipping
-// llz-cert-automation EMPTY on managed clusters so argo-helm had somewhere to put
-// the workflow RBAC that controller.workflowNamespaces asks for. With the
-// namespace present and the chart absent, the lane stopped skipping and spent two
-// minutes waiting for a Secret nothing would ever create — the only red in an
-// otherwise green release-e2e.
+// THE REGRESSION THIS PINS. A present namespace is NOT evidence of a deployed
+// component: argoWorkflows ships llz-cert-automation EMPTY on managed clusters, so
+// argo-helm has somewhere to put the workflow RBAC that controller.workflowNamespaces
+// asks for. Reading the namespace instead of the chart's ExternalSecret makes the
+// lane stop skipping and spend two minutes waiting for a Secret nothing will ever
+// create — the only red in an otherwise green release-e2e.
 
 import (
 	"strings"

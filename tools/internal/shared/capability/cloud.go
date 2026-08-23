@@ -4,23 +4,14 @@ package capability
 //
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
 //
-// SEVENTH AND EIGHTH CAPABILITY, and between them the largest hole left in the
-// vocabulary: 20 declarations of `cloud-read` and 21 of `cloud-mutate`, forty-one
-// in total, with nothing behind either. Every one of them could destroy an LKE
-// cluster, and the declaration said so or did not with equal effect.
-//
-// `cloud-mutate` is the most destructive grant in the model. Its holders delete
-// clusters, detach and delete Volumes, tear down NodeBalancers and VPCs, and
-// revoke tokens. Until now a binding declaring `cloud-read` could do all of it,
-// because the only thing standing between the two was the word in the
+// 20 declarations of `cloud-read` and 21 of `cloud-mutate`, and `cloud-mutate` is
+// the most destructive grant in the model — its holders delete clusters, detach
+// and delete Volumes, tear down NodeBalancers and VPCs, and revoke tokens. Without
+// these handles the only thing standing between the two is the word in the
 // declaration.
 //
-// ────────────────────────────────────────────────────────────────────────────
-// THIS IS THE EASIEST CONVERSION IN THE CAMPAIGN, NOT THE HARDEST, AND THAT IS
-// WHY IT CAME AFTER THE REPO FENCE RATHER THAN BEFORE.
-//
-// `read-repo` had NO seam: 124 os.ReadFile calls across 40 packages, every one a
-// separate conversion. The Linode client is the opposite shape:
+// THE CLIENT IS THE IDEAL SHAPE FOR A FENCE, unlike read-repo's 124 direct
+// os.ReadFile calls:
 //
 //   - `linode.Client.do` is a TRUE chokepoint. `c.http.Do` appears exactly once
 //     in the package, and all fifty-two Client methods funnel through it — the
@@ -34,9 +25,8 @@ package capability
 //     hatch to count and no allowlist to keep.
 //
 // So the classification is the whole design, and it fits in one table.
-// ────────────────────────────────────────────────────────────────────────────
 //
-// HTTP GIVES THE CLASSIFICATION FOR FREE, which kubectl did not. `kubectl
+// HTTP GIVES THE CLASSIFICATION FOR FREE, which kubectl does not. `kubectl
 // rollout status` reads and `kubectl rollout restart` writes, so capability.go
 // needed a sub-verb table to tell them apart. HTTP has no such ambiguity: the
 // method IS the mutation flag, and Linode's API uses it correctly. GET and HEAD

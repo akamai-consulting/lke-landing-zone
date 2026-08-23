@@ -1,8 +1,8 @@
 package sustain
 
-// ci_managed_lock.go implements `llz ci managed-fresh` — the drift guard
-// specified in docs/designs/cross-org-reuse-pattern.md ("a hand-edited instance
-// graph fails CI rather than silently diverging") and left unbuilt until now.
+// ci_managed_lock.go implements `llz ci managed-fresh` — the drift guard specified
+// in docs/designs/cross-org-reuse-pattern.md: "a hand-edited instance graph fails
+// CI rather than silently diverging".
 //
 // WHY A HASH LOCK AND NOT A RE-RENDER: the obvious check is "render the template
 // at the pinned ref and diff", but `copier` ships only in the devcontainer image —

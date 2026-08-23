@@ -1,16 +1,15 @@
 // Package capability turns a binding's DECLARED GRANTS into the handles it can
 // actually use. It is the implementation of the extension model's Decision 3 --
-// "the grant IS the handle" -- which until now was an aspiration in a design doc.
+// "the grant IS the handle".
 //
-// WHAT WAS WRONG. Twenty-six Deps structs carried a `func(name string, args
-// ...string)` exec seam. A binding that declared `cluster-read` and a binding that
-// declared `cluster-write` received the identical seam, and either could run
-// `kubectl delete`, `bao`, `linode-cli` or anything else on PATH. Grants were
-// checked against a state table at test time and then handed no teeth at all, so
-// the ceiling described a permission system that did not exist.
+// WITHOUT IT, a binding declaring `cluster-read` and one declaring `cluster-write`
+// receive the identical `func(name string, args ...string)` exec seam, and either
+// can run `kubectl delete`, `bao`, `linode-cli` or anything else on PATH. Grants
+// get checked against a state table at test time and handed no teeth, so the
+// ceiling describes a permission system that does not exist.
 //
-// THE SURFACE IS MUCH NARROWER THAN THE SEAM COUNT SUGGESTED, which is why this is
-// tractable. Measured across internal/extensions before any of it was designed:
+// THE SURFACE IS MUCH NARROWER THAN THE SEAM COUNT SUGGESTS, which is what makes
+// this tractable. Measured across internal/extensions:
 //
 //	kubectl read (get/describe/logs/wait/config)   78 sites, 17 packages
 //	kubectl write (annotate/delete/rollout/patch…)  17 sites,  8 packages

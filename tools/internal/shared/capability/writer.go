@@ -4,8 +4,8 @@ package capability
 // operations, not "any kubectl verb that mutates".
 //
 // THE SHAPES ARE MEASURED, NOT INVENTED. Every mutating call site in
-// internal/extensions was listed before this file was written — seventeen of them
-// across eight packages — and they collapsed into six shapes:
+// internal/extensions — seventeen across eight packages — collapses into six
+// seam-based shapes:
 //
 //	annotate <kind> <name> <k=v> --overwrite        5   argo refresh ×4, kyverno stamp ×1
 //	delete <kind> <target> --ignore-not-found       4   ephemeral job/workflow/namespace
@@ -14,22 +14,21 @@ package capability
 //	create token <sa> --duration=<d>                1   login smoke
 //	apply --server-side -f <manifest>               1   kyverno policy
 //
-// TWO MORE ARRIVED AFTER IT, AND THE CENSUS IS WHY THEY WERE MISSING. It counted
-// Deps SEAMS, and both of these reach exec.Command directly to pipe a manifest to
-// stdin, so neither appeared in a seam-based count at all:
+// PLUS TWO A SEAM CENSUS CANNOT SEE, because they reach exec.Command directly to
+// pipe a manifest to stdin:
 //
 //	apply -f - (manifest on stdin)                  2   assert-network's probe ns, broad-pat drill
 //	create -f - (manifest on stdin)                 1   assert-platform's health Workflow
 //
-// KEEP THE COUNT AND THE INTERFACE IN STEP. This header said "six" for both
-// additions, and so did three sentences in capability.go and the refusal message
-// Permits() hands a caller — which told a developer needing ApplyStdin to use one
-// of six operations that did not include it. A count restated in five places and
-// checked in none is the shape TestWriterOperationCountMatchesTheProse now closes.
+// KEEP THE COUNT AND THE INTERFACE IN STEP. The number is restated here, in three
+// sentences in capability.go, and in the refusal message Permits() hands a caller
+// — five places, so a stale one tells a developer needing ApplyStdin to use a set
+// of operations that does not include it. TestWriterOperationCountMatchesTheProse
+// is what closes that.
 //
-// WHY THIS IS TIGHTER THAN A VERB CHECK. `cluster-write` used to mean any
-// mutating kubectl subcommand: `drain`, `taint`, `exec ... -- sh -c`, `delete
-// namespace` on anything. It now means these eight shapes with these arguments.
+// WHY THIS IS TIGHTER THAN A VERB CHECK. A verb check makes `cluster-write` mean
+// any mutating kubectl subcommand: `drain`, `taint`, `exec ... -- sh -c`, `delete
+// namespace` on anything. This means these eight shapes with these arguments.
 // Four of the eight writers are `assert-*` extensions whose entire mutation is
 // "refresh an Argo app" or "delete the fixture I just created", and after this
 // they are structurally incapable of anything else.

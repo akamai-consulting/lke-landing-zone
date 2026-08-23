@@ -9,14 +9,11 @@
 //	enablement.go  RESOLVES an instance's enabled set from spec.components, which
 //	               gates.go and the assert battery both skip on.
 //
-// THIS PARAGRAPH USED TO SAY THERE WAS "no enable/disable resolution", and it went
-// on saying it after enablement.go landed beside it in this same package. A package
-// doc that contradicts a file next to it is worse than no package doc: the model's
-// own doc.go and internal-extension-model.md both list enablement as a live
-// consumer, so a reader who trusted this one was told the framework was more inert
-// than it is.
+// ENABLEMENT RESOLUTION IS LIVE and lives in enablement.go beside this file — do
+// not describe this package as having none, which doc.go and
+// internal-extension-model.md would both contradict.
 //
-// STILL ABSENT, and these are the real ones: no loader, no YAML manifest, no remote
+// WHAT IS ABSENT, and these are the real ones: no loader, no YAML manifest, no remote
 // half, and no DRIVER — nothing evaluates a required set and names a lifecycle
 // state. docs/designs/internal-extension-model.md records why each is absent, and
 // issue #399 sequences them.

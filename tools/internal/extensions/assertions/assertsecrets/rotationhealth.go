@@ -12,10 +12,10 @@ package assertsecrets
 // single pane, and — this is the part that matters — no alert can ever fire for
 // it, because an alert on an absent series is an alert that never evaluates.
 //
-// That is not hypothetical. The `static` class exists because those paths
-// "published NO series at all and were invisible on the single pane rather than
-// visibly old" (credpaths.CredClassStatic's own comment). A silently-missing series is the
-// native failure of this subsystem, and nothing gated it.
+// A silently-missing series is the native failure of this subsystem: the `static`
+// class exists because those paths "published NO series at all and were invisible
+// on the single pane rather than visibly old" (credpaths.CredClassStatic's own
+// comment).
 //
 // WHAT IT ASSERTS. Two lanes, because the credential single pane has two feeds
 // and they fail in different ways.
@@ -27,11 +27,10 @@ package assertsecrets
 //   2. its age is within the SLA its class carries.
 //
 // PRESENCE LANE — for the GitHub-held credentials in ghSecretTargets, where the
-// failure is not "old" but "not there". That whole feed was ungated: the age lane
-// reads credpaths.CredPaths, so it had nothing to say about a write-time probe that never
-// authenticated (which is what was happening in production), a credential that
-// was never configured, or a root token left set after a break-glass. See
-// evalPresenceHealth.
+// failure is not "old" but "not there". The age lane reads credpaths.CredPaths and
+// so has nothing to say about a write-time probe that never authenticated (which
+// has happened in production), a credential that was never configured, or a root
+// token left set after a break-glass. See evalPresenceHealth.
 //
 // Non-alertable classes (generate-once / tracks-source / static) are REPORTED,
 // never gated: nothing will lower their age, so failing on it would be a

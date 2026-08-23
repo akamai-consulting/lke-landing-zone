@@ -310,14 +310,9 @@ func TestLanesFromDeploymentArgs(t *testing.T) {
 // failure mode the whole per-lane check exists to catch, one level up.
 //
 // THE PATH IS RELATIVE TO THIS PACKAGE AND POINTS ACROSS A PACKAGE BOUNDARY.
-// This comment used to say reconcile.go was "still package main's" and that a hard
-// failure here would be the correct outcome once `reconciler-runtime` was
-// extracted. That extraction happened, the const below moved with its subject, and
-// the comment kept describing the world before it — a doc comment asserting the
-// opposite of the line beneath it, which is the one thing a reader cannot check
-// against anything.
+// Keep the const below in step with its subject if either moves.
 //
-// The reasoning it recorded was right and is worth keeping as a standing fact: a
+// The standing fact behind it: a
 // coupling guard that silently stops finding its subject is worse than one that
 // breaks loudly, so this reads the file rather than a copy of its contents, and a
 // move breaks it on purpose.

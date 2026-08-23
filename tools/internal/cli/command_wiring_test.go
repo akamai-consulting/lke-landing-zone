@@ -9,15 +9,12 @@ package cli
 // forgetting one produces no error anywhere. `llz extension list` reads the
 // registry; the CLI reads the tree; nothing compared them.
 //
-// IT USED TO SAY "it runs in package main on purpose", which was true and was a
-// constraint rather than a choice: the tree could only be built there, so this
-// could only be written there. internal/cli is an ordinary package now, which is
-// what let commands_claimed_test.go assert the REVERSE direction — the one this
-// file's closing note explains was too expensive to maintain by hand.
+// commands_claimed_test.go asserts the REVERSE direction, which this file's closing
+// note explains was too expensive to maintain by hand.
 //
-// AND ITS COVERAGE WAS PARTIAL UNTIL RECENTLY. It can only fail for a constructor
-// registry.Commands() names, and twelve extension packages were absent from that
-// table — every one of them exporting a plainly-named `Cmd()` rather than
+// ITS COVERAGE IS BOUNDED BY THE WIRING TABLE. It can only fail for a constructor
+// registry.Commands() names, and twelve extension packages were once absent from
+// that table — every one of them exporting a plainly-named `Cmd()` rather than
 // `SomethingCmd()`, so the guard's reach tracked an accident of naming. See
 // registry/commands_census_test.go, which derives the table's subject instead.
 

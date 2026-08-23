@@ -4,10 +4,9 @@ package database
 // rotation for the Linode Managed PostgreSQL clusters the `databases` root
 // provisions (docs/designs/shared-managed-postgres.md).
 //
-// This closes the gap docs/secrets.md called out: every cluster's admin
-// credential was seeded once by `llz ci seed-db-admin` and then held forever.
 // The DB admin is the highest-value credential in the deployment — it owns every
-// logical database Crossplane carves out — and it had no rotation path at all.
+// logical database Crossplane carves out — and without this it is seeded once by
+// `llz ci seed-db-admin` and held forever.
 //
 // ── Why this rotator is shaped differently from the others ───────────────────
 //
@@ -41,16 +40,12 @@ package database
 // so that credential is replaced within the same run that created it and the
 // copy sitting in Terraform state is dead on arrival.
 //
-// This used to end with a `terraform apply -refresh-only`, because
-// `seed-db-admin` compared PASSWORDS and reconciled OpenBao toward state — so a
-// seed run against unrefreshed state would push the pre-rotation password back
-// over the live one. That defence is gone because the hazard is gone:
-// seed-db-admin now compares the cluster's ENDPOINT, and leaves the credential
-// of a path already pointing at this cluster completely alone. OpenBao is
-// authoritative for the password; nothing consults state about it.
-//
-// Removing the refresh also removes a failure mode: a rotation that succeeded
-// but reported failure because a state refresh could not get a lock.
+// NO `terraform apply -refresh-only` IS NEEDED HERE, and adding one back would
+// only reintroduce a failure mode (a rotation that succeeded but reported failure
+// because a state refresh could not get a lock). seed-db-admin compares the
+// cluster's ENDPOINT, not the password, and leaves the credential of a path
+// already pointing at this cluster alone. OpenBao is authoritative for the
+// password; nothing consults state about it.
 //
 // HONEST LIMIT: this bounds how long the state copy is LIVE, not whether a
 // password is ever written to state. `root_password` is a provider-computed

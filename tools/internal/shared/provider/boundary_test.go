@@ -85,10 +85,9 @@ func TestProviderDoesNotDependOnTheAPLLayer(t *testing.T) {
 // the concrete cloud. cmd/llz is the intended home for Linode day-0 code, so it
 // must trip the same rule the APL layer must not.
 //
-// IT PROVED THIS FOR FREE UNTIL NOW. `go list -deps X` includes X, and `cmd/llz` is
-// itself in `forbidden` — so the old version tripped on the package being its own
-// dependency and would have passed with every real edge deleted. Skipping self
-// forces the walk to FIND the concrete cloud, which is the edge the rule is about.
+// SKIPPING SELF IS WHAT MAKES IT PROVE ANYTHING. `go list -deps X` includes X, and
+// `cmd/llz` is itself in `forbidden` — so without the skip this trips on the
+// package being its own dependency and passes with every real edge deleted.
 func TestForbiddenRuleActuallyDiscriminates(t *testing.T) {
 	const self = modulePath + "/cmd/llz"
 	const cloud = modulePath + "/internal/shared/linode"

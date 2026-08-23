@@ -84,11 +84,10 @@ import (
 func ciCmd() *cobra.Command {
 	// Install converge's capability set before any of its verbs can run.
 	//
-	// THE COMMENT HERE USED TO SAY "because cliopts.Global is populated by flag
-	// parsing", which was exactly backwards: this runs during tree CONSTRUCTION,
-	// which is before cobra parses anything. The set below is capability handles
-	// and seams, none of which depend on a flag; the one thing that did —
-	// --dry-run — is read inside RunE now. See installConvergeDeps.
+	// THIS RUNS DURING TREE CONSTRUCTION, before cobra parses anything — so do not
+	// justify its placement by flag parsing, which happens later. The set below is
+	// capability handles and seams, none of which depend on a flag; the one thing
+	// that did, --dry-run, is read inside RunE. See installConvergeDeps.
 	installConvergeDeps()
 	installAssertPlatformDeps()
 	installAssertReconcilerDeps()

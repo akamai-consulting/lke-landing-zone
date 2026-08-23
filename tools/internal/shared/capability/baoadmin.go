@@ -3,10 +3,9 @@ package capability
 // baoadmin.go — the handle for OpenBao's ADMIN surface: policy, auth, token,
 // operator and status. The half that is not KV.
 //
-// FOURTH CAPABILITY, AND IT EXISTS BECAUSE THE RATCHETS SAID SO. Secrets and
-// Custodian cover reading and placing secret MATERIAL, and after converting six
-// packages the calls that would not fit were all the same shape — configuring the
-// store rather than putting things in it. Counted across the tree, non-test:
+// IT EXISTS BECAUSE Secrets AND Custodian DO NOT COVER IT. Those two handle
+// reading and placing secret MATERIAL; what will not fit them is all one shape —
+// configuring the store rather than putting things in it. Counted non-test:
 //
 //	operator generate-root  11    policy write   9    token lookup   3
 //	auth enable              3    policy list    2    operator init  2
@@ -15,12 +14,12 @@ package capability
 // That is not a long tail. It is a second surface with more call sites than the
 // KV one, and every one of them was going through an unconstrained `bao` argv.
 //
-// WHY NOT A SEVENTH GRANT. The vocabulary already distinguishes reading secret
+// WHY NOT A NEW GRANT. The vocabulary already distinguishes reading secret
 // material (`secret-read`) from holding and placing it (`secret-custody`), and
 // these operations divide on the same line: asking whether a pod is unsealed is a
 // read, writing a policy that grants access to every path is custody in the
-// strongest sense the model has. Adding `secret-admin` would have meant a grant
-// nobody has declared, retro-fitted onto sixteen bindings.
+// strongest sense the model has. A `secret-admin` would be a grant nobody has
+// declared, retro-fitted onto sixteen bindings.
 //
 // IT IS WIRED TO baoread.ExecFn — A POD EXEC — AND THAT IS PART OF ITS CONTRACT,
 // not an implementation detail. OpenBao is reached two ways in this tree: ExecFn
@@ -31,9 +30,9 @@ package capability
 // A caller on ExecStdin is therefore NOT a caller that can be moved here by
 // swapping the function. credential-pat's jwt login was converted and reverted for
 // exactly this: its tests stubbed ExecStdin, the handle read through ExecFn, and
-// the login failed against a fake that was never consulted. That is the
-// double-seam trap this campaign has now hit seven times, and the tests caught it
-// because they stub the seam rather than the behaviour.
+// the login failed against a fake that was never consulted. That double-seam trap
+// is a recurring one, and it is caught only because the tests stub the SEAM rather
+// than the behaviour.
 //
 // Expressing the address-based transport is a second handle or a second
 // constructor; one caller is not enough to know which, so ExecStdin callers stay

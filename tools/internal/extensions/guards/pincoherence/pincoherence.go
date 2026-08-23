@@ -45,9 +45,9 @@ var exactReleaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // there, when either pin is absent, or when either is not an exact release tag.
 func Assert(dir string) error {
 	// Through the gate's own reader: this guard's only disk access is the answers
-	// file, and until now it reached it via answers.Read's unfenced path — the
-	// last hole in the guards bucket after capability.Repo landed, and one the
-	// raw-read ratchet could not see because the call is in another package.
+	// file, and answers.Read's path is UNFENCED. The raw-read ratchet cannot see
+	// that call, because it is in another package — so reaching for the unfenced
+	// helper here would reopen a hole nothing reports.
 	repo, rel := capability.RepoContaining(gateBinding(), dir)
 	a, err := answers.ReadFrom(repo, rel)
 	if err != nil || a == nil {

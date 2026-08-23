@@ -8,25 +8,20 @@ package sourceref
 // between packages leaves behind once the compiler has forced every CALLER to be
 // updated and left every COMMENT alone.
 //
-// ────────────────────────────────────────────────────────────────────────────
 // THE CONVENTION THIS GUARD ENFORCES, because it is not one Go already has:
 //
 //	pkg.Symbol   a LIVE pointer. It resolves today, and a reader may follow it.
 //	pkg's Symbol HISTORY. Where something used to be, what it used to be called.
 //
-// WITHOUT THAT SPLIT THE GUARD IS UNSHIPPABLE HERE, and the first run proved it
-// rather than argued it: fifteen findings, and every one was a sentence
-// deliberately naming a symbol at its OLD home — "it USED TO READ
-// selfupgrade's LatestRelease", "cli's ParseRotatorArgs outlived its callers and
-// has been removed", two of them verbatim quotations of older comments. Not one
-// was a mistake. A repo that documents its scars will write those sentences
-// forever, and a guard that forbids them is a guard that gets deleted.
+// WITHOUT THAT SPLIT THE GUARD IS UNSHIPPABLE HERE. Its first run produced fifteen
+// findings and every one was a sentence deliberately naming a symbol at its OLD
+// home — not one was a mistake. A repo that documents its scars writes those
+// sentences forever, and a guard that forbids them is a guard that gets deleted.
 //
-// The possessive costs an apostrophe and reads better than the alternative,
-// which is what makes it hold: a dotted reference now MEANS something a reader
-// can act on, and the guard is what keeps that promise true. Compare the path
-// guard's version of the same rule — name the symbol, say where it moved, do not
-// leave a pointer that only looks live.
+// The possessive costs an apostrophe, which is what makes it hold: a dotted
+// reference MEANS something a reader can act on, and the guard is what keeps that
+// promise true. Same rule as the path guard's — name the symbol, say where it
+// moved, do not leave a pointer that only looks live.
 //
 // A REFERENCE TO A LOCAL VARIABLE takes the same treatment for the same reason.
 // A comment asserting that a parameter's exported field is non-nil, where that
@@ -36,10 +31,8 @@ package sourceref
 // (Spelled around rather than quoted — this guard reads its own source, and it
 // cannot tell an illustration from a claim.)
 //
-// ────────────────────────────────────────────────────────────────────────────
-// IN GO FILES THIS READS COMMENTS ONLY, AND THAT IS THE WHOLE DESIGN.
-//
-// The naive reading — scan the file's text — measures 4,013 `testing.T`, 1,913
+// IN GO FILES THIS READS COMMENTS ONLY, AND THAT IS THE WHOLE DESIGN. The naive
+// reading — scan the file's text — measures 4,013 `testing.T`, 1,913
 // `strings.Contains` and 1,512 `fmt.Errorf`, none of which this repo owns, plus
 // the genuinely dangerous shape: a LOCAL VARIABLE whose name is one of our
 // package names. Sixteen of the 142 packages under tools/internal are called
@@ -54,7 +47,6 @@ package sourceref
 // That removes the local-variable class completely rather than approximating it,
 // and it is why the compiler is left to do the job it already does.
 //
-// ────────────────────────────────────────────────────────────────────────────
 // AND IT ONLY JUDGES PACKAGES WE OWN. A reference resolves against the symbol
 // table built from this repo's own Go tree; a package name absent from it is
 // skipped, not reported. `cobra.Command` and `color.Green` are somebody else's

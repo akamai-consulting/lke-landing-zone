@@ -1,11 +1,7 @@
 package render
 
-// FOLLOWED ITS SUBJECT: this header used to read "STAYED: committedTargets is in
-// render.go" — an accurate note about a boundary that has since moved. render.go
-// is internal/render now and the test came with it.
-//
-// committedTargets is the render path, not the topology
-// reader. Another passenger on env_set_test.go.
+// committedTargets is the render path, not the topology reader — this test lives
+// beside its subject in internal/render. Another passenger on env_set_test.go.
 
 import (
 	"path/filepath"

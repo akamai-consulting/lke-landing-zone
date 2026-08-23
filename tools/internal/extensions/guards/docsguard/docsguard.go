@@ -179,12 +179,11 @@ var workflowScanRoots = []string{".github", "instance-template/.github"}
 //
 // WHY THIS CORPUS EXISTS AT ALL. Everything above this line validates MARKDOWN.
 // A doc naming a flag that no longer exists misleads a reader; a WORKFLOW naming
-// one stops a deployment — and until now only the first was checked. The gap was
-// not theoretical: `llz-terraform.yml` invoked `llz ci preflight --deployment`
-// at two sites after an extraction dropped that flag, and the branch carrying it
-// went green on all eleven CI checks. It surfaced as an e2e apply-cluster dying
-// on `unknown flag: --deployment` before Terraform ran, which is the most
-// expensive place in this repo to learn it.
+// one stops a deployment. That gap is not theoretical: `llz-terraform.yml` once
+// invoked `llz ci preflight --deployment` at two sites after an extraction dropped
+// that flag, and the branch carrying it went green on every CI check. It surfaced
+// as an e2e apply-cluster dying on `unknown flag: --deployment` before Terraform
+// ran, which is the most expensive place in this repo to learn it.
 //
 // The check itself is checkDocCommands, unchanged and shared. That is deliberate:
 // a second copy of "resolve the command, then validate its flags" would be a

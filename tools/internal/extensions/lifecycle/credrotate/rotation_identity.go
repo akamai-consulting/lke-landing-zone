@@ -107,8 +107,6 @@ func resolveRotationLabel(explicit, kind, what string) (string, error) {
 	// account-wide, so more than one owner would race mint/revoke)". So the GHA
 	// path stands down rather than joining in.
 	//
-	// It was harmless until now only because nothing called this resolver, so the
-	// label was "" and both drains matched nothing.
 	if kind == rotationKindPAT {
 		if l := specBroadPATLabel(); l != "" {
 			return "", errBroadPATOwnedInCluster(what, l)

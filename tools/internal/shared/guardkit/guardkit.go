@@ -34,11 +34,10 @@
 // Two guards already fail closed this way (argocd-rendered-apps, check-coverage);
 // this is that behavior, shared.
 //
-// This comment used to name wave-health-guard as a third — it was not one. That
-// guard called walkManifests and DISCARDED the examined count, so it was the one
-// tree-scanning guard that still passed on an empty corpus, which is precisely
-// the hole this file exists to close. It now calls requireCorpus like its
-// siblings (see TestWaveHealthGuardFailsOnEmptyCorpus).
+// wave-health-guard calls requireCorpus too (TestWaveHealthGuardFailsOnEmptyCorpus
+// pins it), but it is not a third INDEPENDENT implementation: it used to call
+// walkManifests and DISCARD the examined count, which is exactly the hole this file
+// closes — a tree-scanning guard that passes on an empty corpus.
 
 package guardkit
 
