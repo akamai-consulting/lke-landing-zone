@@ -130,102 +130,46 @@ jobs:
           See `docs/quickstart.md` §4.
           SUMMARY
 
-  # ── Discover deployments (the PR-plan matrix source of truth) ────────────────
-  # Same reusable workflow that feeds the rotation + scheduled-check matrices, so
-  # the PR plan covers exactly the deployments those do.
-  discover:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    uses: ./.github/workflows/llz-discover-deployments.yml
-
-  # ── Plan on PRs ─────────────────────────────────────────────────────────────
-  # Posts a plan summary; never applies.
-  # SECURITY: this job consumes production secrets, so the head-repo check below
-  # restricts it to internal PRs — fork PRs must not reach them.
+  # ── NO PLAN JOB ON PULL REQUESTS, and that is a decision, not an omission ───
+  # There used to be a `plan-cluster-pr` here (with a `discover` job feeding it a
+  # per-deployment matrix). It could never have run on a correctly configured
+  # instance, and it is retired rather than repaired because the two things that
+  # would have to be true for it to work contradict each other.
   #
-  # NOT ON DRAFTS, and that is about STATE, not cost. "Never applies" is true of
-  # `tofu plan` and NOT of this job: the import step below runs `llz ci tf-import`,
-  # which WRITES cluster/<deployment>/terraform.tfstate. Nothing serializes that
-  # against a concurrent apply — this job's concurrency group is
-  # terraform-infra-pr (inputs.region is empty on a PR) while a dispatched
-  # apply's is terraform-infra-<deployment>, and the s3 backend sets no
-  # use_lockfile, so there is no lock underneath either. Two writers, last one
-  # wins. Skipping drafts gives anyone who must not disturb live state a way to
-  # say so — which the release-e2e PR-gate probe uses: it opens its throwaway PR
-  # as a draft precisely so its lint check cannot collide with the apply that
-  # follows it. Mark the PR ready for review to get the plan (terraform.yml lists
-  # ready_for_review in its trigger types, so that alone re-runs this).
+  # A `tofu plan` against live state needs TF_STATE_ACCESS_KEY, TF_STATE_SECRET_KEY
+  # and LINODE_API_TOKEN. Those are ENVIRONMENT-scoped (envreq's requirement table
+  # marks them EnvScope) because the state bucket and the Linode credentials are
+  # per-deployment, so a job without an `environment:` resolves all three to empty
+  # and dies at `tofu init`. That is what this job did on every PR any adopter
+  # ever opened.
   #
-  # THE TRIGGER LIVES IN A DIFFERENT MANIFEST CLASS FROM THIS SKIP, which is worth
-  # knowing when an upgrade behaves oddly. This file is `managed` — copier
-  # overwrites it, so the skip always arrives. terraform.yml is `merge`, so its
-  # `types: [… ready_for_review]` arrives through a 3-way merge that a local edit
-  # can decline. With the skip and without the trigger, taking a PR out of draft
-  # fires no event and the plan never runs. If that happens, the fix is one line
-  # in terraform.yml; TestDraftSkipHasItsReadyForReviewTrigger keeps the TEMPLATE
-  # from ever shipping the two halves out of step.
-  plan-cluster-pr:
-    name: Plan Cluster (PR)
-    needs: discover
-    if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
-    env:
-      REGION: ${{ matrix.region }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # No render step needed: the per-env tfvars are gitignored artifacts that
-      # the terraform-init composite regenerates before init.
-      - name: Terraform init — cluster
-        uses: ./.github/actions/terraform-init
-        # Bounded: `tofu init` is a provider/module/state fetch with no internal
-        # budget, so a stalled registry or backend would otherwise eat the job.
-        timeout-minutes: 10
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
-          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
-          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
-          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
-          github-token:          ${{ github.token }}
-
-      - name: Terraform validate — cluster
-        working-directory: terraform-iac-bootstrap/cluster
-        run: tofu validate
-
-      - name: Import VPC and subnet if not in state
-        working-directory: terraform-iac-bootstrap/cluster
-        env:
-          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
-          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
-          REGION:                ${{ matrix.region }}
-        run: llz ci tf-import --region "$REGION"
-      - name: Terraform plan — cluster
-        working-directory: terraform-iac-bootstrap/cluster
-        env:
-          LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
-          TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
-          TF_VAR_github_api_url:           ${{ github.api_url }}
-          AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
-          REGION:                          ${{ matrix.region }}
-        run: |
-          TFVARS="${REGION}.tfvars"
-          test -f "$TFVARS" || TFVARS="${REGION}.tfvars.example"
-          llz ci tf-plan --out "plan-cluster-${REGION}.txt" --title "Cluster plan (${REGION})" \
-            -- -var-file="$TFVARS" -out="tfplan-cluster-${REGION}.bin"
+  # ADDING `environment: infra-<deployment>` DOES NOT FIX IT. `llz` locks every
+  # infra-<env> environment to a deployment-branch-policy of `main` only, and that
+  # lock is the boundary that stops someone pushing a branch, dispatching against
+  # infra-prod and having GitHub inject the OpenBao unseal keys into a job their
+  # branch controls. A pull_request run's ref is refs/pull/N/merge, which no branch
+  # policy matches — so the environment form fails at job start instead of at init.
+  # Unlocking the environment for PR branches would trade a plan preview for the
+  # exact hole the lock exists to close.
+  #
+  # WHAT REPLACES IT: tf-lint (tflint over the rendered roots), checkov, and
+  # repo-readiness all run on every internal PR and need no cloud credentials at
+  # all. What is genuinely lost is a diff against live state — which no adopter
+  # has ever seen, since the job never got past init.
+  #
+  # TWO THINGS FELL OUT WITH IT. The draft-PR skip existed only to keep this job's
+  # `llz ci tf-import` — a step that WRITES cluster/<deployment>/terraform.tfstate
+  # with no lock underneath it — off a PR racing a concurrent apply; with the job
+  # gone there is no tf-import on any pull-request path, so terraform.yml no longer
+  # needs `ready_for_review` in its trigger types. And the template pin could then
+  # return to terraform.yml's `paths:` filter, which is what closes the pin-only
+  # upgrade gap that comment had been holding open (v0.0.42 /
+  # TF_STATE_ENCRYPTION_PASSPHRASE).
+  #
+  # `llz ci workflow-secret-scope` is the gate. It fails any job that reads an
+  # env-scoped secret without an `environment:`, AND any pull-request-reachable job
+  # that reads one at all — so neither half of the contradiction above can come
+  # back quietly.
 
   # ── Repo readiness (upgrade prerequisites) ──────────────────────────────────
   # WHAT A RELEASE NOW REQUIRES THAT THE LAST ONE DID NOT, asked at PR time.

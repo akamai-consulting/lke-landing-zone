@@ -82,11 +82,11 @@ var ghSecretPresent = func(apiPath string) (present, answered bool) {
 // infra-<env> — so llz would mint a SECOND, different passphrase, push it
 // repo-level, and print a banner claiming it protects state it cannot decrypt.
 // Nothing fails at that moment: every environment-scoped job keeps resolving the
-// old value, while plan-cluster-pr (which declares no `environment:`) picks up
-// the new one and dies at init. The operator escrows the wrong string, and the
-// divergence only becomes data loss when the env-scoped copy is removed or a
-// rotation runs. liveState.has and ci_token_inventory's gatherSecretAges both
-// already read both scopes for exactly this reason.
+// old value, so the pipeline stays green on a passphrase the escrow does not hold.
+// The operator escrows the wrong string, and the divergence only becomes data loss
+// when the env-scoped copy is removed or a rotation runs. liveState.has and
+// ci_token_inventory's gatherSecretAges both already read both scopes for exactly
+// this reason.
 //
 // An indefinite answer on EITHER scope means unknown: a 403 on one of them
 // cannot rule out a passphrase living there.
@@ -95,10 +95,10 @@ func statePassphraseExists(repo, env string) (present, answered bool) {
 	// EVERY infra-* environment, not just the one being provisioned. An instance
 	// whose FIRST deployment holds the passphrase on infra-primary would otherwise
 	// look empty while provisioning `dr`: both probes 404, llz mints a second
-	// passphrase and pushes it repo-level, and primary's plan-cluster-pr job (which
-	// declares no `environment:`, so it resolves the repo-level value) then cannot
-	// decrypt primary's state. Same failure as the single-scope bug, one deployment
-	// over. envs falls back to just this one when the listing cannot be read.
+	// passphrase and pushes it repo-level, and the escrowed value now decrypts
+	// nothing while infra-primary's own copy still does. Same failure as the
+	// single-scope bug, one deployment over. envs falls back to just this one when
+	// the listing cannot be read.
 	envs, listed := instanceInfraEnvs(repo, env)
 	if !listed {
 		// The environment LISTING failed (403 on a token with Secrets:read but not

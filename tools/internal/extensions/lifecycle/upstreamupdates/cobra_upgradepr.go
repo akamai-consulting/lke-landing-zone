@@ -19,9 +19,10 @@ import (
 
 // execSeam is the single process hop this file makes. ONE seam rather than a
 // kubectlprobe.Exec at each call site: it lets a test read the ARGV the real
-// helpers build — `--draft` is load-bearing (it keeps the bot's PR off the
-// state-writing plan job), and a test that restated the flag list instead of
-// reading it would pass while the flag was absent.
+// helpers build — `--draft` was load-bearing while a pull request could reach the
+// state-writing plan job (that job is retired, and no pull-request path writes
+// Terraform state now), and a test that restated the flag list instead of reading
+// it would pass while the flag was absent.
 //
 // It delegates through a CLOSURE rather than taking kubectlprobe.Exec's value:
 // `var execSeam = kubectlprobe.Exec` would snapshot whatever that var pointed at

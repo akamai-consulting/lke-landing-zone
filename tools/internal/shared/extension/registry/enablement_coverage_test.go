@@ -66,6 +66,12 @@ var componentless = map[string]bool{
 	// No component: the injection class is a property of the WORKFLOW FILES, which
 	// every instance carries regardless of which spec components it turned on.
 	"workflow-injection": true,
+	// No component, for the same reason one file over: whether a job can resolve
+	// the secret it reads is a property of the WORKFLOW FILES. Every instance
+	// carries the delivered pipeline, and the credentials in question — the state
+	// keys and the Linode PAT — are what the pipeline needs to exist at all, not
+	// what any one component turns on.
+	"workflow-secret-scope": true,
 	// No component: an instance's opt-in to the automated template upgrade is a
 	// repo VARIABLE (LLZ_TEMPLATE_UPGRADE), not a spec component — the choice is
 	// about who may change this repo, which is not a property of the cluster the

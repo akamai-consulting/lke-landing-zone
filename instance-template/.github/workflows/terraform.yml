@@ -39,13 +39,16 @@ on:
       - '.github/actions/**'
   pull_request:
     branches: [main, master]
-    # ready_for_review is NOT in GitHub's default set (opened / synchronize /
-    # reopened) and is load-bearing here: llz-terraform.yml's plan job skips DRAFT
-    # pull requests, because it writes Terraform state (`llz ci tf-import`) with
-    # nothing serializing it against a concurrent apply. Without this type, taking
-    # a PR out of draft fires no event at all, so the plan an operator just asked
-    # for would never run — they would have to push an empty commit to get it.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # DEFAULT TYPES (opened / synchronize / reopened), and the omission is the
+    # point. `ready_for_review` used to be listed because llz-terraform.yml's plan
+    # job skipped DRAFT pull requests — it wrote Terraform state (`llz ci
+    # tf-import`) with nothing serializing it against a concurrent apply, so a
+    # draft was how an operator said "do not disturb live state", and taking the PR
+    # out of draft had to fire an event to get the plan. That job is retired (it
+    # could never resolve its environment-scoped credentials; see the note where it
+    # used to be in llz-terraform.yml), no pull-request path writes state any more,
+    # and every job left here runs on drafts and non-drafts alike. Listing a
+    # trigger type nothing acts on only re-runs the same read-only checks.
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
@@ -61,32 +64,24 @@ on:
       # They are all `managed`, so a `copier update` moves them together anyway.
       - '.github/workflows/llz-*.yml'
       - '.github/actions/**'
-      # THE TEMPLATE PIN IS DELIBERATELY *NOT* LISTED, and that is a trade-off
-      # worth stating rather than a gap.
+      # THE TEMPLATE PIN, and it is here because the reason it could not be has
+      # been removed.
       #
-      # Listing it would put the repo-readiness job on a pin-only upgrade PR —
-      # the bot bump, the `copier update` that merged to nothing — which is
-      # exactly where a newly-required value goes unnoticed (v0.0.42 and
-      # TF_STATE_ENCRYPTION_PASSPHRASE). It was listed here for one commit.
+      # Listing it puts the repo-readiness job on a pin-only upgrade PR — the bot
+      # bump, the `copier update` that merged to nothing — which is exactly where a
+      # newly-required value goes unnoticed (v0.0.42 and
+      # TF_STATE_ENCRYPTION_PASSPHRASE). It was listed for one commit and then
+      # taken out, because a paths: filter selects the WORKFLOW and not a job, so it
+      # also selected `Plan Cluster (PR)` — a job that ran `llz ci tf-import`, which
+      # WRITES cluster/<deployment>/terraform.tfstate against no lock. Catching a
+      # rare pin-only upgrade was not worth letting a bot write production state.
       #
-      # But a paths: filter selects the WORKFLOW, not a job, so it would also
-      # have selected `Plan Cluster (PR)` — and that job runs `llz ci tf-import`,
-      # which WRITES cluster/<deployment>/terraform.tfstate with nothing
-      # serializing it against a concurrent apply. That is the same unserialized
-      # state write the draft-PR skip was added to prevent, handed to an
-      # automated PR that is not a draft. Catching a rare pin-only upgrade is not
-      # worth letting a bot write production Terraform state.
-      #
-      # WHAT STILL COVERS THE REAL CASE: a genuine `copier update` rewrites the
-      # managed workflows (llz-*.yml) and the composite actions, which ARE listed
-      # above — so every upgrade that changes anything an instance runs already
-      # selects this pipeline and gets repo-readiness. The residual gap is an
-      # upgrade whose ONLY change is the recorded pin; that one is checked at the
-      # next PR touching Terraform or CI, and by `llz upgrade`'s own post-upgrade
-      # readiness advisory in the meantime.
-      #
-      # To close it properly, plan-cluster-pr needs per-job path filtering (or a
-      # tf-import that does not write on PRs) — then the pin can come back.
+      # That job is retired (see llz-terraform.yml, where its rationale now lives),
+      # so nothing on any pull-request path writes Terraform state and the trade-off
+      # is gone. What this filter now selects on a pin-only PR is repo-readiness,
+      # tf-lint, checkov and promote-pipeline-drift — all read-only, none holding a
+      # cloud credential. `llz ci workflow-secret-scope` is what keeps that true.
+      - '.copier-answers.yml'
   workflow_dispatch:
     inputs:
       action:

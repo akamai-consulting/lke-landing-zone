@@ -5,8 +5,8 @@ package capability
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry — they
 // were hand-transcribed once and had drifted by the time anyone re-read them.
 //
-// FIFTH CAPABILITY, AND THE LAST GRANT WITHOUT ONE. `read-repo` is declared by 48
-// of 68 extensions — more than any other grant — and until now it meant nothing at
+// FIFTH CAPABILITY, AND THE LAST GRANT WITHOUT ONE. `read-repo` is declared by 49
+// of 69 extensions — more than any other grant — and until now it meant nothing at
 // runtime. The validator refuses a gate that declares anything ELSE
 // (checkBindingCeiling), so the entire safety claim of `llz ci gates` — "these
 // touch nothing but files" — rested on a check of the DECLARATION and on nothing

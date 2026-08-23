@@ -152,6 +152,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/upstreamupdates=84 \
 	internal/extensions/guards/callerperms=85 \
 	internal/extensions/guards/runinjection=92 \
+	internal/extensions/guards/secretscope=85 \
 	internal/extensions/guards/budget=87 \
 	internal/extensions/guards/chartguard=71 \
 	internal/extensions/guards/k8sminorcoherence=99 \

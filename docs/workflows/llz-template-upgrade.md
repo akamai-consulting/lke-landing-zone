@@ -78,40 +78,45 @@ between crons, so what is actually observed is upgrade pull requests no longer
 arriving, which looks exactly like an instance with no upstream changes. That is
 why `token-inventory` measures it daily.
 
-## The pull request opens as a DRAFT, and that is load-bearing
+## The pull request opens as a DRAFT
 
-A genuine upgrade rewrites the vendored `.github/workflows/llz-*.yml` bodies. Those
+A genuine upgrade rewrites the vendored `.github/workflows/llz-*.yml` bodies, which
 are in `terraform.yml`'s `pull_request` `paths:` filter, so the upgrade PR selects
-the Terraform pipeline — including `plan-cluster-pr`, whose `llz ci tf-import` step
-**writes** `cluster/<deployment>/terraform.tfstate` with nothing serialising it
-against a concurrent apply.
+the Terraform pipeline.
 
-`plan-cluster-pr` skips **draft** pull requests, and that skip exists precisely so
-an automated one cannot take that write. So the bot opens a draft:
+**The draft used to be the mitigation, and is now hygiene.** The pipeline carried a
+`plan-cluster-pr` job whose `llz ci tf-import` step **wrote**
+`cluster/<deployment>/terraform.tfstate` with nothing serialising it against a
+concurrent apply. That job skipped draft pull requests, so opening a draft was what
+kept an automated PR from taking the write — a one-word mitigation with its own test
+asserting the flag on the real argv rather than restating it.
 
-| Check | On the draft |
+That job is retired. It could never resolve the environment-scoped credentials it
+needed (`TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY`, `LINODE_API_TOKEN`), and it
+could not be given the `infra-<deployment>` environment holding them either, because
+`llz` locks that environment to `ref=main` — a pull request's ref is
+`refs/pull/N/merge`, which no branch policy matches. Nothing on a pull-request path
+writes Terraform state any more, and two gates keep it that way:
+`llz ci workflow-secret-scope` and `TestNoPullRequestPathWritesTerraformState`.
+
+What the upgrade PR gets today, draft or not:
+
+| Check | On the PR |
 |---|---|
-| **repo-readiness** — the newly mandatory secret this release needs | **runs** (it does not skip drafts) |
-| lint | runs |
-| `plan-cluster-pr` → `llz ci tf-import` | **skipped** |
+| **repo-readiness** — the newly mandatory secret this release needs | runs |
+| tf-lint, checkov, promote-pipeline-drift | run |
+| any job that writes Terraform state | **none exists on this path** |
 
-`terraform.yml` lists `ready_for_review` in its trigger types, so a human who wants
-the plan marks the PR ready and gets it — with a person watching, which is the
-condition the unserialized write was always safe under.
+The `--draft` flag stays because a bot PR has no business asking for review, not
+because anything now depends on it.
 
-**An earlier draft of this workflow opened a non-draft PR and claimed the hazard
-was avoided.** It was avoided only for a pin-only upgrade, which selects nothing;
-every real upgrade walked straight into it. The one-word fix is the whole
-mitigation, which is why it has its own test asserting the flag on the real argv
-rather than restating it.
-
-**The residual gap** is a pin-ONLY upgrade, which selects no workflow and so gets
-no repo-readiness. It is checked at the next PR touching Terraform or CI. That
-trade-off is pre-existing and deliberate — see `terraform.yml`'s own filter
-comment — and this workflow does not touch the filter to close it. If it is worth
-closing later, the cheap way is inside `llz ci tf-import`: refuse to write when
-`GITHUB_EVENT_NAME=pull_request`. No workflow change, and an older `TF_IMAGE`
-keeps today's behaviour rather than failing on something it does not have.
+**The pin-only gap is closed.** An upgrade whose only change was the recorded pin
+used to select no workflow and so get no `repo-readiness` — the v0.0.42 /
+`TF_STATE_ENCRYPTION_PASSPHRASE` case. `.copier-answers.yml` was deliberately kept
+out of `terraform.yml`'s filter because a `paths:` filter selects the *workflow*,
+not a job, and listing it would have handed the state write to every automated
+pin bump. With no state write left on the path, the pin is in the filter and a
+pin-only upgrade PR reaches `repo-readiness` like any other.
 
 ## Why it ships disarmed
 
