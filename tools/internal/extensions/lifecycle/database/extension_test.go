@@ -51,7 +51,7 @@ func TestSeedReadsAndRotateWrites(t *testing.T) {
 
 // The assertion holds READ grants only, which is what makes it an assertion. If it
 // ever needed to write, it would have to become a transition — the forced spelling
-// six other extensions in this campaign have had to accept.
+// six other extensions have had to accept.
 func TestAssertionStaysReadOnly(t *testing.T) {
 	for _, b := range Extension().Bindings {
 		if b.Kind != extension.Assertion {

@@ -157,11 +157,8 @@ func Main() int {
 // driftCmd is `llz drift`. It is handed clideps.Sustain(), one of the deps
 // assemblers that make up the CLI's dependency-injection layer.
 //
-// IT USED TO SAY "STAYS IN PACKAGE MAIN" — the assembler was main's, so any
-// command needing it had to be too. That constraint is gone: cli/deps is an
-// ordinary package, so this reads as an ordinary command again. What it is NOT is
-// an extension: `llz drift` has no declaration, which the unclaimed-command
-// ratchet in commands_claimed_test.go counts.
+// It is an ordinary command, not an extension: `llz drift` has no declaration,
+// which the unclaimed-command ratchet in commands_claimed_test.go counts.
 func driftCmd() *cobra.Command {
 	var branch, repoURL string
 	var strict bool

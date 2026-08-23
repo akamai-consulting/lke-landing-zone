@@ -4,7 +4,7 @@ package mtlsguard
 //
 // FIFTY-THIRD EXTENSION, CLOSURE 1 — `main`, and nothing else. 282 lines that
 // needed exactly nothing from package main and were never measured until the
-// campaign ran out of hard candidates and started sweeping.
+// extraction ran out of hard candidates and started sweeping.
 
 import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 

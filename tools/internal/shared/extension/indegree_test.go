@@ -4,9 +4,9 @@ package extension_test
 // internal/extensions.
 //
 // This is the same rule as layering_test.go's, one level up, and it is the one the
-// campaign had been breaking hardest -- 41 of the 75 extensions import at least one
-// peer. The declarations describe a modular system; the import graph describes a
-// monolith.
+// extraction had been breaking hardest -- 41 of the 75 extensions import at least
+// one peer. The declarations describe a modular system; the import graph
+// describes a monolith.
 //
 // WHY IT MATTERS, in one concrete failure. The model says `Always` is a default
 // rather than a constant: an instance with no object storage must be able to turn

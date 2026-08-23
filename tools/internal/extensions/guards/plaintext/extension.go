@@ -46,7 +46,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // NOTHING IS PROPOSED HERE, deliberately. The declaration model says where an
 // extension attaches and what it may touch; it has no vocabulary for "this
 // extension carries per-instance configuration", and inventing one from a single
-// case is what this campaign has refused four times (`write-repo` took four cases
+// case is what this model repeatedly refuses (`write-repo` took four cases
 // and three refusals; the fifth binding kind is being held at one). It is recorded
 // because the extension is `ext? ✔` in the catalog — a candidate for running as a
 // pure-argv action later — and an argv action cannot carry a compiled-in registry

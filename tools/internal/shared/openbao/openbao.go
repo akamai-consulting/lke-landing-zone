@@ -647,7 +647,7 @@ func ExecArgv(pod, token string, args []string) []string {
 // reason they had stayed behind is that ClientForward reads envtopology.RoleActive
 // -- which was itself an extension until the same sweep moved the HA topology
 // model down here. Two packages each waiting on the other to become substrate is
-// the shape this campaign keeps finding: a set that measures badly is usually not
+// the shape this tree keeps finding: a set that measures badly is usually not
 // entangled with the code it names, it is waiting on a layer nobody has separated.
 
 // NewClientFor builds a *Client for an HA role from the OPENBAO_* env. Pure

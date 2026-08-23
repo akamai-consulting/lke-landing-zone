@@ -9,7 +9,7 @@
 // Parsing that one line is not an observability concern. Three unrelated callers
 // need it (the Prom/Loki lanes, Keycloak configuration, and the OpenBao client's
 // laptop path), which is the same "N callers of a private helper means a package"
-// argument this campaign applied a dozen times inside package main.
+// argument applied a dozen times inside the old package main.
 package portfwd
 
 import (

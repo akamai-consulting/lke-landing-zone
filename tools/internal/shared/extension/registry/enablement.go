@@ -5,9 +5,8 @@ package registry
 //
 // The model's headline promise is that `Always` is a DEFAULT, not a constant: an
 // instance with no object storage must be able to turn `assert-objstore` off in
-// its own configuration rather than by taking a different build. Until now nothing
-// read the field except the `llz extension list` display, so the promise was
-// undeliverable and nothing said so.
+// its own configuration rather than by taking a different build. This is what
+// makes that deliverable rather than a display field.
 //
 // IT REUSES THE SPEC'S EXISTING ENABLEMENT RATHER THAN ADDING A SECOND ONE.
 // `spec.components` already carries a tri-state toggle per component, with
@@ -22,9 +21,7 @@ package registry
 // when spec.components.objProxy is enabled" and nothing but that comment linked
 // them.
 //
-// WHAT DISPATCHES ON IT, which is no longer nothing. This header used to say "it
-// does not disable anything", and that was true for exactly as long as the gates
-// driver took to land:
+// WHAT DISPATCHES ON IT:
 //
 //   - `llz ci gates` SKIPS a gate whose extension is disabled (gates.go's RunGates
 //     consults EnabledFor and reports the skip in its count, so `24 ran, 0 skipped`

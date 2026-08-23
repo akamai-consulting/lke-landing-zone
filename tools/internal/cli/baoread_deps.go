@@ -14,7 +14,7 @@ func init() {
 	// Delegating closures, never direct assignment: baoread.ExecFn is
 	// themselves test seams, and capturing their value at init would freeze
 	// whatever they pointed at before any test swapped them. That bug has cost
-	// this campaign twice.
+	// this tree twice.
 	baoread.InstallWrites(
 		func(token, stdin string, args ...string) (string, string, error) {
 			return baoread.ExecFn(baoread.RootPod, token, stdin, args...)

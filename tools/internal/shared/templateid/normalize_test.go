@@ -1,7 +1,7 @@
 package templateid
 
-// NormalizeTemplateRepo arrived from internal/extensions/sustain at 0% — this
-// package had held only consts until now, so it had no test file at all.
+// NormalizeTemplateRepo arrived from internal/extensions/sustain at 0% coverage:
+// this package held only consts, so it had no test file at all.
 
 import "testing"
 

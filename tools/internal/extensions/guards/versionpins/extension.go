@@ -4,7 +4,7 @@ package versionpins
 // restatement of a pinned tool version equal to the one authority.
 //
 // FIFTY-SECOND EXTENSION. Its own subject is drift between copies of a version
-// string, which makes it a fitting near-last member of a campaign whose most
+// string, which makes it a fitting near-last member of an extraction whose most
 // repeated finding was that copies drift — the file even carries a
 // `versionAuthorityFile` const naming the one place a version is allowed to be
 // decided.

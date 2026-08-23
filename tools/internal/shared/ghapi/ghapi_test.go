@@ -126,7 +126,7 @@ func TestGHAPIJSONPagedPropagatesRealErrors(t *testing.T) {
 }
 
 // withExecOutput swaps the capture seam. A LOCAL COPY, as everywhere else in this
-// campaign: a stream-swapping helper cannot live in a shared package without
+// tree: a stream-swapping helper cannot live in a shared package without
 // shipping `testing` into production code. It swaps kubectlprobe.Exec directly
 // because that is what this package calls -- buildpreflight's version wrapped a
 // package-local execOutput closure that did not come with the move.

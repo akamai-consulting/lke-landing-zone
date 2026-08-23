@@ -267,8 +267,8 @@ func printNextSteps(dir string, pushed bool) {
 }
 
 // The owner-kind seam moved to ghcli.OwnerKindFn with the function it wraps: two
-// swappable vars over one call is the second-seam bug this campaign has now paid
-// for twice. instanceRepoExistsFn reports whether the instance repo itself is
+// swappable vars over one call is the second-seam bug, which has recurred here.
+// instanceRepoExistsFn reports whether the instance repo itself is
 // already there (an adopter who created it by hand after a failed --push).
 var (
 	instanceRepoExistsFn = ghapi.RepoExists

@@ -398,12 +398,9 @@ func ReapEnvInclusterPAT(ctx context.Context, client *linode.Client, prefix, env
 
 // orAll renders an empty scope as "(all)".
 //
-// A COPY IN THIS PACKAGE HAS JUST BEEN DELETED IN FAVOUR OF THIS ONE. teardown.go
-// carried its own, with a comment saying it was "a local copy of package main's
-// helper" — and this is that helper, arriving with reap.go. Ten packages in this
-// campaign kept a three-line copy rather than import one for it; this is the first
-// time a copy and its original have ended up in the same package, and the copy is
-// the one that goes.
+// ONE COPY PER PACKAGE, AND THIS IS THIS PACKAGE'S. Other packages keep their own
+// three lines rather than import a helper for it — but where a copy and its
+// original land in the SAME package, the copy goes.
 func orAll(s string) string {
 	if s == "" {
 		return "(all)"

@@ -433,11 +433,11 @@ func TestTheExemptionReadIsBounded(t *testing.T) {
 	}
 }
 
-// THE REMEDIATION HAS TO NAME THE FILE THE PIN IS ACTUALLY IN. It used to say
-// `environments/<env>.yaml` unconditionally, but landingzone.yaml.example seeds
-// the pin in spec.defaults — where EVERY deployment inherits it. Following that
-// advice unblocks one deployment and leaves the real stale value un-named, so the
-// rest fail one dispatch at a time.
+// THE REMEDIATION HAS TO NAME THE FILE THE PIN IS ACTUALLY IN. Naming
+// `environments/<env>.yaml` unconditionally is wrong: landingzone.yaml.example
+// seeds the pin in spec.defaults, where EVERY deployment inherits it. That advice
+// unblocks one deployment and leaves the real stale value un-named, so the rest
+// fail one dispatch at a time.
 func TestTheFixNamesWhereThePinActuallyLives(t *testing.T) {
 	_, own := k8sVersionVerdict("prod", "v1.33.6+lke7", false, theE2EAccount, nil)
 	if own == nil {

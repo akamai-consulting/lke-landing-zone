@@ -12,7 +12,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube
 //
 // The direct assignment snapshots whatever execOutput points at WHEN init RUNS —
 // before any test swaps it — so every test that stubs execOutput would still reach
-// the real kubectl through this package. That is the capture bug this campaign
+// the real kubectl through this package. That is the capture bug this tree
 // already paid for once, with harborCARetrofitKubectl. The closure reads the
 // variable at call time, which is the whole point of a seam.
 func init() {

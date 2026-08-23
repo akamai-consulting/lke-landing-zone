@@ -2,7 +2,7 @@ package reconciler
 
 // cobra_cmds.go — the five cobra constructors, AND THEY STAYED HERE.
 //
-// Every previous extraction in this campaign sent flag sets back to package main
+// Earlier extractions sent flag sets back to package main
 // on the rule that a flag set is not a capability. This one does not, and the
 // reason is `reconcileOpts`: TWENTY-FIVE FIELDS, of which twenty are a
 // `--reconcile-<lane>` bool paired with its resync interval. That struct is not

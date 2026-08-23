@@ -8,7 +8,7 @@ import (
 // Tests that followed their subjects rather than the subjects being exported to
 // reach them. filepathRel, lineDiff and renderTargets were briefly uppercase so
 // package main could call them; none had a non-test caller, which is the test
-// this campaign applies before accepting an export.
+// applied here before accepting an export.
 
 func TestFilepathRel(t *testing.T) {
 	if got := filepathRel("/a/b/cluster", "/a/b/prod.tfvars"); got != "prod.tfvars" {

@@ -3,11 +3,10 @@ package registry
 // grants_back_capabilities_test.go — a seam an extension HOLDS must be a
 // capability it DECLARED.
 //
-// THIS IS THE FIRST GRANT INVARIANT THAT IS ENFORCED RATHER THAN DESCRIBED.
-// Every declaration in the catalog is prose plus a grant list, and until now the
-// only thing checking a grant against the code was a human reading both. The
-// campaign's whole premise is that a declaration should be true; this makes one
-// class of untruth fail the build.
+// A GRANT INVARIANT ENFORCED RATHER THAN DESCRIBED. Every declaration in the
+// catalog is prose plus a grant list, and the only other thing checking a grant
+// against the code is a human reading both. A declaration should be true; this
+// makes one class of untruth fail the build.
 //
 // THE RULE: a package whose Deps carries an `Exec` seam — the stdout-capturing
 // shell-out, the one uniform capability in the catalog (fourteen packages, one

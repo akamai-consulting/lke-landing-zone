@@ -312,8 +312,8 @@ spec:
 // really does cover.
 // The path reaches into ANOTHER EXTENSION on purpose: the policy is //go:embed-ed
 // by bootstrap-cluster and did not move with this file. A relative path across a
-// package boundary is the trap that made two other guards go inert in this
-// campaign, so it is named here rather than left to be rediscovered — if the
+// package boundary is the trap that made two other guards go inert in this tree,
+// so it is named here rather than left to be rediscovered — if the
 // manifest moves, this fails loudly, which is the behaviour that was wanted.
 //
 // IT MOVED, AND IT DID FAIL LOUDLY. The path was `../bootstrapcluster/...` while

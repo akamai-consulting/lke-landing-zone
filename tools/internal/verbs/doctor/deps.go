@@ -21,8 +21,7 @@ import (
 //
 //   - `report` is a six-line printer over internal/color — pure, and localised
 //     below rather than injected. A seam here would only let a test assert that
-//     printing happened, which is the vacuous-fixture trap this campaign has hit
-//     four times.
+//     printing happened, which is the vacuous-fixture trap.
 //   - `firstNonEmpty` is three lines of pure string selection, localised for the
 //     same reason internal/configreadiness and internal/envtopology localised
 //     their copies.

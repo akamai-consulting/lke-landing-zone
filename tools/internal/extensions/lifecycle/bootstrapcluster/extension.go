@@ -4,13 +4,13 @@ package bootstrapcluster
 // LKE cluster into one apl-core is converging on.
 //
 // FIFTY-SIXTH EXTENSION AND THE LAST BIG CLEAN SET — 1,702 lines. It looked
-// entangled for the whole campaign and was not: measured ALONE,
+// entangled for the whole extraction and was not: measured ALONE,
 // ci_bootstrap_cluster.go comes back 15 outbound, and EIGHT of those fifteen are
 // its own manifests sibling. Add that file and ci_prepare_apl_upgrade.go and it
 // is 6, then 5 once `loadSpec` moved to internal/clusterspec.
 //
 // That is the trap worth naming last, because it is the mirror of the one this
-// campaign started with: a per-file closure understates a set by hiding shared
+// tree started with: a per-file closure understates a set by hiding shared
 // helpers, AND overstates it by counting a sibling as a foreign dependency. Check
 // where a file's edges POINT before calling it tangled.
 //
@@ -44,7 +44,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 // ONE EDGE COULD NOT BE CUT WHEN THIS LANDED, AND HAS SINCE BEEN. PinnedTemplateRef
 // was a package var defaulting to "", because its real implementation read the
-// copier answers file through the scaffold mass the campaign had recorded as
+// copier answers file through the scaffold mass recorded as
 // blocked. Extracting internal/shared/answers dissolved that: bootstrap_cluster.go
 // now calls answers.PinnedTemplateRef() directly and there is no injected var, no
 // seam and no installer.

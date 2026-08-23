@@ -2,10 +2,9 @@ package harbor
 
 // extension.go — `harbor-provisioner` declares itself.
 //
-// FORTY-SEVENTH EXTENSION, AND THE CLEANEST MEASUREMENT IN THE CAMPAIGN. This set
-// was 17 outbound when the campaign started and 5 when it moved, and NOBODY
-// TOUCHED A HARBOR FILE in between. Three unrelated extractions took its
-// dependencies out from under it, in this order:
+// A SET THAT SHRANK WITHOUT BEING TOUCHED — 17 outbound to 5, with nobody editing
+// a Harbor file in between. Three unrelated extractions took its dependencies out
+// from under it, in this order:
 //
 //	17 -> 10   the `gh` CLI secret writers        -> internal/ghsecret
 //	10 ->  8   the gh REST secret writers         -> internal/ghsecret

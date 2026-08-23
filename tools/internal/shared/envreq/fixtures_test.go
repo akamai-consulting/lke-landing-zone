@@ -1,7 +1,7 @@
 package envreq
 
-// chdirTemp, copied not shared -- the same rule every other fixture in this
-// campaign follows. The requirements model moved down here and its tests came
+// chdirTemp, copied not shared -- the same rule every other fixture in this tree
+// follows. The requirements model moved down here and its tests came
 // with it; the helper stays in both places rather than putting `testing` in a
 // production package.
 

@@ -26,8 +26,8 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 //	assertion:converged[read-repo, cluster-read]
 //
-// AN ASSERTION AT `converged`, not a gate, and the reason is the rule this
-// campaign had to be corrected on two moves ago: a gate is CHEAP AND OFFLINE. All
+// AN ASSERTION AT `converged`, not a gate, and the reason is the rule this tree
+// had to be corrected on two moves ago: a gate is CHEAP AND OFFLINE. All
 // three of these shell out — kubectl against the live context, `ssh-keyscan`
 // against a real host — so however read-only they are, they are not gate material.
 //

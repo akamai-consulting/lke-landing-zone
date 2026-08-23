@@ -5,13 +5,12 @@ package capability_test
 // ────────────────────────────────────────────────────────────────────────────
 // EVERY HANDLE HEADER OPENS WITH A CENSUS, AND FOUR OF THEM HAD GONE STALE.
 //
-// The headers argue from measurement rather than assertion — "read-repo is
-// declared by more extensions than any other grant, and until now it meant nothing
-// at runtime", "20 declarations of cloud-read and 21 of cloud-mutate, with nothing
-// behind either". That is the right way to justify a capability, and it is exactly
-// why the numbers cannot be left unchecked: an argument from a measurement is only
-// as good as the measurement, and these were taken once, by hand, at four different
-// moments, against a registry that has grown since.
+// The headers argue from measurement rather than assertion — "read-repo is declared
+// by more extensions than any other grant", "20 declarations of cloud-read and 21
+// of cloud-mutate". That is the right way to justify a capability, and exactly why
+// the numbers cannot be left unchecked: an argument from a measurement is only as
+// good as the measurement, and a hand-taken count goes stale against a registry
+// that keeps growing.
 //
 // Measured against the live registry, repo.go said 40 of 61 (42 of 62), cloud.go
 // said 20 cloud-read (19), secrets.go said sixteen secret-custody (18). None of

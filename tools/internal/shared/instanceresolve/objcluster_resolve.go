@@ -10,10 +10,10 @@ package instanceresolve
 // two spellings of one. Pick the wrong one and the apply SUCCEEDS: Loki and Harbor
 // provision buckets nobody can reach, and it surfaces much later as NoSuchBucket.
 //
-// Until now the only gate was validate.OBJClusterID, which checks the SHAPE and
-// says so ("It does NOT constrain the ordinal"), pointing the operator at
-// `linode-cli object-storage clusters-list` to work it out themselves. The account
-// already knows the answer and llz already has the API call, so ask.
+// validate.OBJClusterID checks the SHAPE only and says so ("It does NOT constrain
+// the ordinal"), leaving the operator to work the ordinal out from `linode-cli
+// object-storage clusters-list`. The account already knows the answer and llz
+// already has the API call, so ask.
 //
 // Best-effort by construction. `llz env add` has never needed a Linode token or
 // network, and must not start: with no token, an unreachable API, or an ambiguous

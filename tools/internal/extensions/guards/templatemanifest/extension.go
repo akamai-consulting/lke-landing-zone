@@ -5,7 +5,7 @@ package templatemanifest
 //
 // FIFTY-FIRST EXTENSION. Closure 2, both noise, 446 lines — it has been separable
 // the whole time and was simply never measured. That is worth saying plainly at
-// the end of a campaign that spent four iterations on sets that were NOT
+// the end of an extraction that spent four iterations on sets that were NOT
 // separable: the measurement is cheap and the intuition is unreliable in both
 // directions.
 //

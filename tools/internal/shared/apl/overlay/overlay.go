@@ -105,7 +105,7 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 	files := map[string]string{}
 	// Published unconditionally below, so it goes to 0 on the pass that fixes the
 	// overlay rather than silently ceasing to exist — an alert on an absent series
-	// never evaluates, which is the shape this whole campaign keeps finding.
+	// never evaluates, which is the shape this tree keeps finding.
 	objSourceEmpty := 0.0
 
 	// obj.yaml — LLZ owns the whole AplObjectStorage settings CR: merge the _shared +

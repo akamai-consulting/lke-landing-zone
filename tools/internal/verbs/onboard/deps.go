@@ -11,9 +11,8 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube
 func execOutput(name string, args ...string) ([]byte, error) { return kubectlprobe.Exec(name, args...) }
 func execLookPath(file string) (string, error)               { return kubectlprobe.LookPathFn(file) }
 
-// firstNonEmpty is copied, not shared. Seventeenth package in this campaign to
-// keep its own three lines; package main kept a copy too, because three files
-// there still use it.
+// firstNonEmpty is copied, not shared: three lines are cheaper than a shared
+// package every caller would have to import.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

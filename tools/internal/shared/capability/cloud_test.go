@@ -49,9 +49,9 @@ func cloudServer(t *testing.T) (*recorder, *httptest.Server) {
 }
 
 // A REFUSED MUTATION MUST NOT REACH THE WIRE. This is the whole point of the
-// handle: `cloud-mutate` holders delete clusters, Volumes, NodeBalancers and
-// VPCs, and until now a `cloud-read` binding could do all of it. Asserting the
-// error is not enough — the request must never have been sent.
+// handle: `cloud-mutate` holders delete clusters, Volumes, NodeBalancers and VPCs,
+// and without it a `cloud-read` binding can do all of it. Asserting the error is
+// not enough — the request must never have been sent.
 func TestAReadOnlyBindingCannotMutateTheAccount(t *testing.T) {
 	rec, srv := cloudServer(t)
 	c := capability.CloudFor(binding(extension.CloudRead))

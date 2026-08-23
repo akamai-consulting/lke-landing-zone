@@ -4,10 +4,9 @@ package capability
 //
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
 //
-// SECOND CAPABILITY, and it is the one the grant vocabulary most needed. Eighteen
-// bindings declare `secret-custody`, eleven declare `secret-read`, and until now
-// both were review metadata: a binding claiming read-only was handed
-// `baoread.Exec` and could `kv put` with a root token exactly as easily as the
+// Eighteen bindings declare `secret-custody` and eleven declare `secret-read`.
+// Without these handles both are review metadata: a binding claiming read-only is
+// handed `baoread.Exec` and can `kv put` with a root token exactly as easily as the
 // seeder next to it.
 //
 // THE SURFACE IS NARROWER THAN THE GRANT COUNT, the same way the kubectl census

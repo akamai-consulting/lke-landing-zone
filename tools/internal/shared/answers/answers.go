@@ -2,7 +2,7 @@
 // which template release the instance was rendered from and what it answered.
 //
 // EXTRACTED AS AN ENABLER, and an honest one: it is the hub FOURTEEN files in
-// cmd/llz reached through, and the campaign's own state file had written the
+// cmd/llz reached through, and the extraction’s own state file had written the
 // scaffold mass off as "a design task, no enabler to extract first". That was
 // wrong about this file — 65 lines, closure 1, sitting in plain sight.
 //

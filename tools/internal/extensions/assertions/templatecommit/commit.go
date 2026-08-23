@@ -3,7 +3,7 @@ package templatecommit
 // template_commit.go resolves an instance's template pin to the COMMIT it names.
 //
 // WHY THIS EXISTS. Two facts an instance records are meant to be the same fact,
-// and until now nothing could compare them because they are written in different
+// and nothing can compare them directly because they are written in different
 // alphabets:
 //
 //   - the template pin (`.copier-answers.yml`) is a release TAG — `v0.0.39`
@@ -322,9 +322,9 @@ func ComputeAndReportImageVars(vars map[string]string, needTF, needKube bool) {
 	if pinned {
 		return
 	}
-	// Not fatal — the floating tags are what every instance ran until now, and they
-	// are right whenever the tree is at main. But this is the shape that broke an
-	// adopter, so name it rather than let it look deliberate, and say what it costs:
+	// Not fatal — the floating tags are the historical default and are right
+	// whenever the tree is at main. But this is the shape that broke an adopter, so
+	// name it rather than let it look deliberate, and say what it costs:
 	// the pin can be outrun, and `assert-image-fresh` is what will tell them.
 	fmt.Printf("\n%s TF_IMAGE/KUBE_IMAGE are NOT pinned to this instance's template commit —\n"+
 		"      %s.\n"+

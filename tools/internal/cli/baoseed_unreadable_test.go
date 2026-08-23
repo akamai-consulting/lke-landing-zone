@@ -9,7 +9,7 @@ package cli
 // of the five tests in that file were about the classifier; three were about its
 // callers.
 //
-// The pattern is the fourth this campaign has recorded, after files named for a
+// The pattern has recurred, after files named for a
 // coverage METRIC, for the COMMAND that calls the code, and for the BATCH they
 // were written in. This one is named for the DEPENDENCY the tests share — which is
 // the most plausible-looking of the four, and still wrong for the same reason:
@@ -84,7 +84,7 @@ func TestMintPathsRefuseOnUnreadablePath(t *testing.T) {
 // reason. Both seams are swapped — leaving PodStatusUnsealed at its default
 // (false) would resolve every unrecognised stderr to Unknown regardless of the
 // fake pod, and the tests would pass while asserting nothing. That double-seam
-// mistake has cost this campaign twice already.
+// mistake has recurred already.
 func withBaoReadSeam(t *testing.T, stderr string, podHealthy bool) {
 	t.Helper()
 	prevExec, prevStatus := baoread.Exec, baoread.PodStatusUnsealed

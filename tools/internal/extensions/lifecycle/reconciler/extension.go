@@ -3,8 +3,8 @@ package reconciler
 // extension.go — `reconciler-runtime` declares itself: the long-running process
 // that HOSTS the reconcile lanes, plus the four lanes that live in it.
 //
-// FORTY-NINTH EXTENSION, AND THE ONLY DAEMON IN THE TREE. Everything else in this
-// campaign is a command that runs, does one thing and exits. This is the manager
+// THE ONLY DAEMON IN THE TREE. Everything else here is a command that runs, does
+// one thing and exits. This is the manager
 // loop, the leader election, the health and metrics servers, and the samplers that
 // keep them honest — 2,758 lines that never terminate on purpose.
 //

@@ -10,8 +10,7 @@ import (
 // subject really is commands.go, and came straight back.
 
 // The upgrade-conflict test, returned to main: its subject is
-// upgradeConflictFiles in commands.go. Filename-as-subject, fourteenth
-// occurrence.
+// upgradeConflictFiles in commands.go — filename-as-subject again.
 func TestOverwriteManagedFromScaffoldOnlyCopiesManagedFiles(t *testing.T) {
 	clean := t.TempDir()
 	writeFile(t, filepath.Join(clean, ".template-manifest"), "managed .template-manifest\nmanaged managed.txt\nmerge merge.txt\nowned owned.txt\n")

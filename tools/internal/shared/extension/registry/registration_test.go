@@ -44,7 +44,7 @@ import (
 // declaresAnExtension reports whether a directory holds a constructor returning a
 // declaration, ignoring comment lines.
 //
-// COMMENTS ARE STRIPPED for the reason every scanner in this campaign gives: the
+// COMMENTS ARE STRIPPED for the reason every scanner here gives: the
 // headers here narrate the model constantly and several of them spell
 // `extension.Extension{` while describing it. Matching prose would report a
 // package registered because it talked about being one.

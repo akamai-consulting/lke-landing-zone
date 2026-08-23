@@ -2,23 +2,19 @@ package capability
 
 // repo.go — the handle for `read-repo`, whose fence is PATH CONTAINMENT.
 //
-// The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry — they
-// were hand-transcribed once and had drifted by the time anyone re-read them.
+// The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry, so a
+// hand-transcribed number cannot quietly drift out of the argument it supports.
 //
-// FIFTH CAPABILITY, AND THE LAST GRANT WITHOUT ONE. `read-repo` is declared by 50
-// of 70 extensions — more than any other grant — and until now it meant nothing at
-// runtime. The validator refuses a gate that declares anything ELSE
-// (checkBindingCeiling), so the entire safety claim of `llz ci gates` — "these
-// touch nothing but files" — rested on a check of the DECLARATION and on nothing
-// stopping a gate from reading ~/.aws/credentials.
+// `read-repo` is declared by 50 of 70 extensions — more than any other grant. The
+// validator refuses a gate that declares anything ELSE (checkBindingCeiling), so
+// without this fence the entire safety claim of `llz ci gates` — "these touch
+// nothing but files" — rests on a check of the DECLARATION, with nothing stopping
+// a gate from reading ~/.aws/credentials.
 //
-// ────────────────────────────────────────────────────────────────────────────
-// IT IS ONE GRANT, NOT THREE, AND THAT WAS MEASURED RATHER THAN ASSUMED.
-//
-// An earlier architecture critique proposed splitting `read-repo` into reading the
-// SPEC, the TREE, and `.template-manifest`'s class table, arguing they are
-// materially different permissions. Counted across the holders at the time (40 of
-// the then-61 extensions; the shape is what matters, not the total):
+// IT IS ONE GRANT, NOT THREE. Splitting `read-repo` into reading the SPEC, the
+// TREE, and `.template-manifest`'s class table looks like three materially
+// different permissions. Counted across the holders (40 extensions at the time;
+// the shape is what matters, not the total):
 //
 //	tree      26    os.ReadFile / filepath.Walk / guardwalk
 //	manifest  12    .template-manifest, .copier-answers.yml
@@ -28,22 +24,19 @@ package capability
 // The categories OVERLAP AND DO NOT PARTITION: `render` reads all three; six other
 // packages read two. A split would have most bindings declaring two or three
 // grants where they declare one — noisier without being more informative, which is
-// the same argument that made secret-custody imply secret-read.
+// the same argument that made secret-custody imply secret-read. So: one
+// capability, one fence.
 //
-// So: one capability, one fence.
-// ────────────────────────────────────────────────────────────────────────────
+// IT IS HARDER TO ADOPT THAN THE OTHER HANDLES, and that shapes the rollout.
+// Cluster, Secrets, Forge and BaoAdmin each intercept a SEAM — a package-level
+// func var callers already go through, so converting means changing what the seam
+// resolves to. `read-repo` has no seam: its callers use os.ReadFile directly, 124
+// times across 40 packages. There is nothing to intercept.
 //
-// WHY THIS IS HARDER THAN THE OTHER FOUR, and why nothing is converted yet.
-// Cluster, Secrets, Forge and BaoAdmin each intercepted a SEAM — a package-level
-// func var callers already went through, so converting meant changing what the
-// seam resolved to. `read-repo` has no seam: its callers use os.ReadFile directly,
-// 124 times across 40 packages. There is nothing to intercept.
-//
-// That makes a half-converted tree the dangerous state — one where the fence
-// exists and does not hold, which reads as protection and is not. The handle and
-// its guarantees land first (as with Forge and BaoAdmin); the guards/ bucket is
-// the first customer, because a gate is what runs in a pre-commit hook on a
-// laptop and guardkit already answers half the question for those fifteen.
+// So a half-converted tree is the dangerous state — the fence exists and does not
+// hold, which reads as protection and is not. The guards/ bucket goes first,
+// because a gate is what runs in a pre-commit hook on a laptop and guardkit
+// already answers half the question for those fifteen.
 
 import (
 	"errors"

@@ -179,8 +179,7 @@ func TestAnAbsentConfigMapIsStillAMissingRewrite(t *testing.T) {
 // that request — silently, with every counter still at zero.
 // It drives loadResignCreds — the REAL construction — rather than building a
 // seeded loader by hand. A hand-built one proves the loader behaves; it does not
-// prove the caller seeds it, and the first cut of this test did exactly that and
-// stayed green while the seeding was reverted.
+// prove the CALLER seeds it, and stays green while the seeding is reverted.
 func TestCredsLoaderKeepsTheSeededCredentialOnAReadError(t *testing.T) {
 	path := t.TempDir() + "/creds"
 	if err := os.WriteFile(path, []byte("AWS_ACCESS_KEY_ID=AKIASEEDED\nAWS_SECRET_ACCESS_KEY=s3cr3t\n"), 0o600); err != nil {

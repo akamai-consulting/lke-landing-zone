@@ -7,8 +7,7 @@ package kube
 // into secret_apply.go because they are provider-agnostic; and they are here
 // because rendering and applying a Kubernetes Secret is what this package is for.
 // Twice they were left behind by the code they happened to be typed next to,
-// which is the same filename-as-subject failure this campaign has found stranding
-// tests seven times.
+// which is the same filename-as-subject failure that keeps stranding tests.
 
 import (
 	"encoding/base64"

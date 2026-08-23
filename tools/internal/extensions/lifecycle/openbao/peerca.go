@@ -75,10 +75,9 @@ func RunProvisionPeerCA(dryRun bool) error {
 }
 
 // appendGHAFile appends lines to the GitHub Actions command file named by envVar.
-// Pure, localised — the seventh package in this campaign to keep its own copy,
-// and for the reason internal/envtopology wrote down first: a no-op default turns
-// every test that asserts on the step output into a tautology, so the copy does
-// the real thing.
+// Pure, localised, and it does the REAL append rather than defaulting to a no-op:
+// a no-op default turns every test that asserts on the step output into a
+// tautology. (internal/envtopology wrote that reason down first.)
 func appendGHAFile(envVar string, lines ...string) error {
 	path := os.Getenv(envVar)
 	if path == "" {

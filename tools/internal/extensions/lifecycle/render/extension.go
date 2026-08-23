@@ -12,7 +12,7 @@ package render
 //	first3   ONE LINE, an alias for linode.RegionShort
 //	indent   FIVE LINES, already duplicated once in this repo
 //
-// Nobody had measured the blocker itself. Four "blocked" calls in this campaign
+// Nobody had measured the blocker itself. Four "blocked" calls in the extraction
 // have now been overturned, and this is the fifth: the thing three files were
 // stuck behind was two helpers totalling six lines.
 
@@ -26,7 +26,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // is half of why it is now. The grant carried `{scaffolded, upgraded}` only; this
 // renders AT configuration time and writes files into the working tree, which was
 // the second independent case for that gap — `environments`' `set` binding is the
-// first. Two cases is what the campaign's rule asks for, so the row was widened
+// first. Two cases is what the two-case rule asks for, so the row was widened
 // rather than the declaration bent. See validate.go's FOURTH WIDENING.
 //
 // WHAT IT ACTUALLY GUARANTEES is worth stating: the committed tfvars are DERIVED,

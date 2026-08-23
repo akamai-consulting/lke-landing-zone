@@ -46,9 +46,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 // So: rendering lives in this package, the os.WriteFile lives in internal/cli
 // (promote.go), and TestPackageContainsNoWritePath fails if that ever stops being
-// true. This sentence said `cmd/llz` for a while after the tree moved, six lines
-// below a sentence in the same comment that already said internal/cli — the two
-// halves of one argument disagreeing about where its own evidence is.
+// true.
 //
 // WHY `transition` AND NOT `gate`. It changes the repo — a second run after a rank
 // change produces a different workflow. `--check` mode reports without writing,

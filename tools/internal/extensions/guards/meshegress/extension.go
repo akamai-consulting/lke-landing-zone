@@ -3,7 +3,7 @@ package meshegress
 // extension.go — `mesh-egress` declares itself.
 //
 // FOUND BY A SWEEP, NOT A HUNCH. This file measured CLOSURE 1 — `main`, and
-// nothing else — and had done so for the whole campaign. It was found only after
+// nothing else — and had done so for the whole extraction. It was found only after
 // two "mechanical extraction is complete" calls were disproved by re-measuring,
 // which is why the state file now opens every iteration with the per-file sweep.
 

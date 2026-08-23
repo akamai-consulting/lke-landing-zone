@@ -1150,14 +1150,14 @@ func closureCondition(t *testing.T, jobs map[string]lintJob, name string) string
 }
 
 func TestTheGuardRunsInAJobForkPullRequestsReach(t *testing.T) {
-	// THE PLACEMENT IS THE SECURITY PROPERTY, and until now it was asserted only in
-	// a comment. This guard reached CI solely through `llz ci gates` in the
-	// Kubernetes job, which is gated on the head repository — so it ran on every
-	// population EXCEPT fork pull requests, which is how an attacker-chosen branch
-	// name or PR title reaches a workflow at all.
+	// THE PLACEMENT IS THE SECURITY PROPERTY, so it is asserted here rather than in
+	// a comment. Reaching CI solely through `llz ci gates` in the Kubernetes job —
+	// which is gated on the head repository — runs this guard on every population
+	// EXCEPT fork pull requests, which is how an attacker-chosen branch name or PR
+	// title reaches a workflow at all.
 	//
-	// THE RULE IS UNCONDITIONAL, AND THAT IS THE POINT OF THE FOURTH REWRITE. Three
-	// earlier versions asked "is this job gated in a way I recognise?" — first by
+	// THE RULE IS UNCONDITIONAL, AND THAT IS THE POINT. Asking "is this job gated in
+	// a way I recognise?" does not work — first by
 	// listing the fork condition verbatim, then by listing its spellings, then by
 	// naming the contexts a fork test must use. Review walked past all three, and
 	// the last escape ended the argument: `if: github.event_name != 'pull_request'`

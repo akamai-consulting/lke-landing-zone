@@ -251,12 +251,12 @@ func TestRegenRootGoesThroughTheRetryingExec(t *testing.T) {
 	sleeps := withBaoSleepSeam(t)
 	quorum := 0
 	withBaoExecRaw(t, func(_, _, _ string, args ...string) (string, string, error) {
-		// ONE transient, ON THE FIRST QUORUM SUBMISSION rather than on the first
-		// call of any kind. The first cut of this test made the SEALED CHECK
-		// transient, so the flow stopped there and never reached the loop the fix is
-		// about — reverting the quorum submissions to ExecPod left it green.
-		// Counting quorum calls specifically (rather than every call, mod 2) makes
-		// which call fails independent of how many the rest of the flow makes.
+		// ONE transient, ON THE FIRST QUORUM SUBMISSION rather than on the first call
+		// of any kind. Making the SEALED CHECK transient instead stops the flow there
+		// and never reaches the loop this is about, so reverting the quorum
+		// submissions to ExecPod leaves it green. Counting quorum calls specifically
+		// (rather than every call, mod 2) makes which call fails independent of how
+		// many the rest of the flow makes.
 		joined := strings.Join(args, " ")
 		if strings.Contains(joined, "generate-root -nonce=") {
 			quorum++

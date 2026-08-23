@@ -2,7 +2,7 @@ package openbao
 
 // THE HELPER SET, COPIED RATHER THAN SHARED. Splitting the OpenBao client out to
 // internal/shared/openbao took these with it, and the verbs left behind still need
-// them. Copying is the settled answer in this campaign and not laziness: a
+// them. Copying is the settled answer here and not laziness: a
 // stream-swapping helper cannot live in a shared package without shipping
 // `testing` into production code, and the TLS fixtures below reach for repo-root
 // paths that only make sense relative to a test binary's own package.

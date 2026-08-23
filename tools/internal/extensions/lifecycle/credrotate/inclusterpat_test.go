@@ -72,7 +72,7 @@ func stubInclusterBaoExec(t *testing.T, seededToken, loginToken string) *[][]str
 	// baoread.Exec and the write goes through baoread.KVPut; stubbing only the one
 	// this test names leaves the other two at their defaults, which now ERROR — and
 	// before they errored, they would have reached a real pod. Fourth time the
-	// double-seam trap has surfaced in this campaign.
+	// double-seam trap has surfaced repeatedly here.
 	baoread.Exec = func(token string, args ...string) (string, string, error) {
 		return baoread.ExecStdin(token, "", args...)
 	}

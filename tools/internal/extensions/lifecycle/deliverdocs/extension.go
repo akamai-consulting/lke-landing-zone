@@ -30,12 +30,11 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	transition:scaffolded/deliver   [read-repo, write-repo]
 //	transition:upgraded/redeliver   [read-repo, write-repo]
 //
-// TWO BINDINGS FOR ONE PIECE OF CODE, which no earlier extension has needed, and
-// the first case where a split is driven by the MOMENT rather than by the
+// TWO BINDINGS FOR ONE PIECE OF CODE, split by the MOMENT rather than by the
 // capability. `guard-charts` settled that two checks sharing a grant and a state
-// are one binding; the corollary nobody had reached until now is that identical
-// work at two DIFFERENT states is two bindings, because a binding is (kind, state)
-// and there is nowhere else for the second moment to go.
+// are one binding; the corollary is that identical work at two DIFFERENT states is
+// two bindings, because a binding is (kind, state) and there is nowhere else for
+// the second moment to go.
 //
 // It genuinely runs at both, and not as a convenience: copier invokes it from
 // `_tasks`, which fire on render (`llz new` → scaffolded) and on `copier update`
