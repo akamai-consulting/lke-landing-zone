@@ -52,6 +52,12 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// Snapshot before copier runs — it rewrites this file in place, so afterwards
 	// there is nothing left to compare against (see Lever 0).
 	answersBefore := currentAnswerMap()
+	// Same reason as the line above, for a different loss. The manifest policy
+	// overwrites every `managed` file from a clean render, so a local edit to one
+	// is discarded — and AFTER copier has run there is no way to tell an edit the
+	// operator made from a hunk copier merged. This is the last moment the
+	// question can be asked, which is why it is asked here and reported later.
+	managedEdits := managedEditsBefore()
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
@@ -123,6 +129,10 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	if err := sustain.ApplyTemplateRemovals(SustainDeps()); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
 	}
+	// BEFORE the dry-run return, deliberately: a dry run is the one where the
+	// operator can still save the edit, so it is the run that most needs to hear
+	// about it.
+	reportClobberedManaged(managedEdits, dryRun)
 	if dryRun {
 		return nil
 	}
