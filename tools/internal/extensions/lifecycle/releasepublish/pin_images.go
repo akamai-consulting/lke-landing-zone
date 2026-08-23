@@ -89,6 +89,14 @@ var (
 	// pinNow is seamed so the watermark is deterministic under test.
 	pinNow = time.Now
 
+	// pinWatermarkSlack backdates the dispatch watermark. GitHub's created_at is
+	// whole seconds, so an exact stamp loses a race with its own dispatch under
+	// jq's strict `>`; a few seconds of slack also absorbs clock skew between the
+	// runner and the API. Small enough that a corpse from a previous workflow run
+	// — minutes or hours old, which is the case the watermark exists to exclude —
+	// stays excluded.
+	pinWatermarkSlack = 5 * time.Second
+
 	// pinBuildInProgress reports whether a "Build Container Images" run for sha is
 	// currently queued/running — so we wait for it instead of starting a duplicate.
 	pinBuildInProgress = func(token, templateRepo, sha string) bool {
@@ -212,15 +220,33 @@ func RunPinInstanceImages(o PinImagesOpts) error {
 	// mid-flight build on main AND a fresh branch build. One build covers every
 	// pinImages entry.
 	wantSha := built || o.BuildIfMissing
-	// Stamped BEFORE the dispatch below, so the failure probe in waitForManifest
-	// only sees runs this invocation could have caused. Without a watermark a
-	// previously-failed build for the same sha aborts the wait on poll zero.
-	buildWatermark := pinNow().UTC().Format(time.RFC3339)
+	// The failure probe's watermark is anchored to THIS INVOCATION'S OWN DISPATCH
+	// and to nothing else. It stays EMPTY on every other path, and that emptiness
+	// is the load-bearing half.
+	//
+	// Stamping it at process start looks equivalent and is not, because the
+	// trigger and the wait are routinely DIFFERENT PROCESSES: release-e2e's
+	// instantiate job dispatches with --trigger-only, and a separate full
+	// invocation does the waiting minutes later. A watermark stamped when THAT
+	// process started sits AFTER the run it is waiting on, so a build that failed
+	// at its push step — the GHCR secondary-rate-limit case pinBuildFailed's own
+	// header describes — is filtered straight out of the probe and the wait burns
+	// its whole budget on a build that is already dead. Same blindness on the
+	// main/release path (`built && !BuildIfMissing`, where build-images auto-ran
+	// long before this process) and whenever pinBuildInProgress found a run
+	// already flying. Those callers have no dispatch to anchor on, so they get the
+	// unbounded query, which is the behaviour that was correct for them all along.
+	var buildWatermark string
 	if o.BuildIfMissing && anyShaImageMissing(o.Owner, o.SHA) {
 		if pinBuildInProgress(o.TemplateToken, o.TemplateRepo, o.SHA) {
 			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.SHA)
 		} else {
 			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.SHA, o.Ref)
+			// Stamped immediately BEFORE the dispatch, and backdated: created_at
+			// has whole-second granularity, so a run created in the same second as
+			// an exact stamp fails jq's strict `>` and our own build's failure
+			// would be the one thing the probe cannot see.
+			buildWatermark = pinNow().Add(-pinWatermarkSlack).UTC().Format(time.RFC3339)
 			if err := pinTriggerBuild(o.TemplateToken, o.TemplateRepo, o.Ref, o.SHA); err != nil {
 				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.Ref, err)
 			}

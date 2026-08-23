@@ -90,7 +90,13 @@ func cpMax1(n int) int {
 // collectMissingPins returns the de-duplicated first-party pins whose version is
 // absent from the registry (skipping non-ghcr hosts + unparseable refs) and the
 // number actually checked.
-func collectMissingPins(pins []publishPin, published func(host, repoPath, version string) (bool, error)) (missing []publishPin, checked int, err error) {
+// unparsed counts pins parseOCIRef could not read at all. It is returned
+// alongside `checked` so Run can tell a fork that publishes somewhere other than
+// GHCR (nothing here CAN be verified) from a corpus this code failed to read
+// (nothing here WAS verified). Both land on checked == 0 and want opposite
+// answers, and only unparsed distinguishes them — a count of the non-GHCR pins
+// would not, because the dedup below means it cannot be compared against len(pins).
+func collectMissingPins(pins []publishPin, published func(host, repoPath, version string) (bool, error)) (missing []publishPin, checked, unparsed int, err error) {
 	seen := map[string]publishPin{}
 	for _, p := range pins {
 		seen[p.RepoURL+"|"+p.Chart+"|"+p.Version] = p
@@ -105,6 +111,7 @@ func collectMissingPins(pins []publishPin, published func(host, repoPath, versio
 		host, repoPath, perr := parseOCIRef(p.RepoURL, p.Chart)
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "skip %s (%s): %v\n", p.Chart, p.RepoURL, perr)
+			unparsed++
 			continue
 		}
 		if host != "ghcr.io" {
@@ -112,14 +119,14 @@ func collectMissingPins(pins []publishPin, published func(host, repoPath, versio
 		}
 		ok, cerr := published(host, repoPath, p.Version)
 		if cerr != nil {
-			return nil, 0, fmt.Errorf("checking %s:%s in %s: %w", p.Chart, p.Version, host, cerr)
+			return nil, 0, 0, fmt.Errorf("checking %s:%s in %s: %w", p.Chart, p.Version, host, cerr)
 		}
 		checked++
 		if !ok {
 			missing = append(missing, p)
 		}
 	}
-	return missing, checked, nil
+	return missing, checked, unparsed, nil
 }
 
 func printMissingChart(m publishPin) {
@@ -143,7 +150,7 @@ func Run(o Opts) error {
 		return fmt.Errorf("chart-publish-check: found no first-party chart pins under %s (searched %s) — refusing to report every chart published having checked none",
 			o.Root, strings.Join(publishPinTrees, ", "))
 	}
-	missing, checked, err := collectMissingPins(pins, o.Published)
+	missing, checked, unparsed, err := collectMissingPins(pins, o.Published)
 	if err != nil {
 		return err
 	}
@@ -153,9 +160,21 @@ func Run(o Opts) error {
 	// "0 pinned first-party chart(s) are published" was the same vacuous green the
 	// guard above exists to refuse, one step later.
 	if checked == 0 {
-		return fmt.Errorf("chart-publish-check: parsed %d first-party chart pin(s) but resolved NONE of them "+
-			"against ghcr.io — every one either failed to parse as an OCI ref or pointed at another host. "+
-			"Reporting them published having checked none is the failure this guard exists to prevent", len(pins))
+		// A fork that publishes its charts somewhere other than GHCR is NOT
+		// APPLICABLE, not broken — and this check only knows how to query GHCR. It
+		// gets a named skip rather than a hard failure whose text ("failed to parse
+		// as an OCI ref") reads like a parser bug in code the adopter never touched.
+		// One pin this code could not READ and we are back to the vacuity error,
+		// because then something went unverified for a reason nobody chose.
+		if unparsed == 0 {
+			fmt.Printf("chart-publish-check: %d first-party chart pin(s) read, every one on a registry other "+
+				"than ghcr.io — nothing for this check to verify. Their publication is NOT checked here.\n", len(pins))
+			return nil
+		}
+		return fmt.Errorf("chart-publish-check: read %d first-party chart pin(s) but resolved NONE of them "+
+			"against ghcr.io, and %d could not be parsed as an OCI ref at all (see the skip lines above). "+
+			"Reporting them published having checked none is the failure this guard exists to prevent",
+			len(pins), unparsed)
 	}
 	if len(missing) == 0 {
 		fmt.Printf("chart-publish-check: %d pinned first-party chart(s) are published.\n", checked)
@@ -195,7 +214,7 @@ func Run(o Opts) error {
 	var lastReadErr error
 	for i := 0; i < cpMax1(o.Retries); i++ {
 		o.Sleep(o.Interval)
-		still, _, cerr := collectMissingPins(missing, o.Published)
+		still, _, _, cerr := collectMissingPins(missing, o.Published)
 		if cerr != nil {
 			lastReadErr = cerr
 			fmt.Fprintf(os.Stderr, "chart-publish-check: registry read failed while waiting (%v) — retrying (%d/%d)\n",
@@ -288,7 +307,14 @@ func scanPublishPins(root string) ([]publishPin, error) {
 // defaultChartsRegistryRe reads `chartsRegistry:` out of the same document. The
 // bootstrap-apps values file documents the rule this implements: "Components with
 // `source.type: oci` whose `source.repoURL` is empty default to this registry."
-var defaultChartsRegistryRe = regexp.MustCompile(`(?m)^\s*chartsRegistry:\s*(\S+)\s*$`)
+//
+// NOT anchored at end-of-line. `\s*$` after the capture makes
+// `chartsRegistry: ghcr.io/... # note` a non-match, the fallback goes empty, and
+// every repoURL-less pin is dropped again — the exact bug this fallback exists
+// to fix, restored by a one-word comment. Neither vacuity guard catches it: the
+// single pin that carries an explicit repoURL keeps len(pins) and checked at 1.
+// The file already uses trailing comments on sibling keys.
+var defaultChartsRegistryRe = regexp.MustCompile(`(?m)^\s*chartsRegistry:\s*(\S+)`)
 
 // extractPublishPins pairs each `chart: <name>` line with its sibling `repoURL:`
 // and `targetRevision:`/`version:` keys in the same source block (same indent).

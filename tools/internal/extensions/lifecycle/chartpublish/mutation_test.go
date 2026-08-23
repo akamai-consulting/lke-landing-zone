@@ -51,7 +51,7 @@ func TestCollectMissingPinsChecked(t *testing.T) {
 		{RepoURL: "quay.io/acme/charts", Chart: "llz-c", Version: "0.3.0"}, // non-GHCR → out of scope
 		{RepoURL: "ghcr.io", Chart: "llz-d", Version: "0.4.0"},             // unparseable → skipped
 	}
-	missing, checked, err := collectMissingPins(pins, func(_, repoPath, _ string) (bool, error) {
+	missing, checked, _, err := collectMissingPins(pins, func(_, repoPath, _ string) (bool, error) {
 		return repoPath != "acme/charts/llz-b", nil
 	})
 	if err != nil {
@@ -253,6 +253,36 @@ components:
 	}
 }
 
+// TestTheDefaultRegistrySurvivesATrailingComment.
+//
+// The fallback regex was anchored `(\S+)\s*$`, so a trailing YAML comment on the
+// `chartsRegistry:` line made it a non-match — the fallback went empty and every
+// repoURL-less pin was dropped again, restoring the "ran over one chart and
+// called it all of them" bug that this whole change exists to fix. Neither
+// vacuity guard would catch it: the one pin carrying an explicit repoURL keeps
+// len(pins) and checked at 1, so the run is green over a corpus of one. The
+// values file already uses trailing comments on sibling keys, so this is a
+// one-word edit away at all times.
+func TestTheDefaultRegistrySurvivesATrailingComment(t *testing.T) {
+	const content = `
+global:
+  chartsRegistry: ghcr.io/acme/charts # where first-party charts are published
+components:
+  clusterFoundation:
+    source:
+      type: oci
+      chart: llz-cluster-foundation
+      version: 0.1.14
+`
+	got := map[string]string{}
+	for _, p := range extractPublishPins(content) {
+		got[p.Chart] = p.RepoURL
+	}
+	if got["llz-cluster-foundation"] != "ghcr.io/acme/charts" {
+		t.Errorf("a comment after chartsRegistry emptied the fallback: repoURL = %q, want ghcr.io/acme/charts", got["llz-cluster-foundation"])
+	}
+}
+
 func TestExtractPublishPinsDoesNotAdoptThirdPartyCharts(t *testing.T) {
 	const content = `
 global:
@@ -271,14 +301,21 @@ components:
 	}
 }
 
-// TestChartPublishCheckRefusesWhenNothingResolvedToGHCR. len(pins) > 0 says pins
+// TestChartPublishCheckRefusesWhenAPinCouldNotBeRead. len(pins) > 0 says pins
 // were PARSED; `checked` counts the ones resolved against GHCR. Every pin
 // resolving to another host, or failing parseOCIRef, left checked at 0 and printed
 // "0 pinned first-party chart(s) are published" — the same vacuous green the
 // len(pins) guard exists to refuse, one step later.
-func TestChartPublishCheckRefusesWhenNothingResolvedToGHCR(t *testing.T) {
+//
+// The two ways to reach checked == 0 want OPPOSITE answers, which is why they are
+// separate arms here. A pin this code could not read is unverified for a reason
+// nobody chose: hard failure. A pin on another registry is not applicable — this
+// check only knows how to query GHCR — and failing a fork's e2e with "failed to
+// parse as an OCI ref" points them at a parser they never touched.
+func TestChartPublishCheckRefusesWhenAPinCouldNotBeRead(t *testing.T) {
+	// An unreadable pin: repoURL with no path, so parseOCIRef cannot resolve it.
 	root := cpWriteRepo(t, map[string]string{
-		"platform-apl/manifest/applications/cf.yaml": "spec:\n  source:\n    repoURL: registry.example.com/acme/charts\n" +
+		"platform-apl/manifest/applications/cf.yaml": "spec:\n  source:\n    repoURL: ghcr.io\n" +
 			"    chart: llz-cluster-foundation\n    targetRevision: 0.1.6\n",
 	})
 	var err error
@@ -287,5 +324,28 @@ func TestChartPublishCheckRefusesWhenNothingResolvedToGHCR(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "resolved NONE") {
 		t.Errorf("checking zero charts must not report them published; got %v", err)
+	}
+}
+
+// TestChartPublishCheckSkipsAForkOnAnotherRegistry — the not-applicable arm. The
+// skip must SAY what it did not verify; a silent nil would be the vacuous green
+// again, just quieter.
+func TestChartPublishCheckSkipsAForkOnAnotherRegistry(t *testing.T) {
+	root := cpWriteRepo(t, map[string]string{
+		"platform-apl/manifest/applications/cf.yaml": "spec:\n  source:\n    repoURL: registry.example.com/acme/charts\n" +
+			"    chart: llz-cluster-foundation\n    targetRevision: 0.1.6\n",
+	})
+	var err error
+	out := captureStdout(t, func() {
+		err = Run(Opts{Root: root, Published: func(string, string, string) (bool, error) {
+			t.Error("must not query GHCR for a chart pinned at another registry")
+			return true, nil
+		}})
+	})
+	if err != nil {
+		t.Errorf("a fork publishing outside GHCR is not applicable, not broken: %v", err)
+	}
+	if !strings.Contains(out, "NOT checked here") {
+		t.Errorf("the skip must name what went unverified, got:\n%s", out)
 	}
 }
