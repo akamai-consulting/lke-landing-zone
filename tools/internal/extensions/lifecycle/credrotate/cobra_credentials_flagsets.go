@@ -9,12 +9,15 @@ package credrotate
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
 func CredentialsPATCmd(o *Opts) *cobra.Command {
@@ -72,6 +75,16 @@ func CredentialsPATCreateCmd(o *Opts) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// RESOLVED HERE, NOT DEFAULTED IN THE FLAG. See the note on
+			// revoke-old below: the delivered workflow stopped passing `label:`
+			// on the strength of this call, and the call did not exist.
+			label, err := resolveRotationLabel(label, rotationKindPAT, "`llz credentials pat create`")
+			if errors.Is(err, ErrBroadPATOwnedInCluster) {
+				return reportBroadPATStandDown("linode-pat-rotator.create", err)
+			}
+			if err != nil {
+				return err
+			}
 			return RunPATCreate(context.Background(), NewPATClient(token), apply, label, scopes, validityDays, ghaSecretName, strings.Fields(ghaDeployments))
 		},
 	}
@@ -91,7 +104,8 @@ func CredentialsPATRevokeOldCmd(o *Opts) *cobra.Command {
 		Use:   "revoke-old",
 		Short: "daily reaper: keep the newest same-labeled PAT, revoke older siblings past the grace window",
 		Long: "Lists every PAT matching the label, keeps the newest (the live one), and\n" +
-			"revokes any older sibling whose `created` time is past the grace window.\n" +
+			"revokes any older sibling SUPERSEDED longer ago than the grace window —\n" +
+			"measured from when its replacement was minted, not from its own age.\n" +
 			"Stateless: the label IS the record of which PAT is current. Dry-run unless\n" +
 			"--apply.",
 		Args: cobra.NoArgs,
@@ -100,12 +114,39 @@ func CredentialsPATRevokeOldCmd(o *Opts) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// ─────────────────────────────────────────────────────────────────
+			// THE RESOLVER EXISTED, WITH TESTS, AND NOTHING CALLED IT. All four
+			// {pat,obj-key} {create,revoke-old} verbs took `--label` straight
+			// from the flag, whose default is $PAT_LABEL / $OBJ_LABEL — and
+			// llz-secret-rotation.yml had already been changed to STOP passing a
+			// label, on comments reading "omitted on purpose — llz derives the
+			// instance-scoped label". Neither side set it, so every verb ran with
+			// label "".
+			//
+			// For create that means PATs minted unlabeled. For this verb it means
+			// the daily reaper matches nothing — a permanent no-op, so superseded
+			// PATs accumulate against the 100-token account cap while the job
+			// reports success. Neither shows up as a failure anywhere.
+			//
+			// It is resolved in RunE rather than in the flag default because the
+			// derivation READS THE SPEC (clusterspec.LabelPrefixFor), which is a
+			// filesystem access that must not happen while the command tree is
+			// being built — and because a flag default evaluated at construction
+			// time is the same trap converge/deps.go documents for --dry-run.
+			// ─────────────────────────────────────────────────────────────────
+			label, err := resolveRotationLabel(label, rotationKindPAT, "`llz credentials pat revoke-old`")
+			if errors.Is(err, ErrBroadPATOwnedInCluster) {
+				return reportBroadPATStandDown("linode-pat-rotator.revoke-old", err)
+			}
+			if err != nil {
+				return err
+			}
 			return RunPATRevokeOld(context.Background(), NewPATClient(token), apply, label, graceDays)
 		},
 	}
 	f := c.Flags()
 	f.StringVar(&label, "label", os.Getenv("PAT_LABEL"), "label to drain — same label `pat create` uses (env PAT_LABEL)")
-	f.Int64Var(&graceDays, "grace-days", cli.EnvInt("PAT_GRACE_DAYS", 7), "only revoke same-labeled siblings older than this many days (env PAT_GRACE_DAYS)")
+	f.Int64Var(&graceDays, "grace-days", cli.EnvInt("PAT_GRACE_DAYS", 7), "only revoke same-labeled siblings SUPERSEDED more than this many days ago — measured from when the next-newer sibling was minted, not from the credential's own age (env PAT_GRACE_DAYS)")
 	return c
 }
 
@@ -131,6 +172,27 @@ func CredentialsObjKeyCreateCmd(o *Opts) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token, apply, err := o.Resolve()
+			if err != nil {
+				return err
+			}
+			label, err := resolveRotationLabel(label, rotationKindTFStateKey, "`llz credentials obj-key create`")
+			if err != nil {
+				return err
+			}
+			// THE OTHER HALF, AND THE ONE THAT DESTROYS SOMETHING. --bucket-cluster
+			// was likewise never resolved, so this ran with cluster "". The monthly
+			// cron APPLIES (routeRotation sets TFStateApply), and create writes the
+			// new pair over TF_STATE_ACCESS_KEY / TF_STATE_SECRET_KEY in every
+			// infra-<deployment> environment. A bucket is reachable ONLY at the
+			// endpoint it was created against — the disjoint-generation rule behind
+			// the Loki/Harbor NoSuchBucket class — so the key that lands cannot read
+			// the state bucket. It fires ~30 days after a successful first build,
+			// with no operator action involved.
+			//
+			// The resolver refuses rather than guessing, which is why its error is
+			// returned rather than logged: minting against the wrong cluster is the
+			// failure, and doing it confidently is worse than not doing it.
+			cluster, err := resolveObjBucketCluster(cluster, os.Getenv("TF_STATE_ENDPOINT"))
 			if err != nil {
 				return err
 			}
@@ -168,6 +230,10 @@ func CredentialsObjKeyRevokeOldCmd(o *Opts) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			label, err := resolveRotationLabel(label, rotationKindTFStateKey, "`llz credentials obj-key revoke-old`")
+			if err != nil {
+				return err
+			}
 			return RunObjKeyRevokeOld(context.Background(), NewObjKeyClient(token), apply, label, keepNewest)
 		},
 	}
@@ -175,4 +241,33 @@ func CredentialsObjKeyRevokeOldCmd(o *Opts) *cobra.Command {
 	f.StringVar(&label, "label", os.Getenv("OBJ_LABEL"), "label to drain — same label `obj-key create` uses (env OBJ_LABEL)")
 	f.Int64Var(&keepNewest, "keep-newest", cli.EnvInt("OBJ_KEEP_NEWEST", 2), "how many most-recent same-labeled keys to keep (env OBJ_KEEP_NEWEST)")
 	return c
+}
+
+// reportBroadPATStandDown announces that the in-cluster rotator owns the broad
+// PAT and emits the JSON record the caller is parsing.
+//
+// THE RECORD IS THE POINT, and the first cut returned nil having printed only a
+// notice. Every one of these verbs writes one JSON object to stdout, and the
+// composite action wrapping them does `jq -r '.new_token // empty'` and then
+// `exit 1` when it is empty under apply=true. So standing down silently on
+// stdout failed the job anyway — the exact outcome the stand-down exists to
+// prevent — and took `propagate-linode-pat` with it, since that is gated on this
+// job succeeding and mints the NARROW in-cluster PAT the broad one is unrelated
+// to.
+//
+// `skipped` is the field the action keys on. It is deliberately not an empty
+// record: "no token because nothing was asked of me" and "no token because
+// something went wrong" have to be distinguishable by the thing reading stdout,
+// not just by a human reading the log.
+func reportBroadPATStandDown(event string, cause error) error {
+	fmt.Fprintf(os.Stderr, "::notice::%v\n", cause)
+	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
+		"> Skipped `"+event+"`: the in-cluster broadPatRotator owns the broad PAT (ADR 0001)."); err != nil {
+		return err
+	}
+	return cli.PrintRecord(map[string]any{
+		"event":   event,
+		"skipped": "broad-pat-owned-in-cluster",
+		"reason":  "spec.components.broadPatRotator is enabled and owns create+revoke of the account-wide broad PAT (ADR 0001)",
+	})
 }
