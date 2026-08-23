@@ -269,7 +269,7 @@ func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
 }
 
 // pinGHRetry rides out transient GitHub API failures (a 503 on the first
-// Instantiate query killed release-e2e run 29540787054 at minute one) but still
+// Instantiate query has killed a release-e2e dispatch at minute one) but still
 // surfaces a persistent error after 3 attempts.
 func TestPinGHRetry(t *testing.T) {
 	origGH, origSleep := pinGH, pinSleep

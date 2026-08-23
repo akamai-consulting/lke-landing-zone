@@ -148,9 +148,9 @@ func TestTeardownCapture(t *testing.T) {
 			{"id": float64(5), "label": "e2e-harbor-harbor-otomi-db-1", "linode_id": float64(12)},
 			// DETACHED at capture (pod mid-reschedule) but carrying this cluster's
 			// lke<id> tag. Attachment is a point-in-time property, so keying on it
-			// alone dropped this Volume and it survived its own cluster — observed
-			// with pvc-0f8efbcdf6704500 on the lke638015 destroy. The tag has no
-			// such window, so it is tracked regardless of attachment.
+			// alone drops this Volume and it survives its own cluster, as one
+			// mid-reschedule loki Volume did. The tag has no such window, so it is
+			// tracked regardless of attachment.
 			{"id": float64(6), "label": "pvc-eee", "linode_id": nil, "tags": []any{"block-storage", "lke777"}},
 			// Same tag, ALSO already renamed — both leak paths at once.
 			{"id": float64(7), "label": "e2e-monitoring-storage-loki-0", "linode_id": nil, "tags": []any{"lke777"}},
@@ -445,11 +445,10 @@ func (s *settlingGateScanner) ListVPCs(context.Context) ([]map[string]any, error
 // same asynchronously-reaped account state as the threshold census, so it needs
 // the same retries. It used to run ONCE, ahead of the loop.
 //
-// Run 30643426633: `teardown-delete-vpc` printed "VPC 587295 deleted.", and this
-// gate — invoked `--attempts 5 --retry-delay 30` — read the VPC list 5 seconds
-// later, still saw lke638293, and failed the teardown 0.9s in. It rode out none
-// of the settling window it documents, and reported a leak that was a delete
-// still propagating.
+// Observed: `teardown-delete-vpc` printed "VPC deleted.", and this gate — invoked
+// `--attempts 5 --retry-delay 30` — read the VPC list five seconds later, still
+// saw it, and failed the teardown 0.9s in. It rode out none of the settling window
+// it documents, and reported a leak that was a delete still propagating.
 func TestAssertNoOrphansRidesOutTheSettlingWindow(t *testing.T) {
 	orig := teardownSleep
 	teardownSleep = func(time.Duration) {}

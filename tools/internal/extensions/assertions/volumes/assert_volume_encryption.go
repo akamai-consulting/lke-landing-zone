@@ -17,8 +17,8 @@ package volumes
 // It asserts against the LINODE API, not against Kubernetes. That is the whole
 // point. The obvious cheaper check — "is every PVC on block-storage-retain?" — is a
 // PROXY: it infers encryption from the name of the class the PVC asked for. That
-// proxy is exactly what was in place while 13 of 16 PVCs on lke637888 provisioned
-// unencrypted, and it can be satisfied by a class whose parameters say nothing
+// proxy is exactly what was in place while 13 of 16 PVCs on a live cluster
+// provisioned unencrypted, and it can be satisfied by a class whose parameters say nothing
 // about encryption, or defeated by a class that encrypts under a different name.
 // `encryption: "enabled"` on the Volume object is the ground truth, and it is the
 // only thing that survives someone renaming or re-parameterising a StorageClass.
@@ -161,9 +161,9 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort 
 	//
 	// This exists because the answer was silently NO for months. reap selects on a
 	// label prefix; the volume-labels reconciler renames Volumes; nobody re-checked
-	// that the new names still matched. Destroying lke637974 leaked all 15 renamed
-	// Volumes, which then squatted their account-unique labels and broke relabeling
-	// on the next cluster. Neither subsystem was individually wrong — their COUPLING
+	// that the new names still matched. Destroying one cluster leaked all 15 of its
+	// renamed Volumes, which then squatted their account-unique labels and broke
+	// relabeling on the next cluster. Neither subsystem was individually wrong — their COUPLING
 	// was, and nothing tested it.
 	//
 	// Deliberately calls linode.VolumeIsCandidate / VolumeLabelPrefixes rather than

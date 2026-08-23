@@ -18,7 +18,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `build-preflight` declaration.
 //
-//	gate:configured[read-repo, cloud-read]
+//	assertion:configured[read-repo, cloud-read]
 //
 // AN ASSERTION, NOT A GATE, and the rule is the one the model corrected me on:
 // a gate is CHEAP AND OFFLINE and may hold `read-repo` and nothing else. This

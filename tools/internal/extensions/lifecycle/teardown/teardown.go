@@ -293,9 +293,9 @@ func RunCapture(d Deps, region, tfDir string) error {
 		// This used to be a bare `pvc-` prefix check, which silently stopped
 		// matching the moment that reconciler started working: a renamed Volume was
 		// never TRACKED, so it was never handed to the sweep below, so it survived
-		// the destroy. Measured on lke637974 — 15 renamed Volumes outlived their
-		// cluster, then squatted their labels (Linode labels are account-unique) so
-		// the next cluster could not relabel 12 of its 17. One stale prefix check
+		// the destroy. Measured live: 15 renamed Volumes outlived their cluster, then
+		// squatted their labels (Linode labels are account-unique) so the next cluster
+		// could not relabel 12 of its 17. One stale prefix check
 		// produced both an unbounded cost leak and a permanently broken relabeler.
 		//
 		// OWNERSHIP is established two ways, and a Volume needs only one:
@@ -308,9 +308,9 @@ func RunCapture(d Deps, region, tfDir string) error {
 		//
 		// Attachment alone is not enough, and that gap leaked in production. It is a
 		// point-in-time property: a Volume whose pod happens to be unscheduled when
-		// capture runs is detached, fails the test, and is never tracked. Observed on
-		// the lke638015 destroy — pvc-0f8efbcdf6704500 (monitoring/storage-loki-0) was
-		// mid-reschedule and survived its own cluster. The tag has no such window.
+		// capture runs is detached, fails the test, and is never tracked. Observed
+		// live: a monitoring/storage-loki-0 Volume was mid-reschedule and survived its
+		// own cluster. The tag has no such window.
 		//
 		// The label guard applies ONLY to the attachment path. A tag match is already
 		// proof of ownership, so re-checking the label there could only reject a

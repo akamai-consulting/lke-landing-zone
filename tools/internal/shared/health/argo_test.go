@@ -216,7 +216,7 @@ func TestIsGitAuthError(t *testing.T) {
 		msg  string
 		want bool
 	}{
-		// The verbatim message from gsap-apl run 29709276389.
+		// The verbatim message Argo emits for this case.
 		{"argo 401 on ref discovery",
 			"Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = failed to list refs: authentication required: Unauthorized", true},
 		{"basic-auth rejection", "failed to list refs: invalid username or password", true},

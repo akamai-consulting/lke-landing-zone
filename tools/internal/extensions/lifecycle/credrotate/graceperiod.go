@@ -2,24 +2,22 @@ package credrotate
 
 // graceperiod.go — when a superseded credential becomes safe to revoke.
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// THE GRACE WINDOW WAS MEASURED FROM THE WRONG EVENT, in both copies of this
-// rule, and the consequence is the opposite of what the window is for.
+// THE GRACE WINDOW MUST BE MEASURED FROM SUPERSESSION, NOT FROM AGE, and getting
+// that wrong produces the opposite of what the window is for.
 //
 // A drain keeps the newest same-labeled credential (the one just minted) and
 // revokes its older siblings. The window exists so a consumer still holding the
 // PREVIOUS credential has time to pick up the new one. Both implementations
-// asked "is this sibling younger than GRACE_DAYS?" — its own age — and revoked
-// it otherwise.
+// Asking "is this sibling younger than GRACE_DAYS?" — its own age — gets this
+// backwards.
 //
 // But the previously-live credential is, by construction, about as old as the
 // ROTATION cadence. At ROTATE_AFTER_DAYS=60 with GRACE_DAYS=7, the token that
 // was live until a moment ago is 60 days old, fails a 7-day age test, and is
-// deleted SECONDS after its replacement is published. The window only ever
-// protected orphans from a failed run — never the live token, which is exactly
-// what both call sites' comments claim it protects.
+// deleted SECONDS after its replacement is published. An age clock protects
+// orphans from a failed run and never the live token — the opposite of the claim.
 //
-// What that cost, per caller:
+// What that costs, per caller:
 //
 //   - the broad account PAT: any llz-terraform.yml apply in flight resolved
 //     LINODE_API_TOKEN at job start and starts 401ing mid-apply.
@@ -52,16 +50,14 @@ package credrotate
 // source of truth, and it wants validating against a real account rather than
 // asserting here.
 //
-// Both prior behaviours were strictly worse: the age clock revoked the live
-// token on EVERY run, not just after a failed publish.
+// It is still strictly better than the age clock, which revoked the live token on
+// EVERY run rather than only after a failed publish.
 //
-// ONE FUNCTION BECAUSE THERE WERE TWO, AND THEY AGREED. pat.go's
-// RunPATRevokeOld (which the in-cluster monthly rotation also calls) and
-// broadpat.go's RevokeOldBroadPATs each carried their own copy, identical and
-// identically wrong. objkey.go does not participate: the OBJ-keys API exposes no
-// created time at all, so that lifecycle drains by keep-newest-N instead, which
-// is a different rule and deliberately stays separate.
-// ─────────────────────────────────────────────────────────────────────────────
+// ONE FUNCTION, SHARED BY BOTH DRAINS. pat.go's RunPATRevokeOld (which the
+// in-cluster monthly rotation also calls) and broadpat.go's RevokeOldBroadPATs
+// each used to carry their own copy of this rule. objkey.go does not participate:
+// the OBJ-keys API exposes no created time at all, so that lifecycle drains by
+// keep-newest-N instead — a different rule that deliberately stays separate.
 
 import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"

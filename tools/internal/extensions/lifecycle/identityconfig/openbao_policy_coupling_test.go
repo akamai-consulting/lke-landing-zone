@@ -5,7 +5,7 @@ package identityconfig
 //
 // THIS TEST SPANS THE EXTRACTION BOUNDARY, deliberately. credpaths.CredPaths
 // is what the openbao-gauges lane samples; policyReconcilerRead is the OpenBao
-// policy `llz ci openbao-configure` writes, and it stayed in internal/cli with the
+// policy `llz ci bao-configure` writes, and it stayed in internal/cli with the
 // rest of bootstrap. One ungranted path is a 403, and the sampler treats any
 // non-404 failure as fatal — so a single missing grant takes down the seal gauge
 // and every other credential's age with it.

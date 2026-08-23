@@ -13,17 +13,15 @@ package runinjection
 // curl, with whatever the job's token can reach. Routed through `env:` instead,
 // the shell expands "$REF" AFTER parsing and the same value is inert.
 //
-// IT HAPPENED HERE, and twice over. A template-upgrade workflow shipped with
-// `${{ inputs.ref }}` in a run: script, in a job holding a PAT with
-// contents:write, pull-requests:write and workflows:write. And this guard's own
-// first justification was wrong in a way worth recording: the claim was that
-// actionlint does not scan instance-template/. Measured, it does (instance-test
-// lints the rendered instance).
+// IT HAPPENED HERE. A template-upgrade workflow shipped with `${{ inputs.ref }}`
+// in a run: script, in a job holding a PAT with contents:write,
+// pull-requests:write and workflows:write.
 //
-// WHAT actionlint ACTUALLY COVERS — measured on v1.7.7 and v1.7.12 (the pin at the
-// time was the former; these name the versions the measurement was TAKEN on, which
-// is dated evidence rather than a pin that has to track ACTIONLINT_VERSION),
-// identically, and unchanged by `-shellcheck=` (its shellcheck integration
+// AND actionlint DOES NOT COVER IT — note it DOES scan instance-template/, via
+// instance-test on the rendered instance, so "nothing lints that tree" is not the
+// argument. Measured on v1.7.7 and v1.7.12 (the versions the measurement was taken
+// on, not a pin that has to track ACTIONLINT_VERSION) identically, and unchanged
+// by `-shellcheck=` (its shellcheck integration
 // substitutes a placeholder for the expression, so shellcheck reads the script
 // AFTER substitution and the injection is gone by the time it looks). It exits 1
 // on its own untrusted-input list — an ENUMERATED SET of event-payload paths
@@ -48,13 +46,10 @@ package runinjection
 // replacement — and the half it adds is exactly the half every site remediated in
 // the preceding commit was in: all eleven interpolations were `inputs.*`. And it
 // is worse than "passing" for six of them — those are in `action.yml` files, which
-// actionlint cannot parse at all — it reads them as malformed workflows and
-// reports both `"on" section is missing` and `"jobs" section is missing`, on BOTH
-// versions measured (an earlier note here claimed the wording differed between
-// them; that came from reading the first two lines of the output instead of all of
-// it, and only the ORDER differs) — so it
-// never rendered a verdict on a composite action in its life. Five it read and
-// passed; six it could not open.
+// actionlint cannot parse at all. It reads them as malformed workflows and reports
+// both `"on" section is missing` and `"jobs" section is missing` on both versions
+// measured, so it has never rendered a verdict on a composite action. Five it read
+// and passed; six it could not open.
 //
 // SCOPE: what someone outside this repo can set. `inputs.*` and `github.event.*`
 // are the unambiguous half — the dispatch-or-call payload and the pull-request

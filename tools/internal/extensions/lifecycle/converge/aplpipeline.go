@@ -77,8 +77,8 @@ type aplWaitStage struct {
 // file's own comment sized the job at "worst-case ~25m", already 4.4x under its
 // own budget.
 //
-// Measured on a passing cold e2e (run 29658429694): the whole "Bootstrap cluster"
-// step — apl-core install plus all six stages below — took 342s (5m42s).
+// Measured on a passing cold e2e: the whole "Bootstrap cluster" step — apl-core
+// install plus all six stages below — took 342s (5m42s).
 //
 // Stage 1 keeps the largest existence budget because it is the load-bearing one:
 // it waits for apl-operator's helmfile to START producing anything. Once the

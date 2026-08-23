@@ -255,10 +255,9 @@ func Run(secretNS, secretName, registry, repo string, settle, interval time.Dura
 	fmt.Println("## Harbor robot round-trip assertion (pull + push authorization)")
 
 	// Is the component here at all? A managed App Platform cluster renders a
-	// minimal app set that does not include llz-cert-automation, and on
-	// lke638103 the namespace simply did not exist ("namespaces
-	// \"llz-cert-automation\" not found"). That is a deployment shape, not a
-	// broken credential.
+	// minimal app set that does not include llz-cert-automation, so the namespace
+	// simply does not exist ("namespaces \"llz-cert-automation\" not found").
+	// That is a deployment shape, not a broken credential.
 	switch present, err := harborauth.NamespaceExists(secretNS); {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "::error::could not tell whether namespace %s exists (%v)\n", secretNS, err)

@@ -360,8 +360,8 @@ func commitBuiltImages(token, templateRepo, sha string) (bool, error) {
 // pinGHRetry wraps pinGH with a short retry (3 attempts, 5s/10s backoff via the
 // seamed pinSleep) for the FATAL gh calls on the pin path. A single transient
 // GitHub API 503 on the very first Instantiate query has killed a whole
-// release-e2e dispatch at minute one (run 29540787054, during a live API
-// incident); a couple of retries ride that out. Persistent failures still
+// release-e2e dispatch at minute one, during a live API incident; a couple of
+// retries ride that out. Persistent failures still
 // surface the final error unchanged.
 func pinGHRetry(token string, args ...string) (out []byte, err error) {
 	for attempt := 1; ; attempt++ {

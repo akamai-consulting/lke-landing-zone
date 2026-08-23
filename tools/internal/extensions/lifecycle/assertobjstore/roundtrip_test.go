@@ -144,7 +144,7 @@ func TestObjConsumersCoverLokiAndHarbor(t *testing.T) {
 // ConfigMap it found the bucket, found no endpoint, and refused to derive one —
 // reporting a healthy consumer as broken.
 func TestParseObjConfigReadsLokiS3Key(t *testing.T) {
-	// Trimmed from monitoring/loki on lke638084.
+	// Trimmed from a live monitoring/loki config.
 	cfg := "common:\n  storage:\n    s3:\n      bucketnames: platform-loki-chunks-e2e\n" +
 		"      s3: https://us-ord-10.linodeobjects.com\n      s3forcepathstyle: true\n" +
 		"schema_config:\n  configs:\n  - object_store: s3\n    store: tsdb\n"

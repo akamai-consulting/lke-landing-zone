@@ -250,13 +250,13 @@ func probeSignatureEnforcement() enforcementVerdict {
 // the stock class onto block-storage-retain. #382 REPLACED that mechanism, and
 // its own commentary in ci_bootstrap_cluster.go explains why the policy could
 // never have worked: apl-core installs Kyverno AND creates the PVCs, and creates
-// most of them first. Measured on lke637888, kyverno-admission-controller went
-// Available at 15:59:50 with 11 of 13 PVCs already created. A mutation applied
-// the instant Kyverno can admit one still arrives too late for 11 of them.
+// most of them first. Measured on a live cluster, kyverno-admission-controller
+// went Available with 11 of 13 PVCs already created — so a mutation applied the
+// instant Kyverno can admit one still arrives too late for 11 of them.
 //
 // What ships instead is `llz ci bootstrap-cluster` recreating LKE's stock
-// StorageClasses with the CSI encryption parameter, 67 seconds before the first
-// PVC exists. On lke638084 both classes came up
+// StorageClasses with the CSI encryption parameter, ~a minute before the first
+// PVC exists. Measured, both classes come up
 // `encrypted="" → encrypted="true"`, and the ClusterPolicy is not installed at
 // all — `clusterpolicies.kyverno.io "pvc-force-encrypted-storage-class" not
 // found`. The check was therefore asserting a mechanism that had already been

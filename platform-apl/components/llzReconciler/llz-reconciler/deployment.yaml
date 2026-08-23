@@ -113,9 +113,9 @@ spec:
             # Born-untagged is not a hypothetical, and one untagged Volume is a real
             # cost: `llz reap`'s cluster-liveness gate keys on the `lke<id>` tag, so a
             # Volume without it cannot be attributed and the fail-safe default KEEPS it
-            # — an unbounded leak that grows with every cluster provisioned. Verified on
-            # lke637888: 13 of 16 PVCs (harbor/keycloak/monitoring/git-server/istio-
-            # system) named LKE's stock `linode-block-storage` class EXPLICITLY, because
+            # — an unbounded leak that grows with every cluster provisioned. Verified
+            # live: 13 of 16 PVCs (harbor/keycloak/monitoring/git-server/istio-system)
+            # named LKE's stock `linode-block-storage` class EXPLICITLY, because
             # on managed Linode owns apl-values and its cluster.defaultStorageClass is
             # that class — and every one of their Volumes was untagged.
             #

@@ -194,8 +194,8 @@ func TestRunAssertHarborRoundTripMissingSecretFails(t *testing.T) {
 
 // A cluster that never deployed llz-cert-automation has no namespace and no
 // robot credential to round-trip. Managed App Platform renders a minimal app set
-// and omits it; on lke638103 the namespace genuinely did not exist. Failing there
-// reds a correct cluster for a component it was never asked to run.
+// and omits it, so the namespace genuinely does not exist. Failing there reds a
+// correct cluster for a component it was never asked to run.
 func TestRunAssertHarborRoundTripSkipsWhenComponentAbsent(t *testing.T) {
 	seamHarborCluster(t, false, nil, nil, fmt.Errorf("must not be read"))
 	if err := Run("ns", "name", "", ProbeRepo, 0, time.Millisecond); err != nil {

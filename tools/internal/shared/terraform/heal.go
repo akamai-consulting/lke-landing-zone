@@ -97,8 +97,8 @@ func TransientAPIFlake(log string) bool {
 // to settle, after which a re-plan + re-apply succeeds. Narrow by construction —
 // only this specific device-read error is matched, so a genuine firewall
 // misconfiguration (quota, invalid rule) still fails fast rather than being
-// silently retried. This class of transient burned a whole cold e2e create
-// (run 29655607246), which is why it is retriable.
+// silently retried. This class of transient has burned a whole cold e2e create,
+// which is why it is retriable.
 func FirewallDeviceReadFlake(log string) bool {
 	return fwDeviceReadRe.MatchString(log)
 }

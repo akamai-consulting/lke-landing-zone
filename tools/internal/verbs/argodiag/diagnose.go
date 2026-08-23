@@ -74,8 +74,8 @@ func Run(aplNS, argoNS string) error {
 	diagnoseNamespace(aplNS, "apl")
 	// The operator can sit Running 1/1 yet be wedged BEFORE helmfile installs
 	// anything (observed: a fresh cluster's operator consuming the previous,
-	// destroyed cluster's stale apl-<env> values branch — v0.0.25, run 29446982026,
-	// argocd CRD absent after 15m with zero stage-01 charts). The failing-workload
+	// destroyed cluster's stale apl-<env> values branch, with the argocd CRD absent
+	// after 15m and zero stage-01 charts). The failing-workload
 	// sweep below only fetches logs from pods that LOOK broken, and the namespace
 	// sweep above captures Job logs + describes but never a healthy-looking
 	// Deployment's container log — which is the only record of which git/helmfile

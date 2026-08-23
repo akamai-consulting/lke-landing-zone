@@ -71,8 +71,8 @@ func TestTransientAPIFlake(t *testing.T) {
 }
 
 // fwDeviceReadLog is the read-after-write consistency flake that burned a cold
-// e2e create (run 29655607246): the node firewall was created but the provider's
-// device read-back failed, with terraform's generic invalid-result diagnostic.
+// e2e create: the node firewall was created but the provider's device read-back
+// failed, with terraform's generic invalid-result diagnostic.
 const fwDeviceReadLog = `module.cluster.module.node_firewall.linode_firewall.this.linodes. All values
 Error: Provider returned invalid result object after apply
 Error: Failed to Get Devices for Firewall 76987661

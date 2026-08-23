@@ -478,7 +478,7 @@ func TestRegisterRunnerACLIPHonoursLeaseBudget(t *testing.T) {
 // A lease failure is best-effort ONLY while its premise holds — that the
 // Linode-API ACL grant above it already granted access. When kubectl cannot reach
 // the apiserver at all, that premise is disproved and continuing wastes the job:
-// run 30499831638 reported "Cluster access: success" while holding proof that
+// observed live, llz reported "Cluster access: success" while holding proof that
 // every request timed out, then burned 900s in a generic "waiting for the control
 // plane" loop before failing with no cause.
 //

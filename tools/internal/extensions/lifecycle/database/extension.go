@@ -25,57 +25,22 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	transition:seeded    "rotate-admin" [cloud-mutate, secret-custody]  ← pushed
 //	assertion:verified   "admin-usable" [cloud-read, secret-read]
 //
-// THREE BINDINGS, AND THE MIDDLE ONE IS PUSHED — the SECOND case of a shape
-// `wedge-gameday` found and could not name.
+// THREE BINDINGS, AND THE MIDDLE ONE CARRIES A PRECONDITION. Rotation is a thing
+// that keeps happening to a platform that is already up, not a step on the way to
+// one — but `bindableStates` refuses a transition at `operating`, and rightly:
+// `operating` is a condition that holds rather than a place you move to, and
+// widening the rule would let something claim to move the platform THERE.
 //
-// Rotation belongs at `operating`. It is a thing that keeps happening to a
-// platform that is already up, on a schedule, not a step on the way to one. And
-// `bindableStates` refuses:
-//
-//	a transition binding cannot attach to "operating"
-//
-// ITS REASONING IS ABOUT REACHING A STATE: "`operating` is a condition that holds
-// rather than a place you move to." That is right, and it is not what this
-// binding claims. The rule cannot currently tell "moves the platform TO state X"
-// from "acts WHILE the platform is at state X" — and the second is what a
-// scheduled rotation, and a gameday, both are.
-//
-// TWO INDEPENDENT SHIPPING CASES NOW, and the shape is finally precise: a MUTATING
-// ACTION WHOSE PRECONDITION IS A STATE RATHER THAN WHOSE EFFECT IS THAT STATE.
-// `wedge-gameday` refuses to start unless the cluster is already Healthy; this
-// refuses to rotate an unseeded path. Neither moves the platform anywhere.
-//
-// STILL NOT WIDENED, and deliberately. Letting Transition reach `operating` would
-// buy this binding accuracy at the cost of the rule's actual content — something
-// could then claim to move the platform TO `operating`, which is the thing the
-// restriction exists to prevent. What these two want is a way to declare a
-// precondition, which is a different axis from kind or state, and inventing an
-// axis from two cases is further than this campaign has gone for anything. It is
-// the same disposition `write-repo` got for three extractions before the fourth
-// case made its shape unarguable.
-//
-// AND THE TWO TABLES DISAGREE ABOUT WHERE THIS GOES, which is the sharpest thing
-// this extraction found. `converged` was the obvious fallback and grantStates
-// refuses it: `secret-custody` is legal only at provisioned, seeded and operating.
-// Meanwhile that row's own comment says it was written for "credentials the
-// platform MINTS (seeding) or REPLACES (rotation)" — rotation is the reason
-// `operating` is in it.
-//
-// So grantStates EXPECTS a rotation at `operating`, and bindableStates forbids a
-// transition there. They are not strictly contradictory — an INVARIANT at
-// `operating` can hold custody, and reconcile-actions' token restorers are exactly
-// that — but a periodic rotation is not an invariant either: it does not hold
-// continuously, it happens on a schedule.
-//
-// So `seeded`, the one state both tables allow, and defensible on its own terms: a
-// rotation re-seeds the credential. Recorded in Incomplete as the approximation it
-// is, with a test pinning both refusals so this is revisited deliberately.
+// So `seeded` is the State — a rotation re-places credential material, which is
+// what seeding means — and `Requires: operating` carries what was missing, which
+// was never the effect but the precondition. The mutating grants are checked at
+// BOTH states, so this is not a way to ask at `operating` for something `seeded`
+// forbids. See extension.Binding for the axis; `wedge-gameday` is the other case.
 //
 // `cloud-mutate` ON ROTATION, `cloud-read` ON SEEDING, and the asymmetry is real:
 // Linode's admin-password reset is an API WRITE against a live database, whereas
-// seeding reads the cluster list and writes only to OpenBao. That distinction is
-// what the two grants are for, and collapsing them would hide that seeding cannot
-// break a running database and rotation can.
+// seeding reads the cluster list and writes only to OpenBao. Collapsing them would
+// hide that seeding cannot break a running database and rotation can.
 //
 // THE ROTATION IS IRREVERSIBLE, which is why it refuses to run against an unseeded
 // path. Linode resets the password in place — there is no mint-verify-swap — so a
@@ -109,16 +74,6 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{extension.CloudRead, extension.SecretRead},
 			},
 		},
-		// DISCHARGED. This note recorded the sharpest version of the precondition gap
-		// — that bindableStates and grantStates gave contradictory answers about this
-		// one binding, since the custody row lists `operating` explicitly FOR rotation
-		// while a transition may not attach there. `Requires: operating` now says what
-		// the note said, in the declaration rather than beside it, and the mutating
-		// grants are checked at BOTH states rather than at `seeded` alone.
-		//
-		// `seeded` is still the State and is still right: a rotation re-places
-		// credential material, which is what seeding means. What was missing was never
-		// the effect, it was the precondition.
 	}
 }
 
