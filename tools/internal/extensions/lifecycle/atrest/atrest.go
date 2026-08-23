@@ -66,7 +66,6 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/shquote"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardkit"
 )
@@ -357,9 +356,12 @@ func collectAtRestFindings(repo capability.Repo, dirs []string) ([]atRestFinding
 func scanResourceLevers(body, rel string) []atRestFinding {
 	var out []atRestFinding
 	lines := strings.Split(body, "\n")
-	noise := stripHCLNoise(lines)
+	// decommented for MATCHING, noise for COUNTING. See stripHCL: matching on the
+	// raw line let a commented-out resource be scanned as live and a commented-out
+	// lever vouch for an unencrypted one.
+	decommented, noise := stripHCL(lines)
 	for i := 0; i < len(lines); i++ {
-		m := reResourceHead.FindStringSubmatch(lines[i])
+		m := reResourceHead.FindStringSubmatch(decommented[i])
 		if m == nil {
 			continue
 		}
@@ -382,12 +384,13 @@ func scanResourceLevers(body, rel string) []atRestFinding {
 		depth, ok := 1, false
 		var j int
 		for j = i + 1; j < len(lines) && depth > 0; j++ {
-			if lever.ok.MatchString(lines[j]) {
+			if lever.ok.MatchString(decommented[j]) {
 				ok = true
 			}
-			// Braces counted on the line with comments and quoted strings REMOVED,
-			// while the lever is matched on the raw line (stripping quotes would
-			// delete the `"enabled"` it looks for).
+			// Braces counted on the line with comments and quoted strings REMOVED;
+			// the lever is matched on the line with only COMMENTS removed, because
+			// stripping quotes would delete the `"enabled"` it looks for and
+			// matching the raw line would let a commented-out one vouch.
 			//
 			// This is not fussiness. Terraform in this repo is heavily commented
 			// with backticked code fragments, and one comment containing an
@@ -429,45 +432,133 @@ func firstMatchLine(body string, re *regexp.Regexp) (int, bool) {
 // paths already in that shape, so the derivation — and the two failure fallbacks
 // under it, which silently keyed a finding on an absolute path — has no caller.
 
-// stripHCLNoise returns a parallel slice of lines with block comments, line
-// comments and quoted strings blanked out, for brace counting only. Indices line
-// up with the input so a caller can match on the raw line and count on this one.
+// stripHCL returns two parallel views of the file, both index-aligned with the
+// input:
 //
-// Quoted spans go first, so a `#` or `{` inside a string is already gone by the
-// time the comment cut runs — `label = "a#b{c"` must not read as a comment or as
-// an opening brace.
-func stripHCLNoise(lines []string) []string {
-	out := make([]string, len(lines))
+//	decommented — comments removed, QUOTED STRINGS KEPT. What every pattern match
+//	              runs against, so code that only exists inside a comment cannot
+//	              vouch for a resource or be scanned as if it were one.
+//	noise       — comments AND quoted strings removed. Brace counting only, so a
+//	              `{` inside `label = "a{b"` does not open a block.
+//
+// MATCHING ON THE RAW LINE WAS THREE FALSE VERDICTS, NOT A SHORTCUT. The lever
+// regex, the resource head and the depth walk all ran against the raw text:
+//
+//   - `encryption = "enabled"` inside a `/* … */` block vouched for an
+//     unencrypted resource — a FALSE NEGATIVE on a security gate;
+//   - a commented-out `resource "linode_volume" "dead"` was scanned as live, its
+//     body lines blank in noise so the depth never closed, and `i = j - 1` then
+//     skipped every REAL resource below it;
+//   - and the reverse, a finding raised against dead code.
+//
+// It is also its own scanner rather than shquote.StripSpans, and that is the
+// point of the rewrite. StripSpans is a SHELL quoter: it treats a lone `'` as a
+// span running to end of line. HCL has no single-quoted strings, so
+// `/* don't do this */` lost its `*/`, the block-comment state latched, and the
+// rest of the file went unscanned — byte for byte the failure this file's own
+// header is about, one layer up from where it was fixed.
+//
+// HEREDOCS ARE NOT TRACKED. A `<<EOT` body containing an unbalanced brace or a
+// `*/` will still confuse the walk; no Terraform in this repo has one inside a
+// watched resource, and inventing a parser for it here would be speculative.
+func stripHCL(lines []string) (decommented, noise []string) {
+	decommented = make([]string, len(lines))
+	noise = make([]string, len(lines))
 	inBlock := false
 	for i, l := range lines {
-		// /* … */ can span lines, and an unclosed one has the same silent
-		// run-past effect as an unbalanced brace, so it is tracked rather than
-		// ignored.
-		if inBlock {
-			if k := strings.Index(l, "*/"); k >= 0 {
-				l, inBlock = l[k+2:], false
-			} else {
-				out[i] = ""
-				continue
+		var code, bare strings.Builder
+		for j := 0; j < len(l); j++ {
+			if inBlock {
+				if k := strings.Index(l[j:], "*/"); k >= 0 {
+					j += k + 1 // +1 more from the loop post
+					inBlock = false
+					continue
+				}
+				break // block runs past this line
+			}
+			switch {
+			case l[j] == '"':
+				// A double-quoted string is opaque to comments and braces alike:
+				// it survives into decommented and is dropped from noise.
+				code.WriteByte('"')
+				for j++; j < len(l) && l[j] != '"'; j++ {
+					if l[j] == '\\' && j+1 < len(l) {
+						code.WriteByte(l[j])
+						j++
+					}
+					code.WriteByte(l[j])
+				}
+				if j < len(l) {
+					code.WriteByte('"')
+				}
+			case l[j] == '#', strings.HasPrefix(l[j:], "//"):
+				j = len(l) // rest of the line is a comment
+			case strings.HasPrefix(l[j:], "/*"):
+				if k := strings.Index(l[j+2:], "*/"); k >= 0 {
+					j += 2 + k + 1
+					continue
+				}
+				inBlock = true
+				j = len(l)
+			default:
+				code.WriteByte(l[j])
+				bare.WriteByte(l[j])
 			}
 		}
-		code, _ := shquote.StripSpans(l)
-		if k := strings.Index(code, "/*"); k >= 0 {
-			if e := strings.Index(code[k:], "*/"); e >= 0 {
-				code = code[:k] + code[k+e+2:]
-			} else {
-				code, inBlock = code[:k], true
-			}
-		}
-		if k := strings.Index(code, "#"); k >= 0 {
-			code = code[:k]
-		}
-		if k := strings.Index(code, "//"); k >= 0 {
-			code = code[:k]
-		}
-		out[i] = code
+		decommented[i], noise[i] = code.String(), bare.String()
 	}
-	return out
+	return decommented, noise
+}
+
+// stripLineComments removes comments from ONE already-string-stripped line,
+// reporting whether an unterminated /* was left open.
+//
+// LEFT TO RIGHT, TAKING WHICHEVER OPENER COMES FIRST — and doing it in a fixed
+// order instead is a false negative on a security gate. stripHCLNoise used to
+// search for `/*` BEFORE cutting `#` and `//`, so an ordinary HCL line comment
+// containing a glob —
+//
+//	# see modules/*/main.tf
+//
+// — matched `/*` inside `modules/*`, found no closing `*/`, and put the scanner
+// into block-comment mode FOR THE REST OF THE FILE. Brace counting stopped, the
+// depth walk ran to EOF, and every resource below that line went silently
+// unscanned. Probe-verified on the shipped fixture: 2 findings without the
+// comment, 1 with it — the resource below the glob line is the one that goes
+// unexamined.
+//
+// Reversing the order does not fix it, which is worth stating because it is the
+// obvious move: cutting `#` first breaks `x = 1 /* note # */` by truncating
+// mid-block-comment and opening the same run-past one case over. Only "whichever
+// opener appears first wins" is correct for both.
+func stripLineComments(code string) (string, bool) {
+	var kept strings.Builder
+	for {
+		h, sl, bl := strings.Index(code, "#"), strings.Index(code, "//"), strings.Index(code, "/*")
+		first, kind := -1, ""
+		for _, c := range []struct {
+			at   int
+			kind string
+		}{{h, "line"}, {sl, "line"}, {bl, "block"}} {
+			if c.at >= 0 && (first < 0 || c.at < first) {
+				first, kind = c.at, c.kind
+			}
+		}
+		if first < 0 {
+			kept.WriteString(code)
+			return kept.String(), false
+		}
+		kept.WriteString(code[:first])
+		if kind == "line" {
+			return kept.String(), false
+		}
+		rest := code[first+2:]
+		e := strings.Index(rest, "*/")
+		if e < 0 {
+			return kept.String(), true // block comment runs past this line
+		}
+		code = rest[e+2:]
+	}
 }
 
 // braceDelta is the net HCL block-depth change of one already-denoised line.

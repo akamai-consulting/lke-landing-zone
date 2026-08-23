@@ -181,7 +181,7 @@ func TestStripHCLNoiseRemovesCommentsAndStrings(t *testing.T) {
 		`  // trailing { comment`,
 		`}`,
 	}
-	noise := stripHCLNoise(lines)
+	_, noise := stripHCL(lines)
 	depth := 0
 	for _, l := range noise {
 		depth += braceDelta(l)
@@ -207,7 +207,8 @@ func TestStripHCLNoiseTracksBlockCommentsAcrossLines(t *testing.T) {
 	without := []string{`resource "x" "y" {`, `  size = 1`, `}`}
 	sum := func(lines []string) int {
 		d := 0
-		for _, l := range stripHCLNoise(lines) {
+		_, noise := stripHCL(lines)
+		for _, l := range noise {
 			d += braceDelta(l)
 		}
 		return d
@@ -291,4 +292,167 @@ func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
 // the extension's own invariant binding.
 func atRestRepo(root string) capability.Repo {
 	return capability.RepoAt(atRestBinding(), root)
+}
+
+// ── C14: a line comment that stopped the scanner ────────────────────────────
+
+// TestAGlobInACommentDoesNotBlindTheScanner — PROBE-VERIFIED in the 2026-08-13
+// review, and reproduced here.
+//
+// stripHCLNoise searched for `/*` BEFORE cutting `#` and `//`, so an ordinary
+// HCL line comment containing a glob —
+//
+//	# see modules/* for the shared definition
+//
+// — matched `/*` inside `modules/*`, found no closing `*/`, and put the scanner
+// into block-comment mode FOR THE REST OF THE FILE. Brace counting stopped, the
+// depth walk ran to EOF, and every resource below that line went silently
+// unscanned. On a SECURITY gate, in the direction that reports clean.
+//
+// The two trees below are identical but for the comment. They must produce the
+// same verdict.
+func TestAGlobInACommentDoesNotBlindTheScanner(t *testing.T) {
+	// TWO watched resources, and the comment sits INSIDE the first one's body.
+	// That is the shape that bites: the spurious block blanks every line below it,
+	// so the depth counter for the first resource never returns to 0, the inner
+	// loop runs to EOF, and the outer loop's `i = j - 1` skips the SECOND resource
+	// entirely. It is reported clean having never been looked at.
+	body := func(comment string) string {
+		return "resource \"linode_volume\" \"first\" {\n" +
+			"  label = \"a\"\n" +
+			comment +
+			"}\n" +
+			"resource \"linode_volume\" \"second\" {\n" +
+			"  label = \"b\"\n" +
+			"}\n"
+	}
+
+	countFindings := func(t *testing.T, tf string) int {
+		t.Helper()
+		root := writeTFRoot(t, map[string]string{"newroot/main.tf": tf})
+		f, _, err := collectAtRestFindings(atRestRepo(root), ScanDirs(atRestRepo(root)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(f)
+	}
+
+	base := countFindings(t, body(""))
+	if base < 2 {
+		t.Fatalf("the fixture must produce a finding for BOTH volumes (got %d), or this test cannot "+
+			"detect the second one being skipped", base)
+	}
+	// `modules/*` and NOT `modules/*/…`: the latter contains `*/` one character
+	// later, which closes the spurious block and hides the bug. The glob with no
+	// trailing slash is both the dangerous one and the common way to write it.
+	got := countFindings(t, body("  # see modules/* for the shared definition\n"))
+	if got != base {
+		t.Errorf("a comment containing `modules/*` changed the verdict from %d finding(s) to %d — "+
+			"everything below it went unscanned, on a gate whose whole job is to notice unencrypted "+
+			"storage", base, got)
+	}
+}
+
+// TestStripLineCommentsTakesWhicheverOpenerComesFirst. Reversing the order does
+// not fix the bug, which is worth pinning because it is the obvious move: cutting
+// `#` first breaks a real inline block comment by truncating mid-block and
+// opening the same run-past one case over. Only "first opener wins" is correct
+// for both.
+func TestStripLineCommentsTakesWhicheverOpenerComesFirst(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in       string
+		want     string
+		wantOpen bool
+	}{
+		"glob inside a line comment":  {"# see modules/*/main.tf", "", false},
+		"glob inside a // comment":    {"x = 1 // modules/*", "x = 1 ", false},
+		"real inline block comment":   {"x = 1 /* note # */ y = 2", "x = 1  y = 2", false},
+		"real unterminated block":     {"x = 1 /* opens here", "x = 1 ", true},
+		"hash inside a block comment": {"/* # */ z = 3", " z = 3", false},
+		"no comment at all":           {"resource \"x\" \"y\" {", "resource \"x\" \"y\" {", false},
+		"block after a line comment":  {"# a /* b", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, open := stripLineComments(tc.in)
+			if got != tc.want || open != tc.wantOpen {
+				t.Errorf("stripLineComments(%q) = (%q, %v), want (%q, %v)", tc.in, got, open, tc.want, tc.wantOpen)
+			}
+		})
+	}
+}
+
+// ── code inside a comment is not code ────────────────────────────────────────
+
+// TestAnApostropheInACommentDoesNotSwallowTheFile.
+//
+// The stripper ran shquote.StripSpans first, and StripSpans is a SHELL quoter:
+// it treats a lone `'` as a span running to end of line. So `/* don't */` lost
+// its closing `*/`, the block-comment state latched, and every resource below
+// went unscanned — byte for byte the run-past failure this file's own header is
+// about, one layer above where it was fixed. Probe-verified: 1 finding, not 2.
+func TestAnApostropheInACommentDoesNotSwallowTheFile(t *testing.T) {
+	body := "resource \"linode_volume\" \"first\" {\n  /* don't do this */\n  size = 10\n}\n\n" +
+		"resource \"linode_volume\" \"second\" {\n  size = 20\n}\n"
+	findings := scanResourceLevers(body, "roots/cluster/main.tf")
+	if len(findings) != 2 {
+		t.Errorf("got %d findings, want 2 — an apostrophe in a comment put the scanner into "+
+			"block-comment mode for the rest of the file, so everything below it went unexamined "+
+			"and the gate reported green having never looked: %+v", len(findings), findings)
+	}
+}
+
+// TestACommentedOutLeverDoesNotVouchForAnUnencryptedResource. The lever was
+// matched on the RAW line, so `encryption = "enabled"` inside a `/* … */` block
+// satisfied the check. A false negative on a security gate, and the most likely
+// way for one to occur in practice: someone comments the argument out to test
+// something and the guard keeps saying yes.
+func TestACommentedOutLeverDoesNotVouchForAnUnencryptedResource(t *testing.T) {
+	// The MULTI-LINE block is the shape that matters, and it is the one a first
+	// cut of this test missed. The lever regexes are anchored (`^\s*encryption`),
+	// so a same-line `/* encryption = "enabled" */` never matched even before the
+	// fix — while a lever commented out on its OWN line inside a block is a raw
+	// line the regex matches exactly, which is how someone actually comments an
+	// argument out. Mutation-checked: only the multi-line case fails when the
+	// match is reverted to the raw line.
+	for name, body := range map[string]string{
+		"multi-line block": "resource \"linode_volume\" \"v\" {\n  /*\n  encryption = \"enabled\"\n  */\n  size = 10\n}\n",
+		"inline block":     "resource \"linode_volume\" \"v\" {\n  /* encryption = \"enabled\" */\n  size = 10\n}\n",
+		"hash comment":     "resource \"linode_volume\" \"v\" {\n  # encryption = \"enabled\"\n  size = 10\n}\n",
+		"slash comment":    "resource \"linode_volume\" \"v\" {\n  // encryption = \"enabled\"\n  size = 10\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if f := scanResourceLevers(body, "roots/cluster/main.tf"); len(f) != 1 {
+				t.Errorf("got %d findings, want 1 — a commented-out lever vouched for an "+
+					"unencrypted resource: %+v", len(f), f)
+			}
+		})
+	}
+}
+
+// TestACommentedOutResourceIsNotScanned. reResourceHead also matched raw, so a
+// resource inside a block comment was walked as if it were live — and because
+// its body lines are blank in the noise view the depth never returned to 0, so
+// `i = j - 1` skipped every REAL resource below it. Both halves are asserted:
+// no finding for the dead one, and the live one still found.
+func TestACommentedOutResourceIsNotScanned(t *testing.T) {
+	body := "/*\nresource \"linode_volume\" \"dead\" {\n  size = 10\n}\n*/\n\n" +
+		"resource \"linode_volume\" \"live\" {\n  size = 20\n}\n"
+	findings := scanResourceLevers(body, "roots/cluster/main.tf")
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want exactly the live one: %+v", len(findings), findings)
+	}
+	if !strings.Contains(findings[0].key, "live") {
+		t.Errorf("the finding is against commented-out code, and the real resource below it was "+
+			"never examined: %s", findings[0].key)
+	}
+}
+
+// TestAQuotedCommentMarkerIsNotAComment — the exclusion. Stripping comments must
+// not reach inside a string, or a perfectly ordinary value silently truncates the
+// line it is on.
+func TestAQuotedCommentMarkerIsNotAComment(t *testing.T) {
+	body := "resource \"linode_volume\" \"v\" {\n  tags = [\"a#b\", \"c/*d\"]\n  encryption = \"enabled\"\n}\n"
+	if f := scanResourceLevers(body, "roots/cluster/main.tf"); len(f) != 0 {
+		t.Errorf("a `#` or `/*` inside a quoted string is not a comment; the lever below it was lost: %+v", f)
+	}
 }
