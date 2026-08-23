@@ -108,6 +108,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -131,8 +132,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-five of the twenty-eight gates read the repository root
-// through `--root`, so twenty-five rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-six of the twenty-nine gates read the repository root
+// through `--root`, so twenty-six rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -316,6 +317,12 @@ var gates = []Gate{
 	{Extension: "mesh-egress", New: meshegress.Cmd},
 	{Extension: "mtls-wiring", New: mtlsguard.Cmd},
 	{Extension: "version-pins", New: versionpins.Cmd},
+	// Beside version-pins because it is the same class of defect one authority
+	// over: a relation between two individually well-formed pins. Its own subject
+	// is the fidelity of the dry-run job in the table's own workflow — the kind
+	// cluster's Kubernetes minor against the LKE-Enterprise minor the cluster
+	// Terraform root pins.
+	{Extension: "k8s-minor-coherence", New: k8sminorcoherence.Cmd},
 	// template-manifest scans the SCAFFOLD, not the repo — its subject is what an
 	// instance receives, so its subtree is instance-template rather than the root.
 	{Extension: "template-manifest", New: templatemanifest.Cmd, Subtree: "instance-template"},
@@ -465,7 +472,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (28 rows, 25 of them taking the default subject — both pinned by
+	// table (29 rows, 26 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

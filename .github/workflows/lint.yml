@@ -22,13 +22,13 @@ on:
       - '.tflintrc.hcl'
       - 'Makefile'
       - 'tools/**'
-      - '.github/workflows/**'
-      # The FIRST-PARTY composite actions. instance-template/.github/** covers the
-      # delivered copies but nothing covered these, so a PR touching only
-      # .github/actions/ started no run — and workflow-injection scans that root.
-      # Same omission as platform-apl below, found the same way: by asking which
-      # path starts the workflow rather than which gate reads the file.
-      - '.github/actions/**'
+      # THE WHOLE OF .github, not the two subtrees that used to be listed here.
+      # `.github/workflows/**` and `.github/actions/**` were added one at a time,
+      # each after a PR touching only that tree started no run — and `.github/scripts`
+      # was still uncovered, which `llz ci k8s-minor-coherence` found by asking
+      # whether every tree it READS can start the workflow. Enumerating subtrees
+      # loses that race one directory at a time; the parent cannot.
+      - '.github/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
@@ -75,13 +75,13 @@ on:
       - '.tflintrc.hcl'
       - 'Makefile'
       - 'tools/**'
-      - '.github/workflows/**'
-      # The FIRST-PARTY composite actions. instance-template/.github/** covers the
-      # delivered copies but nothing covered these, so a PR touching only
-      # .github/actions/ started no run — and workflow-injection scans that root.
-      # Same omission as platform-apl below, found the same way: by asking which
-      # path starts the workflow rather than which gate reads the file.
-      - '.github/actions/**'
+      # THE WHOLE OF .github, not the two subtrees that used to be listed here.
+      # `.github/workflows/**` and `.github/actions/**` were added one at a time,
+      # each after a PR touching only that tree started no run — and `.github/scripts`
+      # was still uncovered, which `llz ci k8s-minor-coherence` found by asking
+      # whether every tree it READS can start the workflow. Enumerating subtrees
+      # loses that race one directory at a time; the parent cannot.
+      - '.github/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
       - '.core-surface-budget.yaml'
@@ -102,7 +102,41 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  KIND_VERSION: v0.25.0
+  # kind, and the node image the dry-run's API server actually runs.
+  #
+  # THE NODE IMAGE IS THE PIN THAT MATTERS, and for a long time nothing set it
+  # (#427). Given only `version:`, kind boots ITS OWN default node image —
+  # v1.31.2 under the v0.25.0 that used to sit here — so this repo's most
+  # load-bearing manifest gate, `kubectl apply --dry-run=server`, answered "would
+  # a 1.31 server accept these manifests?" while we deploy v1.34.6+lke2. An API
+  # removed in 1.32/1.33/1.34, or a field only a newer server validates, passed
+  # here and failed on a real cluster. Closing that gap is the entire reason the
+  # gate exists, so it was answering the wrong question the whole time.
+  #
+  # `llz ci k8s-minor-coherence` now ASSERTS the relation rather than trusting
+  # this comment: the image's minor must equal the LKE-E minor pinned in the
+  # cluster root's terraform.tfvars.example. Bump the two together; the guard
+  # names both sites in its failure.
+  #
+  # KIND_VERSION is a weaker constraint and deliberately unasserted: it only has
+  # to be a kind release that KNOWS this minor (v0.32.0 ships 1.33/1.34/1.35/1.36
+  # node images). No static check can decide that — the mapping lives in kind's
+  # release notes, and a table of it here would be one more copy to rot — but a
+  # kind too old for the image fails loudly at cluster create rather than
+  # silently validating against the wrong server, which is the failure mode that
+  # matters.
+  #
+  # TAG AND DIGEST, BOTH REQUIRED, and they do different jobs. Docker pulls
+  # `name:tag@digest` BY DIGEST, so the digest is what kind actually boots — kind's
+  # release notes publish it because node images are not compatible across kind
+  # releases — while the tag is the only half a static guard can read a minor out
+  # of. Take BOTH from the release notes of the KIND_VERSION above, in one paste:
+  # a bumped tag with a stale digest boots the old server while the guard reads the
+  # new minor and passes, which is why the dry-run job below also asserts the
+  # cluster it actually got. No static check can tell a consistent pair from a
+  # correct pair.
+  KIND_VERSION: v0.32.0
+  KIND_NODE_IMAGE: kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
   HELM_VERSION: "3.17.3"
   KUBECTL_VERSION: "1.34.10"
   YQ_VERSION: "4.44.3"
@@ -288,8 +322,37 @@ jobs:
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           version: ${{ env.KIND_VERSION }}
+          # The API server every `--dry-run=server` in this job is answered by.
+          # See KIND_NODE_IMAGE's note above; `llz ci k8s-minor-coherence` holds
+          # it to the LKE-E minor we deploy.
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          # AND IT INSTALLS ITS OWN KUBECTL. kind-action downloads kubectl into
+          # its cache and appends that directory to GITHUB_PATH, which PREPENDS
+          # it to PATH for every later step — so it shadowed the azure/setup-kubectl
+          # step above and the applies below ran on the action's default (v1.35.0)
+          # rather than on KUBECTL_VERSION. Nothing named the wrong binary; the
+          # steps just used it. Pinning the input to the same env keeps one kubectl
+          # in the job whatever order the two steps end up in.
+          kubectl_version: v${{ env.KUBECTL_VERSION }}
           cluster_name: k8s-ci
           wait: 60s
+
+      # THE LIVE HALF of `llz ci k8s-minor-coherence`. That gate reads the version
+      # off KIND_NODE_IMAGE's TAG; the digest beside it is what docker pulls, so
+      # the two can disagree and no static reader can tell. This asks the cluster.
+      #
+      # KEPT TO ONE LINE, and be honest about why: `untestable-loc`'s
+      # workflow-inline-bash counter reads BLOCK scalars, so a single-line `run:`
+      # is not measured at all rather than measured at zero. This is shell no
+      # budget sees — which is an argument for keeping it to one line and for the
+      # guard asserting the step exists, not for pretending it was counted.
+      #
+      # EXACT, not major.minor. Comparing only the minor left a bumped tag beside a
+      # stale digest passing both halves whenever the two shared a minor — the
+      # commonest way to get it wrong, since bumps within a minor are the frequent
+      # ones. The tag names a patch; the server reports a patch; compare those.
+      - name: The cluster must run the version its tag names
+        run: kubectl version -o json | jq -e --arg t "${KIND_NODE_IMAGE#kindest/node:v}" '.serverVersion.gitVersion == "v" + ($t | split("@")[0])'
 
       - name: Add Helm repos
         env:

@@ -30,6 +30,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -465,8 +466,7 @@ func ciCmd() *cobra.Command {
 	// mutable-tag-guard holds build-images.yml's publish policy — `:latest` and
 	// `:<version>` only from the default branch's HEAD (#451).
 	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd())
-	c.AddCommand(callerperms.Cmd())
-	c.AddCommand(runinjection.Cmd())
+	c.AddCommand(callerperms.Cmd(), runinjection.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())
 	c.AddCommand(workflowshells.Cmd())
@@ -480,7 +480,14 @@ func ciCmd() *cobra.Command {
 	// CITofuTag/CIKubernetesTag constants) must match it. This drifted once
 	// already. Container images in this repo's workflows are the ONE inversion —
 	// they must name `:latest`, never the ARG; see the versionpins package header.
-	c.AddCommand(versionpins.Cmd())
+	//
+	// k8s-minor-coherence rides beside it as the other version relation, and the
+	// one no Dockerfile has an opinion about: the kind cluster lint.yml
+	// server-side dry-runs against must run the Kubernetes MINOR the cluster
+	// Terraform root pins for LKE-Enterprise. That workflow pinned kind's version
+	// and not its node image, so the gate validated against 1.31 while we deployed
+	// 1.34 (#427).
+	c.AddCommand(versionpins.Cmd(), k8sminorcoherence.Cmd())
 	return c
 }
 
