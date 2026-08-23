@@ -483,7 +483,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (30 rows, 27 of them taking the default subject — both pinned by
+	// table (31 rows, 28 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string
