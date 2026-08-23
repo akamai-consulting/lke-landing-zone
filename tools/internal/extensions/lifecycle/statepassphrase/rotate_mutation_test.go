@@ -137,7 +137,7 @@ func TestRotateStatePassphraseIncompleteErrorCountsEveryRoot(t *testing.T) {
 		},
 		allRoots())
 
-	err := RunRotate(true, "terraform")
+	err := RunRotate(true, tmpRootsDir(t))
 	if err == nil {
 		t.Fatal("a root that fails verification MUST fail the command")
 	}
@@ -159,22 +159,57 @@ func TestRotateStatePassphraseSummaryCountsVerifiedAndSkipped(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", sum)
 
 	present := allRoots()
-	delete(present, "terraform/databases")
+	delete(present, "databases")
 	withRolloverSeams(t,
 		func(string) error { return nil },
 		func(string) error { return nil },
 		present)
 
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	got, readErr := os.ReadFile(sum)
 	if readErr != nil {
 		t.Fatalf("read step summary: %v", readErr)
 	}
-	const want = "All 3 present root(s) verified with the new passphrase alone (1 skipped)."
-	if !strings.Contains(string(got), want) {
-		t.Errorf("step summary must state the exact counts.\nwant substring: %s\ngot:\n%s", want, got)
+	// The counts, AND the withheld licence. A partially-skipped rollover used to
+	// print "can now be deleted" — `verified == 0` catches only the all-skipped
+	// run, and partial is the shape an instance actually reaches, because "root
+	// not present" is decided by a stat over a render-time gitignored directory.
+	for _, want := range []string{
+		"3 root(s) verified with the new passphrase alone, 1 SKIPPED",
+		"databases",
+		"Do not delete `TF_STATE_ENCRYPTION_PASSPHRASE_OLD` yet",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("step summary must state the exact counts and withhold the licence.\nwant substring: %s\ngot:\n%s", want, got)
+		}
+	}
+	if strings.Contains(string(got), "can now be deleted") {
+		t.Errorf("a rollover that skipped a root must NOT license deleting the old passphrase:\n%s", got)
+	}
+}
+
+// AND A COMPLETE ONE STILL GRANTS IT, or the rollover can never be finished and
+// the old passphrase accumulates forever.
+func TestRotateStatePassphraseLicensesDeletionWhenNothingWasSkipped(t *testing.T) {
+	rotationWindowEnv(t)
+	sum := filepath.Join(t.TempDir(), "sum")
+	t.Setenv("GITHUB_STEP_SUMMARY", sum)
+	withRolloverSeams(t,
+		func(string) error { return nil },
+		func(string) error { return nil },
+		allRoots())
+
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
+		t.Fatalf("rollover: %v", err)
+	}
+	got, err := os.ReadFile(sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "can now be deleted") {
+		t.Errorf("a rollover with every root re-keyed must license the deletion:\n%s", got)
 	}
 }
 
@@ -192,7 +227,7 @@ func TestRotateStatePassphraseReportsRootsInSortedOrder(t *testing.T) {
 		func(string) error { return nil },
 		allRoots())
 
-	if err := RunRotate(true, "terraform"); err != nil {
+	if err := RunRotate(true, tmpRootsDir(t)); err != nil {
 		t.Fatalf("rollover: %v", err)
 	}
 	got, readErr := os.ReadFile(sum)

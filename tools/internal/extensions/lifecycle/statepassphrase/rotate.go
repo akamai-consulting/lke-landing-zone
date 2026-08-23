@@ -180,6 +180,28 @@ func RunRotate(apply bool, rootsDir string) error {
 		return err
 	}
 
+	// THE ROOTS DIRECTORY ITSELF MUST EXIST. Every root is probed with os.Stat
+	// and an absent one is recorded as "not present in this instance" — a real
+	// state (an instance with no databases root), and the reason a wrong
+	// --roots-dir produced four skips and no error at all. Checking the parent
+	// separates "this instance does not have that root" from "nobody has ever
+	// had a root here, so the path is wrong".
+	// TWO REASONS, TWO MESSAGES. Formatting err unconditionally printed
+	// "is not a directory (<nil>)" for a path that exists and is a FILE — a nil
+	// error rendered as if it were the diagnosis, on the failure path of the one
+	// command whose exit status licenses deleting the old passphrase.
+	st, statErr := os.Stat(rootsDir)
+	switch {
+	case statErr != nil:
+		return fmt.Errorf("--roots-dir %q cannot be read (%v) — refusing to report on roots "+
+			"that were never looked for. The roots live under terraform-iac-bootstrap/ in an "+
+			"instance checkout; run this from the instance root", rootsDir, statErr)
+	case !st.IsDir():
+		return fmt.Errorf("--roots-dir %q is a file, not a directory — refusing to report on roots "+
+			"that were never looked for. The roots live under terraform-iac-bootstrap/ in an "+
+			"instance checkout; run this from the instance root", rootsDir)
+	}
+
 	results := make([]rootRollover, 0, len(statePassphraseRoots))
 	for _, root := range statePassphraseRoots {
 		dir := rootsDir + "/" + root
@@ -217,11 +239,13 @@ func RunRotate(apply bool, rootsDir string) error {
 // old-secret deletion on, so it must be false only when discarding is safe.
 func reportRollover(results []rootRollover, apply bool) error {
 	var lines []string
+	var skippedRoots []string
 	var failed, verified, skipped int
 	for _, r := range results {
 		switch {
 		case r.Skipped != "":
 			skipped++
+			skippedRoots = append(skippedRoots, r.Root)
 			lines = append(lines, fmt.Sprintf("  - `%s` — skipped (%s)", r.Root, r.Skipped))
 		case r.Err != "":
 			failed++
@@ -251,8 +275,56 @@ func reportRollover(results []rootRollover, apply bool) error {
 		_ = ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
 		return fmt.Errorf("state-passphrase rollover incomplete: %d of %d root(s) failed — old passphrase MUST be retained", failed, verified+failed)
 	}
+	// ZERO VERIFIED IS NOT SUCCESS, and this is the arm the whole function turns
+	// on. The message below is the one the workflow gates deletion of
+	// TF_STATE_ENCRYPTION_PASSPHRASE_OLD on, and `failed == 0` was the only
+	// condition guarding it — which is also true of a run that re-keyed NOTHING.
+	// A wrong --roots-dir skipped all four roots, printed "All 0 present root(s)
+	// verified", and exited 0. Following that summary discards the only key that
+	// can read every state file in the instance.
+	//
+	// There is no legitimate all-skipped rollover: statePassphraseRoots is the
+	// closed list of roots that carry encrypted state, and an instance with none
+	// of them has no state to re-key and no reason to be running this.
+	if verified == 0 {
+		summary = append(summary, "",
+			"**DO NOT delete `TF_STATE_ENCRYPTION_PASSPHRASE_OLD`.** "+
+				fmt.Sprintf("No root was re-keyed (%d skipped). ", skipped)+
+				"Nothing has moved to the new passphrase, so the old one is still the only key that reads this state.")
+		_ = ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
+		return fmt.Errorf("state-passphrase rollover re-keyed NOTHING: all %d root(s) were skipped — "+
+			"check --roots-dir points at the instance's Terraform roots. The old passphrase MUST be retained", skipped)
+	}
+
+	// A SKIP IS NOT A RE-KEY, AND THE LICENCE MUST NOT COVER ONE. `verified == 0`
+	// above catches the all-skipped run; it does not catch the PARTIAL one, and
+	// that is the shape an instance actually reaches. "root not present" is
+	// decided by os.Stat over a render-time, gitignored directory, so a workspace
+	// where only some roots were rendered verifies those and skips the rest —
+	// then printed "can now be deleted" over state that is still on the old key.
+	//
+	// Nothing here can tell "this instance has no databases root" from "this
+	// checkout has not rendered it", because the difference is not on disk. So
+	// the exit status stays 0 — a legitimately-absent root is not a failure and
+	// failing would red the scheduled run for every instance without one — and
+	// the LICENCE is withheld instead, naming what was skipped so an operator can
+	// answer the question the tool cannot.
+	if skipped > 0 {
+		summary = append(summary,
+			"",
+			fmt.Sprintf("%d root(s) verified with the new passphrase alone, %d SKIPPED as not present: %s.",
+				verified, skipped, strings.Join(skippedRoots, ", ")),
+			"",
+			"**Do not delete `TF_STATE_ENCRYPTION_PASSPHRASE_OLD` yet.** A skipped root was "+
+				"never re-keyed, and a root is skipped when its directory is absent — which is "+
+				"true both of a root this instance does not have and of one this checkout has "+
+				"not rendered. Confirm the skipped roots hold no state (no `terraform.tfstate` "+
+				"under the state bucket prefix), then delete the old passphrase by hand.")
+		return ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
+	}
+
 	summary = append(summary, "",
-		fmt.Sprintf("All %d present root(s) verified with the new passphrase alone (%d skipped). ", verified, skipped)+
+		fmt.Sprintf("All %d root(s) re-keyed and verified with the new passphrase alone, none skipped. ", verified)+
 			"`TF_STATE_ENCRYPTION_PASSPHRASE_OLD` can now be deleted and "+
 			"`TF_STATE_ENCRYPTION_KEY_NAME_OLD` cleared.")
 	return ghaout.Append("GITHUB_STEP_SUMMARY", summary...)
