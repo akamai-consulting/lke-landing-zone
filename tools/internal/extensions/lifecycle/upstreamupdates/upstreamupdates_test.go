@@ -96,7 +96,10 @@ func TestPRBodyCarriesNoBacktickedCLICommand(t *testing.T) {
 	// for the non-draft fallback, and checking only the draft one is how a
 	// backticked `llz ci tf-import` got into the other half unnoticed.
 	for _, draft := range []bool{true, false} {
-		body := prBody(draft)
+		// A REALISTIC deployment list, not an empty one: applySection composes a
+		// different paragraph when there are none, and checking only that half is how
+		// a backticked command got into the other half of draftNote unnoticed.
+		body := prBody(draft, []string{"primary", "staging"})
 		if strings.Contains(body, "`llz ") {
 			t.Errorf("prBody(%t) contains a backticked llz command; use a fenced block so it tokenises "+
 				"clean if this text is ever moved back into a run: script", draft)

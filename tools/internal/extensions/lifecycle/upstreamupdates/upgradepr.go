@@ -231,6 +231,10 @@ func (d Decision) Summary(s State) string {
 // resolves every CLI invocation inside a `run:` script against the real cobra
 // tree, and it does not exempt prose — so a backticked command in a workflow
 // heredoc reds the gate. In Go it is just a string.
+// prBody TAKES `envs` because the body's last section names the deployments a
+// human has to dispatch after merging — see applyafter.go for why merging alone
+// changes nothing, and why that is invisible in the diff.
+//
 // prBody TAKES `draft` BECAUSE THE BODY MAKES A CLAIM ABOUT IT. createPR drops
 // --draft when the repository cannot open draft pull requests (a private repo on a
 // Free plan), and a fixed body then tells the reviewer the state-writing
@@ -238,8 +242,8 @@ func (d Decision) Summary(s State) string {
 // only other signal is a ::warning in the run log, which nobody reading the pull
 // request sees. Composed per attempt, so the body the reviewer reads describes the
 // pull request that was actually opened.
-func prBody(draft bool) string {
-	return prBodyHead + draftNote(draft) + prBodyTail
+func prBody(draft bool, envs []string) string {
+	return prBodyHead + draftNote(draft) + prBodyTail + applySection(envs)
 }
 
 // draftNote is the one paragraph that differs between the two.
