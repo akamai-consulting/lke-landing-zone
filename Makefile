@@ -1237,6 +1237,73 @@ symbol-ref-guard:
 # What is left below is genuinely conditional: EXTERNAL tools (shellcheck, tflint,
 # kube-linter, actionlint) and the two expensive ones (instance-test, coverage).
 # Those are not gates and the registry has no opinion about them.
+# lint-changed prints the file set `lint` decides from, one path per line.
+#
+# IT IS A TARGET RATHER THAN AN INLINE PIPELINE SO IT CAN BE TESTED. `lint` used
+# to compute this itself, as `git diff --name-only HEAD || git ls-files`, and that
+# set OMITS UNTRACKED FILES — so a branch whose work so far is new files produced
+# an empty set, hit the "nothing changed" arm, and exited 0 having run no checks
+# and no gates. Every other guard in this repo sits behind that arm.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# EVERYTHING HERE ANSWERS ONE QUESTION: does this target ever say "nothing" when
+# the answer is "something"? It has done, six ways, and each fix was narrower
+# than the defect — so the shape below is chosen to make whole classes of them
+# unrepresentable rather than to patch them one at a time.
+#
+# ASK GIT FROM THE REPOSITORY ROOT. `git ls-files` reports CWD-relative paths and
+# lists only the subtree; `git diff --name-only` reports repo-relative paths
+# unless diff.relative is set, and then reports nothing at all for a file outside
+# the CWD. Three separate ways for the set to shrink when `make` runs from
+# anywhere but the root — `make -C`, or the absolute `-f` this target's own tests
+# use — and lint's routing regexes are anchored (^tools/, ^kubernetes-charts/),
+# so a mis-spelled prefix silently skips the file.
+#
+# `-C "$$ROOT"` retires all three: from the root there is no subtree to be
+# scoped to, no prefix to lose and nothing for diff.relative to be relative to.
+# It replaced --full-name, `-- :/` and --no-relative, which is three flags whose
+# individual absence each looked survivable.
+#
+# THE SAME COMMAND IS THE GUARD. `git rev-parse --show-toplevel` fails outside a
+# repository AND inside a bare one — the two states where no changed set can
+# honestly be computed, and where every arm below would otherwise print nothing
+# and let `make lint` read that as "nothing changed". Getting the root and
+# deciding whether there is one are the same question, so they are one call.
+#
+# STDOUT DECIDES; STDERR ONLY EXPLAINS. The decision reads stdout alone, because
+# folding both together and testing the result means any git WARNING fails a
+# perfectly good checkout — `warning: unable to access '/root/.gitconfig'`, which
+# containers emit on every call, or GIT_TRACE_PERFORMANCE. The explanation takes
+# both, on a second call on the failure path only, because a bare repository
+# answers on STDOUT and an explanation that is blank exactly where the reader has
+# least to go on is worse than none.
+#
+# A REPOSITORY WITH NO COMMITS IS ASKED ABOUT DIRECTLY. There is no HEAD to diff
+# against, and the old code inferred that from a command substitution's exit
+# status — which is also how a dozen other failures look. `rev-parse --verify
+# HEAD` asks the question the branch is actually about. Both arms list untracked
+# files: the fallback means "could not tell, so lint everything", and its first
+# cut was `git ls-files` alone, which lists TRACKED files — nothing, in the state
+# that reaches it.
+#
+# --exclude-standard so .gitignore still applies: build output is not work.
+# ─────────────────────────────────────────────────────────────────────────────
+.PHONY: lint-changed
+lint-changed:
+	@ROOT=$$(git rev-parse --show-toplevel 2>/dev/null); \
+	if [ -z "$$ROOT" ] || [ ! -d "$$ROOT" ]; then \
+		echo "lint: cannot determine what changed, so it will not claim nothing did." >&2; \
+		echo "      git said: $$(git rev-parse --show-toplevel 2>&1)" >&2; \
+		echo "      Run 'make LINT_ALL=1 lint' to check everything regardless." >&2; \
+		exit 1; \
+	fi; \
+	{ if git -C "$$ROOT" rev-parse --verify -q HEAD >/dev/null; then \
+		git -C "$$ROOT" diff --name-only HEAD; \
+	  else \
+		git -C "$$ROOT" ls-files; \
+	  fi; \
+	  git -C "$$ROOT" ls-files --others --exclude-standard; } | sort -u
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
@@ -1245,9 +1312,9 @@ lint:
 		$(MAKE) --no-print-directory llz-gates; \
 		exit 0; \
 	fi; \
-	CHANGED=$$(git diff --name-only HEAD 2>/dev/null || git ls-files); \
+	CHANGED=$$($(MAKE) --no-print-directory lint-changed); \
 	if [ -z "$$CHANGED" ]; then \
-		echo "lint: nothing changed since last commit (use LINT_ALL=1 to run all checks)"; \
+		echo "lint: nothing changed and nothing untracked (use LINT_ALL=1 to run all checks)"; \
 		exit 0; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.go$$|go\.(mod|sum)$$'; then \

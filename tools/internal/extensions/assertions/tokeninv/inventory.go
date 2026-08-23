@@ -173,11 +173,25 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 		// Default `absent`, not `unknown`: the loop below only reaches its end
 		// having ASKED. An error downgrades it — never the other way round.
 		e := credtargets.SecretEntry{Name: t.Name, Class: t.Class, Expect: t.Expect, State: credtargets.TokenStateAbsent}
-		unreadable := false
-		for _, scope := range []string{env, ""} {
-			if scope == "" && env == "" {
-				continue // already tried the repo scope
+		unreadable, asked := false, false
+		for i, scope := range []string{env, ""} {
+			// THE DEDUPE IS POSITIONAL, AND IT USED TO BE BY VALUE. The two scopes
+			// are the environment's and the repository's, and with no environment
+			// they are the same request — so the second is skipped. Written as
+			// `if scope == "" && env == ""` that condition is true of BOTH
+			// iterations, because the first scope IS env, which is "". With REGION
+			// unset the probe was never called at all.
+			//
+			// Nothing failed. Every GitHub secret came back `absent`, which is a
+			// verdict rather than an error, so SecretProbeVerdict still reported
+			// ok; the reconciler then published llz_credential_configured=0 for
+			// all ten and LLZCredentialUnconfigured fired fleet-wide, against an
+			// inventory that had asked nothing. Existing tests all pass
+			// env="infra-primary", the one input that hides it.
+			if i == 1 && env == "" {
+				continue // the repo scope is what iteration 0 just asked
 			}
+			asked = true
 			ts, ok, err := probe(scope, t.Name)
 			if err != nil {
 				// A 404 is NOT an error here — SecretUpdatedAt returns (‥, false,
@@ -196,7 +210,25 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 		}
 		// Found in one scope, refused in the other, is still found: only downgrade
 		// when nothing answered affirmatively anywhere.
-		if e.State != credtargets.TokenStateOK && unreadable {
+		//
+		// `!asked` is the second half, and it is the structural version of the
+		// comment above the default. That comment asserted the loop "only reaches
+		// its end having ASKED" and the loop did not; asserting it in prose is
+		// what let the guard above be wrong for as long as it was. Now a loop that
+		// probed nothing reports `unknown` whatever the reason, so the next edit
+		// to the skip condition cannot turn silence back into a clean bill of
+		// health.
+		//
+		// IT IS UNREACHABLE TODAY AND DELIBERATELY KEPT, which is worth saying
+		// because it reads like a coverage gap. With the guard above correct,
+		// every target is probed at least once, so no test can drive `!asked`
+		// without reaching past the package — and one that stubbed its way there
+		// would be pinning the stub. The arm is not here to be exercised; it is
+		// here so the NEXT wrong skip condition is a false alarm instead of a
+		// silent all-clear. TestEveryScopeActuallyProbes pins the reachable half
+		// by counting calls, which is the only thing that distinguishes "absent"
+		// from "never asked".
+		if e.State != credtargets.TokenStateOK && (unreadable || !asked) {
 			e.State = credtargets.TokenStateUnknown
 		}
 		if e.Scope == "" {

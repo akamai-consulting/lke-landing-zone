@@ -36,7 +36,14 @@ import (
 
 // installConvergeDeps hands converge the capabilities it declares. Called once
 // from ci.go before any verb runs.
-func installConvergeDeps(g globalOpts) {
+//
+// IT TAKES NO globalOpts, and that is load-bearing rather than tidiness. It used
+// to take one for a single field, `DryRun: g.DryRun` — and since this runs while
+// the command tree is being BUILT, that copied cliopts.Global before cobra had
+// parsed anything. Passing the struct in at all is what made the freeze possible
+// and made it look deliberate; removing the parameter removes the shape.
+// --dry-run is now read inside RunE by the one verb that needs it.
+func installConvergeDeps() {
 	converge.Install(converge.Deps{
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what converge's binding declared, not whatever an argv can express.
@@ -44,7 +51,6 @@ func installConvergeDeps(g globalOpts) {
 		Exec:         execOutput,
 		ExecCombined: execCombined,
 		Summary:      ghaout.Append,
-		DryRun:       g.DryRun,
 		StripOversizedCRDLastApplied: func() []string {
 			return teardown.StripOversizedCRDLastApplied(teardown.KubectlBoolViaExec(teardownDeps()))
 		},
