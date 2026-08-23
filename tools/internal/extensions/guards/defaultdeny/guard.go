@@ -156,7 +156,12 @@ func matches(sel *selector, labels map[string]string) bool {
 		return true
 	}
 	for k, v := range sel.MatchLabels {
-		if labels[k] != v {
+		// TWO-VALUE LOOKUP. `labels[k] != v` reads a MISSING key as the empty
+		// string, so a selector entry with an empty value — `{foo: ""}`, which is
+		// legal and which people write — would match every pod LACKING that key
+		// entirely, and mark an unselected pod as granted egress it does not have.
+		got, ok := labels[k]
+		if !ok || got != v {
 			return false
 		}
 	}
@@ -236,6 +241,19 @@ func Collect(repo capability.Repo, dirs []string) (policies []policy, workloads 
 		for _, d := range guardwalk.DecodeDocs(string(raw), func(d ddDoc) bool {
 			return d.Kind == "NetworkPolicy" || workloadKinds[d.Kind]
 		}) {
+			// A NAMESPACE IS THE JOIN KEY, so an object without one cannot be judged
+			// and must not be bucketed into pseudo-namespace "". That is the one
+			// vacuity arm in this guard that would fail OPEN: an unnamespaced
+			// default-deny would police nothing this guard can see, and an
+			// unnamespaced pod template would read as unpoliced. Namespace-agnostic
+			// manifests are normal in a kustomize component, so this is a matter of
+			// time rather than a hypothetical.
+			if d.Metadata.Namespace == "" {
+				return fmt.Errorf("%s: %s/%s declares no metadata.namespace, and this guard joins policies "+
+					"to pods BY namespace — it cannot place either side. Add the namespace, or exclude the "+
+					"file from the scan roots; passing over it would read as \"nothing polices this pod\"",
+					path, d.Kind, d.Metadata.Name)
+			}
 			if d.Kind == "NetworkPolicy" {
 				policies = append(policies, policy{
 					file: path, name: d.Metadata.Name, namespace: d.Metadata.Namespace,
@@ -296,6 +314,30 @@ func Run(root string) error {
 	if len(workloads) == 0 {
 		return fmt.Errorf("default-deny-egress: %d manifest file(s) examined and not one pod template "+
 			"among them — there is nothing left to judge and this would pass vacuously", examined)
+	}
+
+	// THE RENDERED TREE MUST CONTRIBUTE, NOT MERELY EXIST. Checking only that the
+	// directory is there let an EMPTY one pass: platform-apl/ alone supplies 23
+	// policies, so neither the corpus check nor the len(policies)==0 backstop
+	// fires, and the guard printed OK over the very pod it exists to find. That is
+	// reachable two ways — `llz ci gates --only default-deny-egress`, which the
+	// Makefile advertises and which carries no render-charts prerequisite, and a
+	// render-charts.sh run that dies after its own `rm -rf; mkdir -p`.
+	//
+	// The namespace-wide default-denies live in the CHARTS. If none came from the
+	// rendered tree, every pod reads as unpoliced and this guard has nothing to say.
+	fromRendered := 0
+	for _, p := range policies {
+		if strings.HasPrefix(p.file, renderedChartsDir+"/") {
+			fromRendered++
+		}
+	}
+	if fromRendered == 0 {
+		return fmt.Errorf("default-deny-egress: %s contributed no NetworkPolicy to the scan (%d found, all "+
+			"from the platform tree). The namespace-wide default-denies live in the CHARTS, so without them "+
+			"every pod reads as unpoliced and this would pass over exactly the class it exists for. Run "+
+			"`make render-charts`, or `make default-deny-egress`, which does it for you",
+			renderedChartsDir, len(policies))
 	}
 
 	findings, err := Scan(policies, workloads)

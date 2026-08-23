@@ -11,6 +11,7 @@ package registry
 // added for with nothing.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,5 +110,87 @@ func TestSomeExtensionNamesDifferFromTheirPackage(t *testing.T) {
 	if total := len(All()); total != 69 {
 		t.Errorf("the registry holds %d extensions; the same three comments say sixty-nine. "+
 			"Same rule: update the prose with the set.", total)
+	}
+}
+
+// ── the census sites nothing compared ───────────────────────────────────────
+
+// repoRootForCensus walks up from the package dir to the repo root (the dir
+// holding docs/designs/), so the test is independent of where `go test` runs.
+func repoRootForCensus(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "docs", "designs")); err == nil {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	t.Skip("repo root not reachable from here")
+	return ""
+}
+
+// TestProseCensusSitesAgreeWithTheRegistry.
+//
+// package_test.go above pins the three comments that justify Package(); this pins
+// the four that state the SIZE of the model. They were unpinned, so
+// `make lint LINT_ALL=1` stayed green while two design docs and a runtime help
+// string said 68 extensions / 29 gates against a registry holding 69 and 30 —
+// found by a code review, which is not a mechanism.
+//
+// Asserting the NUMBER IS PRESENT rather than parsing the sentence: these are
+// prose, and pinning their wording would make every rephrase a test failure. What
+// must not drift is the figure.
+func TestProseCensusSitesAgreeWithTheRegistry(t *testing.T) {
+	root := repoRootForCensus(t)
+	exts, gates := len(All()), len(Gates())
+
+	for _, tc := range []struct {
+		file string
+		want []string
+		why  string
+	}{
+		{"docs/designs/internal-extension-model.md",
+			[]string{fmt.Sprintf("%d extensions", exts)},
+			"the design doc's own headline count"},
+		{"docs/designs/README.md",
+			[]string{fmt.Sprintf("%d extensions", exts), fmt.Sprintf("%d gate rows", gates)},
+			"the index row that summarises the model"},
+		{"tools/internal/extensions/guards/k8sminorcoherence/extension.go",
+			nil, // asserted by ABSENCE below — it must not restate a count
+			"a runtime help string that quoted the gate count"},
+	} {
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(tc.file)))
+		if err != nil {
+			t.Errorf("read %s: %v", tc.file, err)
+			continue
+		}
+		body := string(b)
+		for _, w := range tc.want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s no longer says %q (%s). The registry holds %d extensions and %d gates; "+
+					"update the prose in the same commit that changed the set — a count nothing "+
+					"compares is a footnote, not a measurement.", tc.file, w, tc.why, exts, gates)
+			}
+		}
+	}
+
+	// The k8sminorcoherence help string used to say "all twenty-nine gates". A
+	// spelled-out count inside a runtime string cannot be pinned by a number
+	// search, so the rule for that one is simpler: do not state a count there.
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(
+		"tools/internal/extensions/guards/k8sminorcoherence/extension.go")))
+	if err != nil {
+		t.Fatalf("read k8sminorcoherence/extension.go: %v", err)
+	}
+	for _, spelled := range []string{"twenty-eight gates", "twenty-nine gates", "thirty gates", "thirty-one gates"} {
+		if strings.Contains(string(b), spelled) {
+			t.Errorf("k8sminorcoherence/extension.go states %q in a runtime help string. It is not "+
+				"reachable by a count-bearing test, and it went stale exactly that way — say "+
+				"\"every gate in the driver\" instead of a number", spelled)
+		}
 	}
 }

@@ -346,3 +346,77 @@ func TestRenderedDirMatchesMakefile(t *testing.T) {
 		t.Errorf("Makefile RENDER_DIR is %q, this guard's constant is %q", m[1], renderedChartsDir)
 	}
 }
+
+// ── from the code review of the PR that introduced this guard ───────────────
+
+// TestRunRefusesWhenTheRenderedTreeContributedNothing.
+//
+// Checking only that `rendered/` EXISTS let an empty one pass. platform-apl/
+// alone supplies 23 policies, so neither RequireCorpus nor the len(policies)==0
+// backstop fires — and the guard printed OK over the very pod it exists to find.
+// Reachable two ways: `llz ci gates --only default-deny-egress`, which the
+// Makefile advertises and which carries no render-charts prerequisite, and a
+// render-charts.sh run that dies after its own `rm -rf; mkdir -p`.
+//
+// The namespace-wide default-denies live in the CHARTS. Without them every pod
+// reads as unpoliced, which is a pass over the whole class.
+func TestRunRefusesWhenTheRenderedTreeContributedNothing(t *testing.T) {
+	_, err := runIn(t, map[string]string{
+		// rendered/ exists and holds YAML, but no NetworkPolicy.
+		"rendered/chart.yaml": "kind: ConfigMap\nmetadata: {name: c, namespace: llz-openbao}\n",
+		// The platform tree alone supplies both a policy and a pod, so every other
+		// vacuity arm is satisfied.
+		"platform-apl/components/openbao/np.yaml": "kind: NetworkPolicy\nmetadata: {name: watcher-np, namespace: llz-openbao}\n" +
+			"spec:\n  podSelector:\n    matchLabels: {app.kubernetes.io/name: watcher}\n  policyTypes: [Egress]\n  egress:\n    - ports: [{port: 443}]\n",
+		"platform-apl/components/openbao/w.yaml": "kind: Deployment\nmetadata: {name: watcher, namespace: llz-openbao}\n" +
+			"spec:\n  template:\n    metadata:\n      labels: {app.kubernetes.io/name: watcher}\n",
+	})
+	if err == nil {
+		t.Fatal("an empty rendered tree must not pass — the chart-side default-denies are the whole " +
+			"reason this guard reads two trees")
+	}
+	if !strings.Contains(err.Error(), "contributed no NetworkPolicy") {
+		t.Errorf("the error must name the rendered tree as the thing that was missing, got: %v", err)
+	}
+}
+
+// TestAnObjectWithNoNamespaceIsRefused. The namespace is the JOIN KEY, so an
+// object without one cannot be placed on either side — and bucketing it into
+// pseudo-namespace "" is the one arm here that would fail OPEN: an unnamespaced
+// default-deny polices nothing this guard can see, and an unnamespaced pod
+// template reads as unpoliced. Namespace-agnostic manifests are ordinary in a
+// kustomize component, so this is a matter of time.
+func TestAnObjectWithNoNamespaceIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"policy": {
+			"rendered/c.yaml":                  "kind: NetworkPolicy\nmetadata: {name: deny}\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n",
+			"platform-apl/components/a/w.yaml": "kind: Deployment\nmetadata: {name: d, namespace: n}\nspec:\n  template:\n    metadata:\n      labels: {a: b}\n",
+		},
+		"workload": {
+			"rendered/c.yaml":                  "kind: NetworkPolicy\nmetadata: {name: deny, namespace: n}\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n",
+			"platform-apl/components/a/w.yaml": "kind: Deployment\nmetadata: {name: d}\nspec:\n  template:\n    metadata:\n      labels: {a: b}\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := runIn(t, files)
+			if err == nil || !strings.Contains(err.Error(), "declares no metadata.namespace") {
+				t.Fatalf("an object with no namespace cannot be joined and must be refused, got %v", err)
+			}
+		})
+	}
+}
+
+// TestAnEmptyMatchLabelValueDoesNotMatchAMissingKey. `labels[k] != v` reads a
+// MISSING key as the empty string, so a selector entry with an empty value —
+// `{foo: ""}`, which is legal and which people write — matched every pod LACKING
+// that key entirely, and would mark an unselected pod as granted egress it does
+// not have.
+func TestAnEmptyMatchLabelValueDoesNotMatchAMissingKey(t *testing.T) {
+	sel := &selector{MatchLabels: map[string]string{"sidecar.istio.io/inject": ""}}
+	if matches(sel, map[string]string{"app.kubernetes.io/name": "watcher"}) {
+		t.Error("a pod that does not carry the key at all is not selected by it")
+	}
+	if !matches(sel, map[string]string{"sidecar.istio.io/inject": ""}) {
+		t.Error("a pod carrying the key with an empty value IS selected")
+	}
+}
