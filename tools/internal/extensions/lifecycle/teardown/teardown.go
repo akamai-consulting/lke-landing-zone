@@ -39,10 +39,17 @@ type teardownClient interface {
 	DeleteResourcePath(ctx context.Context, path string) error
 }
 
-// newTeardownClient takes `mutating` because its three callers differ: RunCapture
-// only lists, while RunForceDelete and RunDeleteVPC delete unconditionally. One
-// factory handing all three a delete-capable client would make the read-only one
-// indistinguishable from the destroying ones at the transport.
+// newTeardownClient takes `mutating` because its three callers differ, and all
+// three now narrow on the RUN rather than on the call site: RunCapture only ever
+// lists, while RunForceDelete and RunDeleteVPC delete only when confirmed.
+//
+// This header used to say those two "delete unconditionally", which was a
+// description of the defect rather than of the intent — they passed a hardcoded
+// `true`, so a dry run held a DELETE-capable transport through the two most
+// destructive verbs in the package. One factory handing every caller a
+// delete-capable client would make the read-only one indistinguishable from the
+// destroying ones at the transport, and a hardcoded `true` made the dry run
+// indistinguishable from the real thing.
 var newTeardownClient = func(token string, mutating bool) teardownClient {
 	return capability.CloudFor(cloudBinding(mutating)).Client(token, 60*time.Second)
 }

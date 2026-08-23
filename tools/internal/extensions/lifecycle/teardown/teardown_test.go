@@ -576,3 +576,26 @@ func TestDestructiveVerbsStillTakeTheMutatingBindingWhenConfirmed(t *testing.T) 
 		t.Error("a confirmed force-delete must actually delete")
 	}
 }
+
+// TestDeleteVPCTakesTheMutatingBindingWhenConfirmed. The sibling above covers
+// force-delete only; the PR body claimed it pinned "the other side" for both,
+// which it did not. Getting this one wrong is not a missed backstop — it is every
+// `DELETE /v4/vpcs/<id>` refused at the transport and a VPC left behind on every
+// teardown.
+func TestDeleteVPCTakesTheMutatingBindingWhenConfirmed(t *testing.T) {
+	fake := &fakeTeardownClient{vpcs: []map[string]any{{"id": float64(55), "label": "e2e-lke-vpc"}}}
+	dir, _ := withTeardown(t, fake, teardownTFVars)
+	bindings := recordTeardownBinding(t, fake)
+	d := stubTerraformOutputs(t, map[string]string{})
+
+	if err := RunDeleteVPC(d, "e2e", dir, "", 3, 0, false); err != nil {
+		t.Fatalf("delete-vpc: %v", err)
+	}
+	if len(*bindings) == 0 || !(*bindings)[0] {
+		t.Errorf("a confirmed delete-vpc must hold the mutating binding, got %v — with the read binding "+
+			"every VPC DELETE is refused at the transport and the VPC leaks", *bindings)
+	}
+	if len(fake.deletes) == 0 {
+		t.Error("a confirmed delete-vpc must actually delete")
+	}
+}

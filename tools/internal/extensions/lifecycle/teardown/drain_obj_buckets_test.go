@@ -238,3 +238,52 @@ func TestDeleteObjectsWillNotCountAnUnparseableBody(t *testing.T) {
 		t.Errorf("survivors = %d, want 3 — a body this cannot parse must not be read as a clean delete", survived)
 	}
 }
+
+// ── from the code review of this PR ─────────────────────────────────────────
+
+// TestReadBoundedBodyDetectsMoreThanItKept. Every test in this package stubs
+// s3PostWithBody, so the truncation flag's own derivation had no coverage: drop
+// the `+1` from the LimitReader and `truncated` is permanently false, the guard
+// that reads it becomes dead code, and the suite stays green. Reading one byte
+// PAST the limit is the whole mechanism — io.LimitReader returns a short read
+// with NO error, so without it a truncated body is indistinguishable from a
+// complete one.
+func TestReadBoundedBodyDetectsMoreThanItKept(t *testing.T) {
+	for name, tc := range map[string]struct {
+		size    int
+		wantLen int
+		wantTr  bool
+	}{
+		"well under the cap": {1024, 1024, false},
+		"exactly at the cap": {s3ResponseReadLimit, s3ResponseReadLimit, false},
+		"one byte over":      {s3ResponseReadLimit + 1, s3ResponseReadLimit, true},
+		"far over":           {s3ResponseReadLimit * 2, s3ResponseReadLimit, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, truncated := readBoundedBody(strings.NewReader(strings.Repeat("x", tc.size)))
+			if len(got) != tc.wantLen || truncated != tc.wantTr {
+				t.Errorf("readBoundedBody(%d bytes) = (%d bytes, truncated=%v), want (%d, %v)",
+					tc.size, len(got), truncated, tc.wantLen, tc.wantTr)
+			}
+		})
+	}
+}
+
+// TestDeleteObjectsTreatsAnEmptyBodyAsSuccess. Quiet mode reports only FAILURES,
+// so a 2xx with nothing in it means every key went — and xml.Unmarshal returns
+// io.EOF for it, which the unparseable catch-all graded as "every key survived".
+// On a multi-page bucket that stalls the drain for drainMaxStalledRounds and then
+// fails, while the deletes were succeeding the whole time.
+func TestDeleteObjectsTreatsAnEmptyBodyAsSuccess(t *testing.T) {
+	prev := s3PostWithBody
+	t.Cleanup(func() { s3PostWithBody = prev })
+	for _, body := range []string{"", "\n", "   \n\t"} {
+		s3PostWithBody = func(_, _, _, _, _ string, _ []byte) (int, string, bool, error) {
+			return 200, body, false, nil
+		}
+		survived, err := s3DeleteObjects("ak", "sk", "ep", "b", []string{"a", "b"})
+		if err != nil || survived != 0 {
+			t.Errorf("an empty 2xx body means nothing failed; got (%d, %v) for %q", survived, err, body)
+		}
+	}
+}

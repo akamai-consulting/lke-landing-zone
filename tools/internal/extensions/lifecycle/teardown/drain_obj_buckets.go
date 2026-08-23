@@ -333,12 +333,26 @@ var s3PostWithBody = func(ak, sk, endpoint, path, query string, body []byte) (in
 	// 1 MiB comfortably holds a full 1000-key failure report; reading one byte past
 	// it is how the caller learns the body did NOT fit, so it can decline to count
 	// rather than count wrong.
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, s3ResponseReadLimit+1))
-	truncated := len(rb) > s3ResponseReadLimit
-	if truncated {
-		rb = rb[:s3ResponseReadLimit]
+	respBody, truncated := readBoundedBody(resp.Body)
+	return resp.StatusCode, respBody, truncated, nil
+}
+
+// readBoundedBody reads at most s3ResponseReadLimit bytes and reports whether
+// there was more.
+//
+// EXTRACTED SO THE TRUNCATION FLAG IS TESTABLE. Every test in this package stubs
+// s3PostWithBody, so the flag's own derivation had no coverage at all: dropping
+// the `+1` makes `truncated` permanently false, turns the guard that reads it
+// into dead code, and leaves the suite green. Reading one byte PAST the limit is
+// the whole mechanism — io.LimitReader returns a short read with no error, so
+// without the extra byte a truncated body is indistinguishable from a complete
+// one.
+func readBoundedBody(r io.Reader) (string, bool) {
+	rb, _ := io.ReadAll(io.LimitReader(r, s3ResponseReadLimit+1))
+	if len(rb) > s3ResponseReadLimit {
+		return string(rb[:s3ResponseReadLimit]), true
 	}
-	return resp.StatusCode, string(rb), truncated, nil
+	return string(rb), false
 }
 
 // s3ResponseReadLimit bounds how much of an S3 response body is read. See
@@ -401,6 +415,16 @@ var s3DeleteObjects = func(ak, sk, endpoint, bucket string, keys []string) (int,
 			Key  string `xml:"Key"`
 			Code string `xml:"Code"`
 		} `xml:"Error"`
+	}
+	// AN EMPTY BODY IS SUCCESS, NOT AN UNPARSEABLE ONE. Quiet mode reports only
+	// FAILURES, so a 2xx with nothing in it means every key went — and
+	// xml.Unmarshal returns io.EOF for it, which the catch-all below would grade as
+	// "every key survived". On a multi-page bucket that stalls the drain for
+	// drainMaxStalledRounds and then fails, while the deletes were succeeding the
+	// whole time. Separating the two is the difference between "I could not
+	// understand the answer" and "the answer was: nothing failed".
+	if strings.TrimSpace(respBody) == "" {
+		return 0, nil
 	}
 	if err := xml.Unmarshal([]byte(respBody), &result); err != nil {
 		return len(keys), nil
