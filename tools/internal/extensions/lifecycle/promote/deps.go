@@ -1,6 +1,11 @@
 package promote
 
-import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+import (
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
+)
 
 // Deps carries what this package cannot reach for itself.
 //
@@ -34,4 +39,36 @@ type Deps struct {
 	// across the boundary to answer a one-line question. The narrowest seam that
 	// answers the question is the seam.
 	InstanceRepo func() string
+}
+
+// DefaultDeps is the PRODUCTION wiring of the four seams above — the instance
+// tree as it really sits on disk.
+//
+// IT EXISTS SO THERE IS EXACTLY ONE OF IT. This was previously built inline in
+// internal/cli, where `llz env pipeline` was the only caller and a local literal
+// was the right size for the job. It stopped being the only caller when `llz
+// doctor` began asking the same question, and a second hand-built Deps is the
+// standing invitation for the two to answer it differently — which is precisely
+// the defect this whole check exists to catch, committed one layer down. The CI
+// gate and the local pre-flight must read the same tfvars, the same spec and the
+// same .copier-answers.yml, or a green doctor stops being evidence about CI.
+//
+// Callers that need to substitute a seam still build a Deps literal; nothing here
+// is installed, and Deps stays threaded as a parameter.
+func DefaultDeps() Deps {
+	return Deps{
+		Layout:          instancelayout.Detect,
+		ListDeployments: envtopology.ListDeployments,
+		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
+		// Narrowed to the one field this package reads. Handing over the whole
+		// `answers` struct would put the copier-answers model on the other side of
+		// the boundary to answer a one-line question.
+		InstanceRepo: func() string {
+			a, _ := answers.Read(".")
+			if a == nil {
+				return ""
+			}
+			return a.InstanceRepo
+		},
+	}
 }

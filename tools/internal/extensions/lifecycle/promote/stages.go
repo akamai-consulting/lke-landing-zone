@@ -520,15 +520,37 @@ func (p Plan) Advisories() []string {
 		out = append(out, fmt.Sprintf("promote.yml: stage %q applies %q — an expression, so llz cannot check it against the spec. UNVERIFIED, not accepted: whatever it resolves to at run time must be a declared deployment.", s.Job, s.Env))
 	}
 	if missingPreflight(p.Stages) {
+		// THE ROUTE TO ADOPTING IT DEPENDS ON THE DEPLOYMENT COUNT, and naming only
+		// the chain route was a dead end for the instances most likely to be here.
+		// "Set promotionRank on the deployments you chain" is unactionable advice on
+		// an instance that declares one deployment — there is nothing to chain to, and
+		// the operator is left with the hand-copy as their only option for a file llz
+		// can now generate outright.
+		adopt := "set promotionRank on the deployments you chain and run `llz env pipeline`"
+		if len(p.Declared) == 1 {
+			adopt = "run `llz env pipeline` — with one declared deployment it generates the single stage, preflight included"
+		}
 		out = append(out, "promote.yml: no stage chains from a non-stage job, so this pipeline has no preflight — a dispatch runs with nothing checking it first. "+
 			"Instances generated before the preflight existed are in this state, and `llz upgrade` will not add it (promote.yml is `owned`). "+
-			"To adopt it: set promotionRank on the deployments you chain and run `llz env pipeline`, or copy the llz-preflight job from docs/environments-and-promotion.md.")
+			"To adopt it: "+adopt+", or copy the llz-preflight job from docs/environments-and-promotion.md.")
 	}
 	return out
 }
 
-// NoPipelineErr reports that there is no pipeline to run — fewer than two stages
-// in the file being dispatched.
+// NoPipelineErr reports that the file being dispatched has no promotion to run.
+//
+// "NO PROMOTION" IS NOT "FEWER THAN TWO STAGES", and reading it that way made the
+// gate reject the exact file llz had just generated. A single-deployment instance
+// gets a one-stage pipeline (see PlanWorkflow): dispatching it applies that
+// deployment, which is a promotion doing its whole job for the topology it has.
+// The failure this arm exists for is a dispatch that applies NOTHING — the
+// operator pressed Run workflow and the run promotes nobody — so that is what it
+// counts.
+//
+// The one remaining way a non-empty file can still be no pipeline: one applying
+// stage on an instance declaring SEVERAL deployments. That file silently skips
+// the rest, and unlike the solo case there is a real ordering question it is not
+// answering.
 //
 // SEPARATE FROM UndeclaredErr BECAUSE THE TWO CONTEXTS WANT OPPOSITE ANSWERS, and
 // collapsing them is what produced the failure this whole change is about. On a
@@ -545,11 +567,15 @@ func (p Plan) NoPipelineErr() error {
 	// A `plan`-only preview job is a stage for the name check and not a promotion, so
 	// counting it here let "one apply plus one plan" satisfy "a chain over at least 2".
 	applies := promotingStages(p.Stages)
-	if len(applies) >= 2 {
+	if len(applies) >= 2 || (len(applies) == 1 && len(p.Declared) == 1) {
 		return nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "no promotion pipeline to run — promote.yml declares %d applying stage(s), and a pipeline is a chain over at least 2", len(applies))
+	if len(applies) == 0 {
+		fmt.Fprintf(&b, "no promotion to run — promote.yml declares %d applying stage(s), so dispatching it applies nothing", len(applies))
+	} else {
+		fmt.Fprintf(&b, "no promotion pipeline to run — promote.yml applies 1 deployment while this instance declares %d, so the rest are silently skipped", len(p.Declared))
+	}
 	if len(p.Stages) > len(applies) {
 		fmt.Fprintf(&b, "\n(%d job(s) call llz-terraform.yml without `action: apply` — those promote nothing)", len(p.Stages)-len(applies))
 	}
@@ -558,8 +584,14 @@ func (p Plan) NoPipelineErr() error {
 	} else {
 		fmt.Fprintf(&b, "\ndeclared deployments: %s", strings.Join(p.Declared, ", "))
 	}
-	b.WriteString("\nto build one: set promotionRank (ascending: 1, 2, 3 …) on at least two deployments" +
-		"\n              in environments/<env>.yaml, then run `llz env pipeline` and commit the result" +
-		"\nto apply ONE deployment without a pipeline, dispatch .github/workflows/terraform.yml instead")
+	// THE REMEDY IS `llz env pipeline` IN BOTH ARMS NOW, and it did not use to be.
+	// It closed with "to apply ONE deployment without a pipeline, dispatch
+	// terraform.yml instead" — which was the only honest advice while a
+	// single-deployment instance could not have a pipeline, and is a dead end now
+	// that it can. Generation is the answer at every deployment count: one stage at
+	// one, a chain at two or more.
+	b.WriteString("\nfix: run `llz env pipeline` and commit the result — it generates a single stage when" +
+		"\n     this instance declares one deployment, and a needs:-chain once two or more" +
+		"\n     carry a promotionRank (ascending: 1, 2, 3 …) in environments/<env>.yaml")
 	return fmt.Errorf("%s", b.String())
 }

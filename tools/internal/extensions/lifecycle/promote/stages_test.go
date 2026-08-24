@@ -296,10 +296,23 @@ func TestNoPipelineErrOnlyFiresWhenAskedFor(t *testing.T) {
 	if !strings.Contains(err.Error(), "declared deployments: prod") {
 		t.Errorf("message must name the deployments that DO exist:\n%s", err)
 	}
-	// One stage is still not a pipeline — a chain needs something to chain to.
+	// ONE STAGE OVER ONE DEPLOYMENT IS A PIPELINE. It used to fail here, which meant
+	// llz generated a file its own dispatch preflight rejected. There is no ordering
+	// question on a single-deployment instance, and dispatching this applies the one
+	// thing there is to apply.
 	one := Plan{Stages: []StageRef{{Job: "prod", Env: "prod", Action: "apply"}}, Declared: []string{"prod"}}
-	if one.NoPipelineErr() == nil {
-		t.Error("a single-stage promote.yml is not a pipeline")
+	if err := one.NoPipelineErr(); err != nil {
+		t.Errorf("one stage over one declared deployment IS the pipeline: %v", err)
+	}
+	// One stage over SEVERAL deployments is still not one: that file silently skips
+	// the rest, and unlike the solo case there is a real order it is not answering.
+	skips := Plan{Stages: []StageRef{{Job: "prod", Env: "prod", Action: "apply"}}, Declared: []string{"dev", "prod"}}
+	err = skips.NoPipelineErr()
+	if err == nil {
+		t.Fatal("one applying stage across two declared deployments is not a pipeline")
+	}
+	if !strings.Contains(err.Error(), "silently skipped") {
+		t.Errorf("the message must say what the file leaves out:\n%s", err)
 	}
 	two := Plan{Stages: []StageRef{
 		{Job: "dev", Env: "dev", Action: "apply"},
@@ -313,10 +326,14 @@ func TestNoPipelineErrOnlyFiresWhenAskedFor(t *testing.T) {
 	// so it read as a stage and "one apply plus one plan" satisfied "a chain over at
 	// least 2" — a dispatch that promotes exactly one deployment and calls it a
 	// pipeline. The name check still covers plan jobs; only the count narrowed.
+	// TWO DECLARED DEPLOYMENTS HERE, deliberately. With one, a lone applying stage is
+	// the correct pipeline and this would pass for a reason that has nothing to do
+	// with the plan job — the scar would still be "covered" by a test that could no
+	// longer fail for it.
 	planPlusApply := Plan{Stages: []StageRef{
 		{Job: "preview", Env: "prod", Action: "plan"},
 		{Job: "prod", Env: "prod", Action: "apply", Needs: []string{"preview"}},
-	}, Declared: []string{"prod"}}
+	}, Declared: []string{"dev", "prod"}}
 	err = planPlusApply.NoPipelineErr()
 	if err == nil {
 		t.Fatal("one apply plus one plan is not a two-stage pipeline")
@@ -333,12 +350,18 @@ func TestNoPipelineErrOnlyFiresWhenAskedFor(t *testing.T) {
 	}
 }
 
-// THE ROUTE BACK TO GREEN, end to end, on the one instance shape this PR is
-// about: one deployment, no ranks, three stale stages. `llz env pipeline` must be
-// able to reach a state `--check` accepts, using only the deployments that exist.
-// It could not before — the fix it printed needed two ranked deployments, which is
-// unreachable when you have one.
-func TestStaleStagesWithTooFewRanksRegenerateToTheEmptyPipeline(t *testing.T) {
+// THE ROUTE BACK TO GREEN, end to end, on the gsap-apl shape: one deployment, no
+// ranks, three stale stages. `llz env pipeline` must reach a state `--check`
+// accepts using only the deployments that exist — it could not at all before (the
+// fix it printed needed two ranked deployments, unreachable when you have one),
+// and what it reached next was the EMPTY placeholder: green, and a `Promote`
+// button that promoted nothing while the operator was told to go drive
+// terraform.yml by hand.
+//
+// It now lands on the single-stage pipeline, which is the whole point: one
+// deployment has no ordering question, so the pipeline is the one stage that
+// applies it, and dispatching it RUNS.
+func TestStaleStagesWithOneDeploymentRegenerateToTheSoloPipeline(t *testing.T) {
 	root := t.TempDir()
 	chdir(t, root)
 	writeCluster(t, "tf", map[string]string{"prod.tfvars": "region = \"us-ord\"\n"})
@@ -352,11 +375,23 @@ func TestStaleStagesWithTooFewRanksRegenerateToTheEmptyPipeline(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	if !plan.Changed || plan.Content == "" {
-		t.Fatal("want a placeholder to write")
+		t.Fatal("want a pipeline to write")
+	}
+	// It applies the deployment that exists, and only that one.
+	if !strings.Contains(plan.Content, "region: prod") {
+		t.Errorf("the generated stage must apply the declared deployment:\n%s", plan.Content)
+	}
+	for _, gone := range []string{"region: dev", "region: staging"} {
+		if strings.Contains(plan.Content, gone) {
+			t.Errorf("the stale stage %q must not survive the regeneration:\n%s", gone, plan.Content)
+		}
+	}
+	// A rank the spec never set must not be printed as one.
+	if strings.Contains(plan.Content, "(rank 0)") {
+		t.Errorf("an unranked solo deployment must not be labelled rank 0:\n%s", plan.Content)
 	}
 	applyPlan(t, plan)
 
-	// After the write the file is stage-less, so the PR gate passes...
 	after, err := PlanWorkflow(testDeps(), "tf", "")
 	if err != nil {
 		t.Fatalf("plan after write: %v", err)
@@ -366,6 +401,50 @@ func TestStaleStagesWithTooFewRanksRegenerateToTheEmptyPipeline(t *testing.T) {
 	}
 	if after.Changed {
 		t.Error("regenerating twice must be a no-op")
+	}
+	// AND IT MUST BE DISPATCHABLE. This is the assertion that would have caught the
+	// old answer: the empty placeholder passed every check above and then failed its
+	// own preflight, so llz generated a file it went on to reject.
+	if err := after.RunnableErr(true); err != nil {
+		t.Errorf("the generated solo pipeline must survive its own dispatch preflight: %v", err)
+	}
+}
+
+// The EMPTY placeholder is still the right answer where it always was: an
+// unrunnable file on an instance that has too few ranks AND more than one
+// deployment, where llz cannot know the order the operator wants.
+func TestStaleStagesWithSeveralUnrankedDeploymentsRegenerateToTheEmptyPipeline(t *testing.T) {
+	root := t.TempDir()
+	chdir(t, root)
+	writeCluster(t, "tf", map[string]string{
+		"dev.tfvars":  "region = \"us-ord\"\n",
+		"prod.tfvars": "region = \"us-ord\"\n",
+	})
+	if err := os.MkdirAll(filepath.Join(".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// `staging` is declared nowhere, so the file is unrunnable and the write is
+	// authorised — but dev and prod carry no rank, so there is no chain to render.
+	mustWrite(t, filepath.Join(".github", "workflows", "promote.yml"), threeStageWorkflow)
+
+	plan, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if !plan.Changed || plan.Content == "" {
+		t.Fatal("want a placeholder to write")
+	}
+	if !strings.Contains(plan.Note, "stage(s) name deployments") {
+		t.Errorf("the note must count the stages that authorised the write; got %q", plan.Note)
+	}
+	applyPlan(t, plan)
+
+	after, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan after write: %v", err)
+	}
+	if err := after.RunnableErr(false); err != nil {
+		t.Errorf("the regenerated file must satisfy the PR gate: %v", err)
 	}
 	// ...and dispatching it still fails, because there genuinely is no pipeline.
 	if after.RunnableErr(true) == nil {
@@ -426,16 +505,19 @@ func TestValidUnrankedStagesAreNotOverwritten(t *testing.T) {
 // "generating the no-stage placeholder".
 func TestNoteDoesNotClaimAWriteThatDidNotHappen(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		ranked, onDisk int
-		mustNotSay     string
-		mustSay        string
+		name                     string
+		ranked, onDisk, declared int
+		mustNotSay               string
+		mustSay                  string
 	}{
-		{"nothing on disk", 1, 0, "generating", "nothing to generate yet"},
-		{"valid unranked stages", 0, 3, "generating", "not managing this file"},
+		{"nothing on disk", 1, 0, 0, "generating", "nothing to generate yet"},
+		{"valid unranked stages", 0, 3, 2, "generating", "not managing this file"},
+		// The solo arm: same claim about who owns the file, and a remedy that
+		// exists for an instance with nothing to chain to.
+		{"one declared deployment", 0, 1, 1, "generating", "did not write it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			note := unmanagedNote(tc.ranked, tc.onDisk)
+			note := unmanagedNote(tc.ranked, tc.onDisk, tc.declared)
 			if strings.Contains(note, tc.mustNotSay) {
 				t.Errorf("note claims a write that does not happen:\n%s", note)
 			}
@@ -883,11 +965,13 @@ func TestLiteralUndeclaredNameStillAuthorisesTheWrite(t *testing.T) {
 	if !plan.Changed || plan.Content == "" {
 		t.Fatal("a stage naming a deployment that does not exist must still be replaceable")
 	}
-	// The note must count what authorised the write, not everything flagged. It used
-	// to print len(undeclared), which also holds the stages llz merely could not
-	// resolve — none of which are a reason to overwrite anything.
-	if !strings.Contains(plan.Note, "2 stage(s) name deployments") {
-		t.Errorf("the note must count the stages that authorised the write; got %q", plan.Note)
+	// This tree declares one deployment, so the replacement is the solo pipeline and
+	// the note says which deployment it applies. The placeholder's own note — the one
+	// that must count only the stages that AUTHORISED the write, never everything
+	// flagged — is pinned where that branch is reached, in
+	// TestStaleStagesWithSeveralUnrankedDeploymentsRegenerateToTheEmptyPipeline.
+	if !strings.Contains(plan.Note, `"prod" is this instance's only deployment`) {
+		t.Errorf("the note must name the deployment the new stage applies; got %q", plan.Note)
 	}
 }
 
@@ -1373,7 +1457,7 @@ func TestGreenSentenceOverAllExpressionStages(t *testing.T) {
 // and it is the note printed to exactly the operators the leave-alone path exists
 // to protect.
 func TestUnmanagedNoteDoesNotClaimEveryStageWasChecked(t *testing.T) {
-	note := unmanagedNote(0, 2)
+	note := unmanagedNote(0, 2, 2)
 	if strings.Contains(note, "all naming declared deployments") {
 		t.Errorf("the note must not claim a comparison the expression stages never got; %q", note)
 	}
@@ -1422,5 +1506,98 @@ func TestMultipleMissingDeploymentsAreAllNamed(t *testing.T) {
 	// the multi-deployment branch must not be taken at all.
 	if msg := noRegion.UndeclaredErr().Error(); strings.Contains(msg, "create ALL") {
 		t.Errorf("a region-less stage is not a missing deployment — one missing means the single-deployment remedy:\n%s", msg)
+	}
+}
+
+// A GENERATED SOLO PIPELINE MUST STAY MANAGED. The write guard that stops llz
+// seizing a hand-maintained promote.yml (unrunnable, or applies nothing) also shut
+// llz out of its OWN output on the second run: the file it had just written
+// applies one deployment and names no undeclared one, so it fell through to the
+// leave-alone arm — reporting "llz is not managing this file" about a file llz
+// wrote a second earlier, and, the part that actually costs something, no longer
+// reporting drift on it. A hand-edited stage read as "in sync".
+func TestGeneratedSoloPipelineStaysManaged(t *testing.T) {
+	root := t.TempDir()
+	chdir(t, root)
+	writeCluster(t, "tf", map[string]string{"prod.tfvars": "region = \"us-ord\"\n"})
+	if err := os.MkdirAll(filepath.Join(".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(".github", "workflows", "promote.yml"), threeStageWorkflow)
+
+	first, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	applyPlan(t, first)
+
+	// Run two is a silent no-op, and says nothing about llz not managing the file.
+	second, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan again: %v", err)
+	}
+	if second.Changed {
+		t.Error("regenerating the solo pipeline twice must be a no-op")
+	}
+	if strings.Contains(second.Note, "not managing this file") {
+		t.Errorf("llz wrote this file; the note must not disown it: %q", second.Note)
+	}
+
+	// AND DRIFT ON IT IS STILL DRIFT. This is the assertion the leave-alone
+	// fall-through silently disabled — the header says DO NOT EDIT BY HAND, so a
+	// hand-edit has to be visible rather than accepted.
+	edited := strings.Replace(first.Content, "needs: "+preflightJob, "needs: "+preflightJob+" # tweaked", 1)
+	if edited == first.Content {
+		t.Fatal("fixture did not change — the assertion below would pass vacuously")
+	}
+	mustWrite(t, filepath.Join(".github", "workflows", "promote.yml"), edited)
+	drifted, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan after edit: %v", err)
+	}
+	if err := drifted.RunnableErr(false); err == nil {
+		t.Error("a hand-edit to a GENERATED promote.yml is drift, not agreement")
+	}
+}
+
+// THE SCAR THE SOLO WRITE MUST NOT REOPEN. A hand-written promote.yml on a
+// single-deployment instance applies exactly what it says and is the operator's to
+// maintain — llz recognises only its own banner, so this one is left byte-for-byte
+// alone, and the note it gets names a remedy that exists at one deployment.
+func TestHandWrittenSoloPipelineIsNotSeized(t *testing.T) {
+	root := t.TempDir()
+	chdir(t, root)
+	writeCluster(t, "tf", map[string]string{"prod.tfvars": "region = \"us-ord\"\n"})
+	if err := os.MkdirAll(filepath.Join(".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const handWritten = `name: Promote (prod, hand-maintained)
+on:
+  workflow_dispatch:
+jobs:
+  soak:
+    uses: ./.github/workflows/llz-terraform.yml
+    with:
+      instance_repo: myorg/my-instance
+      action: apply
+      region: prod
+    secrets: inherit
+`
+	mustWrite(t, filepath.Join(".github", "workflows", "promote.yml"), handWritten)
+
+	plan, err := PlanWorkflow(testDeps(), "tf", "")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if plan.Changed || plan.Content != "" {
+		t.Fatalf("a hand-maintained single-deployment pipeline must be left alone, got Content:\n%s", plan.Content)
+	}
+	// The remedy must be reachable: "set promotionRank on the deployments you want
+	// chained" is not a step that exists when you declare one deployment.
+	if strings.Contains(plan.Note, "want chained") {
+		t.Errorf("the note must not send a one-deployment instance to rank a chain: %q", plan.Note)
+	}
+	if !strings.Contains(plan.Note, "llz env pipeline") {
+		t.Errorf("the note must still name the route to a managed file: %q", plan.Note)
 	}
 }

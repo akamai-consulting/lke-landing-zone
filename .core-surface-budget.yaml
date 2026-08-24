@@ -1546,7 +1546,17 @@ categories:
     #                       extensions/guards/dependabotcoverage. The only line this
     #                       layer gains is the import that makes the constructor
     #                       nameable.
-    budget: 1969
+    #   1,952 / 129 files  -17 promoteDeps moved to promote.DefaultDeps. A PAYDOWN,
+    #                       and the reason it is one is worth keeping: the literal
+    #                       was correct here while `llz env pipeline` was its only
+    #                       caller. `llz doctor` now asks the same question of the
+    #                       same tree, and a second hand-built Deps is how the local
+    #                       pre-flight and the CI gate come to read different files
+    #                       — the exact defect the check exists to catch, one layer
+    #                       down. So the constructor moved to the extension that
+    #                       owns the seams and this layer kept the one line that
+    #                       delegates.
+    budget: 1952
     exact: true
     include:
       - "tools/internal/cli/*.go"

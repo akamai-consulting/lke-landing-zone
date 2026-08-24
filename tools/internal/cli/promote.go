@@ -1,12 +1,17 @@
 package cli
 
-// promote.go — the capability wiring and cobra surface for the `promote-pipeline`
-// extension (internal/promote).
+// promote.go — the cobra surface for the `promote-pipeline` extension
+// (internal/extensions/lifecycle/promote), and the one thing that extension is not
+// permitted to do for itself: the os.WriteFile.
 //
-// Every field is a READ of the instance repo. What the extension does that is not
-// a read — writing .github/workflows/promote.yml — it does directly, and the
-// declaration says so with `write-repo`. See internal/extensions/lifecycle/promote/extension.go for why
-// that grant had to be invented rather than approximated with `own-paths`.
+// The extension declares `read-repo`, so writing .github/workflows/promote.yml
+// lives on THIS side of the boundary — see extension.go for why `write-repo` was
+// not invented to move it back.
+//
+// The Deps wiring used to be built here too, and is not any more: `llz doctor`
+// asks the same question of the same tree, and one production constructor
+// (promote.DefaultDeps) is what stops the pre-flight and the CI gate reading
+// different files.
 
 import (
 	"fmt"
@@ -15,30 +20,13 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envtopology"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/spf13/cobra"
 )
 
-func promoteDeps() promote.Deps {
-	return promote.Deps{
-		Layout:          instancelayout.Detect,
-		ListDeployments: envtopology.ListDeployments,
-		LoadSpec:        func() (*clusterspec.LandingZone, bool, error) { return clusterspec.Detected() },
-		// Narrowed to the one field the extension reads. Handing over the whole
-		// `answers` struct would put package main's copier-answers model on the
-		// other side of the boundary to answer a one-line question.
-		InstanceRepo: func() string {
-			a, _ := answers.Read(".")
-			if a == nil {
-				return ""
-			}
-			return a.InstanceRepo
-		},
-	}
-}
+// promoteDeps is the production wiring, and it lives in the promote package —
+// `llz doctor` reads the same tree through the same seams, and two hand-built
+// copies is how the pre-flight and the CI gate come to disagree about one file.
+func promoteDeps() promote.Deps { return promote.DefaultDeps() }
 
 func envNextCmd() *cobra.Command {
 	return &cobra.Command{
