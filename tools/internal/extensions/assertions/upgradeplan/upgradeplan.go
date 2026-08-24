@@ -70,7 +70,20 @@ type ResourceChange struct {
 	ProviderName string `json:"provider_name"`
 	Change       struct {
 		Actions []string `json:"actions"`
+		// Before/After carry ONE attribute, and only for the sake of the remedy
+		// text below: a destroyed-and-recreated Object Storage bucket is almost
+		// always a RENAME, and the two labels are what turn "this destroys a live
+		// resource" into "set spec.instance.objLabelPrefix to X". Everything else
+		// in the before/after objects is deliberately not modelled — the verdict
+		// must not depend on attributes this gate has no opinion about.
+		Before *changeAttrs `json:"before"`
+		After  *changeAttrs `json:"after"`
 	} `json:"change"`
+}
+
+// changeAttrs is the sliver of a plan's before/after object this reads.
+type changeAttrs struct {
+	Label string `json:"label"`
 }
 
 // Verdict is what a plan proposes.
@@ -91,6 +104,10 @@ type Finding struct {
 	Address string
 	Actions []string
 	Kind    string // "destroy" or "replace", for a message that names what happens
+	// Type and the two labels exist for the rename remedy, not for the verdict.
+	Type        string
+	BeforeLabel string
+	AfterLabel  string
 }
 
 func (f Finding) String() string {
@@ -138,9 +155,14 @@ func Evaluate(p Plan) Verdict {
 		}
 		kind := classify(rc.Change.Actions)
 		if kind != "" {
-			v.Destructive = append(v.Destructive, Finding{
-				Address: rc.Address, Actions: rc.Change.Actions, Kind: kind,
-			})
+			f := Finding{Address: rc.Address, Actions: rc.Change.Actions, Kind: kind, Type: rc.Type}
+			if rc.Change.Before != nil {
+				f.BeforeLabel = rc.Change.Before.Label
+			}
+			if rc.Change.After != nil {
+				f.AfterLabel = rc.Change.After.Label
+			}
+			v.Destructive = append(v.Destructive, f)
 			continue
 		}
 		for _, a := range rc.Change.Actions {
@@ -190,4 +212,102 @@ func Parse(raw []byte) (Plan, error) {
 			"parse and a clean plan are the same green line, and only one of them is evidence")
 	}
 	return p, nil
+}
+
+// ── The rename remedy ─────────────────────────────────────────────────────────
+//
+// WHY A SPECIAL CASE AT ALL. The generic advice this gate prints — make the
+// change non-forcing, add a moved{} block, or say so in the release notes — is
+// right for a module change and useless for the one destructive plan adopters
+// actually meet: an Object Storage bucket whose LABEL changed, because a bucket
+// label is ForceNew and a bucket cannot be renamed. There is no moved{} for it
+// and no non-forcing spelling of it.
+//
+// THE INCIDENT. `spec.instance.objLabelPrefix` moved the bucket prefix off the
+// hardcoded module default `platform` onto a per-instance value, which is the
+// right fix for a namespace shared globally per region. For an instance already
+// provisioned under `platform-*` it is a rename, so v0.0.44 and v0.0.45 both
+// planned `2 to add, 0 to change, 2 to destroy` against a live prod deployment:
+//
+//	~ label = "platform-loki-chunks-prod" -> "gsap-apl-loki-chunks-prod" # forces replacement
+//
+// Both applies failed only because Linode refuses to delete a non-empty bucket.
+// An instance whose buckets happened to be EMPTY would have had them deleted and
+// recreated with no error at all — and the failure is not the run that goes red,
+// it is the one that goes green.
+
+const objBucketType = "linode_object_storage_bucket"
+
+// RenameRemedy returns the operator-facing remedy for a plan that renames Object
+// Storage buckets, or "" when no finding is one.
+//
+// Pure over the findings, so every arm is reachable from a table test.
+func RenameRemedy(findings []Finding) string {
+	var was, now string
+	var renamed []Finding
+	for _, f := range findings {
+		if f.Type != objBucketType || f.BeforeLabel == "" || f.AfterLabel == "" || f.BeforeLabel == f.AfterLabel {
+			continue
+		}
+		renamed = append(renamed, f)
+		oldPrefix, newPrefix := splitPrefix(f.BeforeLabel, f.AfterLabel)
+		// AGREEMENT ACROSS EVERY RENAMED BUCKET, or no prefix claim at all. One
+		// prefix is the whole remedy; two different ones mean something other than
+		// a prefix change is going on and naming either would be a guess.
+		switch {
+		case was == "" && now == "":
+			was, now = oldPrefix, newPrefix
+		case was != oldPrefix || now != newPrefix:
+			was, now = "", ""
+		}
+	}
+	if len(renamed) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nTHESE ARE BUCKET RENAMES, WHICH ARE NOT RECOVERABLE BY RETRYING.\n" +
+		"A bucket label is create-time only, so Terraform's only way to honour the new\n" +
+		"name is to DELETE the bucket holding your data and create an empty one. Linode\n" +
+		"refuses to delete a non-empty bucket, which is the only reason this is a failed\n" +
+		"run and not a silent one — an empty bucket would have been deleted cleanly.\n\n")
+	for _, f := range renamed {
+		fmt.Fprintf(&b, "    %s: %s -> %s\n", f.Address, f.BeforeLabel, f.AfterLabel)
+	}
+	if was != "" && now != "" {
+		fmt.Fprintf(&b, `
+WHAT TO DO. This instance's buckets were created under the prefix %q and the
+spec now derives %q. Keep the buckets you have by pinning the prefix in
+landingzone.yaml:
+
+    spec:
+      instance:
+        objLabelPrefix: %s
+
+then re-run this apply — the plan goes empty and no bucket is touched. The
+prefix also names this instance's Object Storage KEY labels, which `+"`llz reap`"+`
+and the rotation table match exactly, so check those before you commit it.
+
+Adopting the new names instead means COPYING the objects across and repointing
+Loki and Harbor first. Deleting the old buckets is a destroy, and the destroy
+path is where the confirmation for that lives.
+`, was, now, was)
+	}
+	return b.String()
+}
+
+// splitPrefix returns the heads of two labels that share a suffix — for
+// "platform-loki-chunks-prod" and "gsap-apl-loki-chunks-prod", ("platform",
+// "gsap-apl").
+//
+// THE LONGEST COMMON SUFFIX, rather than a table of the module's bucket names
+// ("-loki-chunks-", "-harbor-registry-", …). That table is exactly the kind of
+// second copy of a fact that drifts from the module it describes; a bucket added
+// there later would silently stop producing a remedy. The suffix is derivable
+// from the two labels themselves, which cannot drift.
+func splitPrefix(before, after string) (string, string) {
+	i := 0
+	for i < len(before) && i < len(after) && before[len(before)-1-i] == after[len(after)-1-i] {
+		i++
+	}
+	return strings.TrimSuffix(before[:len(before)-i], "-"), strings.TrimSuffix(after[:len(after)-i], "-")
 }

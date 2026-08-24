@@ -294,3 +294,101 @@ func TestUpdatesPassWithoutTheStrictFlag(t *testing.T) {
 		t.Fatalf("an in-place update must pass the default mode: %v", err)
 	}
 }
+
+// ── The bucket-rename remedy ──────────────────────────────────────────────────
+//
+// The fixture is gsap-apl's real prod plan under v0.0.45: `2 to add, 0 to
+// change, 2 to destroy`, both destroys a bucket whose label prefix moved from
+// the module default `platform` to the per-instance `gsap-apl`.
+
+const objRenamePlan = `{"format_version":"1.2","resource_changes":[
+ {"address":"module.object_storage.linode_object_storage_bucket.loki_chunks",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"platform-loki-chunks-prod"},
+            "after":{"label":"gsap-apl-loki-chunks-prod"}}},
+ {"address":"module.object_storage.linode_object_storage_bucket.harbor_registry",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"platform-harbor-registry-prod"},
+            "after":{"label":"gsap-apl-harbor-registry-prod"}}}]}`
+
+func TestRenameRemedyNamesThePrefixToPin(t *testing.T) {
+	p, err := Parse([]byte(objRenamePlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	v := Evaluate(p)
+	if len(v.Destructive) != 2 {
+		t.Fatalf("destructive = %d, want 2", len(v.Destructive))
+	}
+	got := RenameRemedy(v.Destructive)
+	if got == "" {
+		t.Fatal("a bucket rename must produce a remedy")
+	}
+	// THE ONE INSTRUCTION THAT WORKS. Without the prefix named, the operator is
+	// left with the generic "add a moved{} block" advice, and there is no moved{}
+	// for a bucket label.
+	if !strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("remedy must name the prefix to pin; got:\n%s", got)
+	}
+	if !strings.Contains(got, "platform-loki-chunks-prod -> gsap-apl-loki-chunks-prod") {
+		t.Errorf("remedy must show the rename it diagnosed; got:\n%s", got)
+	}
+	// The silent case is the dangerous one and the text must say so.
+	if !strings.Contains(got, "empty bucket would have been deleted") {
+		t.Errorf("remedy must explain why this failed loudly rather than silently; got:\n%s", got)
+	}
+}
+
+// A destroy that is NOT a rename gets the generic advice, not a prefix claim.
+func TestRenameRemedySilentOnANonRename(t *testing.T) {
+	cases := map[string][]Finding{
+		"not a bucket": {{Address: "module.cluster.linode_lke_cluster.this", Kind: "replace",
+			Type: "linode_lke_cluster", BeforeLabel: "a", AfterLabel: "b"}},
+		"bucket destroyed, not renamed": {{Address: "m.linode_object_storage_bucket.x", Kind: "destroy",
+			Type: objBucketType, BeforeLabel: "acme-loki-chunks-prod"}},
+		"same label": {{Address: "m.linode_object_storage_bucket.x", Kind: "replace",
+			Type: objBucketType, BeforeLabel: "acme-loki-chunks-prod", AfterLabel: "acme-loki-chunks-prod"}},
+		"no findings": nil,
+	}
+	for name, findings := range cases {
+		if got := RenameRemedy(findings); got != "" {
+			t.Errorf("%s: want no remedy, got:\n%s", name, got)
+		}
+	}
+}
+
+// TWO DIFFERENT PREFIX MOVES IN ONE PLAN is not a prefix change, so no prefix is
+// claimed — but the renames are still reported. Guessing one of them would send
+// an operator to pin a value that fixes half their buckets.
+func TestRenameRemedyWithoutAgreementClaimsNoPrefix(t *testing.T) {
+	got := RenameRemedy([]Finding{
+		{Address: "a", Kind: "replace", Type: objBucketType, BeforeLabel: "platform-loki-chunks-prod", AfterLabel: "gsap-apl-loki-chunks-prod"},
+		{Address: "b", Kind: "replace", Type: objBucketType, BeforeLabel: "other-harbor-registry-prod", AfterLabel: "different-harbor-registry-prod"},
+	})
+	if got == "" {
+		t.Fatal("the renames must still be reported")
+	}
+	if strings.Contains(got, "objLabelPrefix:") {
+		t.Errorf("no single prefix agrees, so none may be named; got:\n%s", got)
+	}
+}
+
+func TestSplitPrefix(t *testing.T) {
+	cases := []struct{ before, after, wantOld, wantNew string }{
+		{"platform-loki-chunks-prod", "gsap-apl-loki-chunks-prod", "platform", "gsap-apl"},
+		{"platform-harbor-registry-prod", "gsap-apl-harbor-registry-prod", "platform", "gsap-apl"},
+		// A suffix that is added rather than a prefix that changes: the head of
+		// the shorter label empties, and an empty prefix claim is suppressed by
+		// RenameRemedy rather than printed as `objLabelPrefix: `.
+		{"loki-chunks-prod", "acme-loki-chunks-prod", "", "acme"},
+	}
+	for _, c := range cases {
+		gotOld, gotNew := splitPrefix(c.before, c.after)
+		if gotOld != c.wantOld || gotNew != c.wantNew {
+			t.Errorf("splitPrefix(%q,%q) = (%q,%q), want (%q,%q)",
+				c.before, c.after, gotOld, gotNew, c.wantOld, c.wantNew)
+		}
+	}
+}
