@@ -52,6 +52,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
@@ -259,6 +260,7 @@ var commands = []Command{
 	{"tokeninv", tokeninv.TokenInventoryCmd},
 	{"tokeninv", tokeninv.ValidateTokensCmd},
 	{"versionpins", versionpins.Cmd},
+	{"dependabotcoverage", dependabotcoverage.Cmd},
 	{"setupgosite", setupgosite.Cmd},
 	{"mutabletags", mutabletags.Cmd},
 	{"providerlock", providerlock.Cmd},

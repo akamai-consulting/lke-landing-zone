@@ -449,7 +449,7 @@ func TestTheDefaultedMajorityIsStillTheMajority(t *testing.T) {
 		}
 		custom = append(custom, g.Extension)
 	}
-	const wantDefaulted, wantCustom = 29, 3
+	const wantDefaulted, wantCustom = 30, 3
 	if len(defaulted) != wantDefaulted || len(custom) != wantCustom {
 		t.Errorf("%d gates take the default subject and %d differ; gates.go's header says %d and %d.\n"+
 			"\tThe rows that differ are %v. Update that comment in this commit — a count nothing "+

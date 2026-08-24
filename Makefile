@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site dependabot-coverage mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -66,6 +66,7 @@ COVERAGE_MINS := \
 	internal/cli/deps=41 \
 	internal/extensions/lifecycle/brownfield=80 \
 	internal/extensions/lifecycle/upstreamupdates=84 \
+	internal/extensions/guards/dependabotcoverage=84 \
 	internal/extensions/guards/callerperms=85 \
 	internal/extensions/guards/runinjection=92 \
 	internal/extensions/guards/secretscope=85 \
@@ -227,6 +228,7 @@ help:
 	@echo "  source-ref-guard  stale tools/ path literals in prose, comments and error strings"
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
 	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
+	@echo "  dependabot-coverage  every dependency manifest is scanned by dependabot.yml, or excluded with a reason"
 	@echo "  mutable-tag-guard  build-images.yml may publish :latest / :<version> only from the default branch"
 	@echo "  provider-lock-guard delivered .terraform.lock.hcl pins satisfy the shipped provider constraints"
 	@echo "  k8s-minor-coherence  lint.yml's kind node image must run the k8s minor we deploy to LKE-E"
@@ -990,6 +992,30 @@ source-ref-guard:
 setup-go-sole-site: export LLZ_FORCE_SOURCE := 1
 setup-go-sole-site:
 	$(call LLZ_CI,gates --only setup-go-sole-site,)
+
+# dependabot-coverage: `llz ci dependabot-coverage` — every dependency manifest in
+# the tree is scanned by a .github/dependabot.yml entry, or listed in
+# .dependabot-coverage.yaml with a reason.
+#
+# THREE PIN SETS WERE UNSCANNED AT ONCE and each looked correct where it sat
+# (#502). For the github-actions ecosystem `directory: "/"` means .github/workflows
+# plus a ROOT-level action.yml and nothing else — so the guard above, which
+# consolidated the repo's only actions/setup-go pin into a composite action, moved
+# that pin out of Dependabot's reach in the same stroke. It was a major version
+# stale before anyone looked; `git log --author=dependabot -- .github/actions/`
+# was empty. dockerfiles/ and terraform-modules/ had never been listed at all.
+#
+# THE FAILURE IS SILENCE. Dependabot reports nothing about a directory it was
+# never asked to scan, and a config that omits an ecosystem is well-formed — so
+# "no PRs this week" is what both working coverage and absent coverage look like.
+# Only the relation between the tree and the config can be checked, which is the
+# same shape as version-pins and setup-go-sole-site.
+#
+# FROM SOURCE for the usual reason: on the PR that introduces the verb, the
+# merge-base image binary does not have it.
+dependabot-coverage: export LLZ_FORCE_SOURCE := 1
+dependabot-coverage:
+	$(call LLZ_CI,gates --only dependabot-coverage,)
 
 # mutable-tag-guard: `llz ci mutable-tag-guard` — build-images.yml may publish a
 # MUTABLE tag (`:latest`, `:<version>`) only from the default branch's HEAD.

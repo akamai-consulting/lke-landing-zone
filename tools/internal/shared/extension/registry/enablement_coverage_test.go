@@ -149,6 +149,10 @@ var componentless = map[string]bool{
 	"token-inventory":                      true,
 	// Its subject is this repo's own Lint workflow against this repo's own cluster
 	// root — neither is a component an instance can turn off.
+	// Its subject is .github/dependabot.yml against this repo's own tree — the
+	// config is not delivered to an instance at all, so there is no component an
+	// adopter could turn off that should stop it running.
+	"dependabot-coverage": true,
 	"k8s-minor-coherence": true,
 	"version-pins":        true,
 	"wave-health":         true,
