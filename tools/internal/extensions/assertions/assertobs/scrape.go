@@ -237,6 +237,11 @@ func runCIAssertScrapeTargets(prom string, monitors, ruleGroups []string, settle
 			fmt.Printf("OK: ServiceMonitor %s (%d/%d targets up)\n", v.Monitor, v.Up, v.Targets)
 		case v.Targets == 0:
 			fmt.Printf("FAIL: ServiceMonitor %s has NO scrape target — never discovered (missing `prometheus: system` label / selector / namespace mismatch)\n", v.Monitor)
+			// THREE CANDIDATE CAUSES AND NO WAY TO TELL WHICH, from that line alone —
+			// and all three are facts about the OTHER side. Print it. Advisory: the
+			// verdict is already decided, so a cluster that will not answer a
+			// `kubectl get svc` must not turn a precise failure into a vaguer one.
+			ExplainNoScrapeTarget(caps.KubectlOut, v.Monitor, os.Stdout)
 			fail = true
 		default:
 			detail := ""
