@@ -49,14 +49,24 @@ func ghaOutput(t *testing.T, envVar string) func() string {
 }
 
 func TestDBDeclaredDetectsTheAssignment(t *testing.T) {
-	// The rendered shapes that matter: DatabasesTFVars always writes
-	// region_suffix, and adds `databases = {…}` ONLY when the spec declared one.
+	// The rendered shapes that matter. DatabasesTFVars always writes
+	// region_suffix and adds `databases = {…}` ONLY when the spec declared one —
+	// but that is NOT the same as the line being absent otherwise, which is the
+	// mistake this test used to encode. `llz render` layers those assignments over
+	// the root's terraform.tfvars.example, and the example ships its own
+	// uncommented `databases = {}`. So the VALUE decides, never the presence.
 	for _, tc := range []struct {
 		name, body string
 		want       string
 	}{
 		{"declared", "region_suffix = \"prod\"\ndatabases = {\n  shared = {\n    region = \"us-ord\"\n  }\n}\n", "declared=true"},
-		{"indented assignment", "region_suffix = \"prod\"\n  databases = {\n  }\n", "declared=true"},
+		// Indentation must not defeat detection — but the value has to be real. This
+		// case used to carry an EMPTY indented map and assert declared=true, which is
+		// precisely the belief that broke every deployment declaring no databases.
+		{"indented assignment", "region_suffix = \"prod\"\n  databases = {\n    shared = {\n      region = \"us-ord\"\n    }\n  }\n", "declared=true"},
+		// THE REGRESSION, in the exact form the shipped example produces.
+		{"the example's own empty map", "region_suffix = \"prod\"\ndatabases = {}\n", "declared=false"},
+		{"empty map across lines", "region_suffix = \"prod\"\ndatabases = {\n}\n", "declared=false"},
 		{"none declared", "region_suffix = \"prod\"\n", "declared=false"},
 		// A comment mentioning the variable is not a declaration — the example
 		// tfvars carries exactly this prose.
