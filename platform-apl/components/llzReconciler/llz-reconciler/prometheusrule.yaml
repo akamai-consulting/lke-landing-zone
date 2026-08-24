@@ -208,8 +208,15 @@ spec:
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: OpenBao reports sealed for 5m; ESO reads are blocked until it is unsealed.
         - alert: LLZCredentialRotationOverdue
-          # A credential in OpenBao has not rotated within its SLA. 90d matches the
-          # rotation-SLA the daily loki-objkey-rotation-health check enforced.
+          # A credential in OpenBao has not rotated within its SLA. 90d is now the
+          # ONLY rotation threshold for these credentials, and `llz ci
+          # assert-rotation-health` is pinned to it by
+          # TestRotationSLAsMatchThePrometheusRules. The weekly
+          # loki-objkey-rotation-health check used to claim 120d for
+          # secret/loki/object-store; two mechanisms asserting different SLAs for one
+          # credential is worse than either number, and that one could not measure
+          # anything anyway (it needed a root token bootstrap revokes), so #483
+          # retired it rather than reconciling it.
           #
           # SCOPED to the classes whose age something can actually bring back down:
           #   automated  — a rotator resets it on a cadence (linodeCredRotator,

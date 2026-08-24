@@ -2,9 +2,11 @@ package healthsla
 
 // extension.go — `health-sla` declares itself.
 //
-// TWELFTH EXTENSION. Four scheduled checks that run against a cluster which is
-// already working, forever: two rotation SLAs (is this credential overdue?) and
-// two readiness reports (is this component healthy right now?).
+// TWELFTH EXTENSION. Scheduled checks that run against a cluster which is already
+// working, forever: one rotation SLA (is this credential overdue?) and two
+// readiness reports (is this component healthy right now?). It was two rotation
+// SLAs until #483 retired the Loki OBJ-key one, whose measurement needed a root
+// token bootstrap revokes — see sla.go's header.
 //
 // WHAT THE CATALOG GOT WRONG. It grouped three files by FILENAME PREFIX —
 // ci_health_sla.go, ci_health_readiness.go, ci_health_incluster.go — and called
@@ -25,12 +27,12 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	invariant:operating "component-readiness" [cluster-read]
 //
 // WHY SPLIT. `guard-charts` established that a split must be justified by
-// DIVERGENT CAPABILITY rather than by count, and this is the case that divergence
-// actually arises: the Loki OBJ-key SLA reads OPENBAO_ROOT_TOKEN out of the
-// environment and execs `bao kv metadata get` with it. The readiness checks never
-// hold a credential. Collapsing these into one binding would widen its grants to
-// the union and hand the readiness lane secret-custody it does not use, which is
-// the over-granting that per-binding grants exist to prevent.
+// DIVERGENT CAPABILITY rather than by count, and the divergence is real here: the
+// rotation SLA LISTS SECRETS (kube-system lke-admin-token, for their
+// creationTimestamps), and the readiness checks read no credential object at all.
+// Collapsing these into one binding would widen its grants to the union and hand
+// the readiness lane secret-read it does not use, which is the over-granting that
+// per-binding grants exist to prevent.
 //
 // WHY `invariant` AND NOT `assertion`. Both kinds observe. An assertion answers
 // "did the thing I just did work?" and is bounded by that transition; these are
@@ -38,13 +40,20 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // failure means the platform DRIFTED rather than that a step failed. `operating`
 // is the only state an invariant may attach to, which is the right answer here.
 //
-// WHY secret-read AND NOT secret-custody. This lane is handed the OpenBao ROOT
-// token and calls `kv metadata get` with it, using only `updated_time`. When this
-// was first declared the vocabulary had one word — secret-custody, documented as
-// "read or write credential material" — so the declaration took it and said in a
-// comment that it over-reported. The NEXT extension (token-inventory) could not
-// make that trade: a read-only credential check was inexpressible, which forced
-// the split. `secret-read` is what this lane always meant.
+// WHY rotation-sla KEEPS secret-read AFTER #483. The grant was originally
+// justified by the Loki OBJ-key exec, which is gone — but it was never the only
+// thing that earned it. `secret-read` is defined as "read credential material OR
+// ITS METADATA", and the lke-admin check lists Secret objects in kube-system and
+// reads their creationTimestamps. Dropping the grant with the exec would make the
+// DECLARATION the thing that is wrong, which is the failure mode declaring
+// capabilities exists to prevent.
+//
+// WHY secret-read AND NOT secret-custody. When this was first declared the
+// vocabulary had one word — secret-custody, documented as "read or write
+// credential material" — so the declaration took it and said in a comment that it
+// over-reported. The NEXT extension (token-inventory) could not make that trade:
+// a read-only credential check was inexpressible, which forced the split.
+// `secret-read` is what this lane always meant.
 //
 // No ceiling change. secret-custody became legal at `operating` before this
 // existed, and `cluster-read` is unrestricted.

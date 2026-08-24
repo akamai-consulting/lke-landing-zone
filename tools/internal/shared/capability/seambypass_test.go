@@ -84,7 +84,6 @@ var allowedSeamCalls = map[string]int{
 	// branch write is now an ordinary push rather than a forced one.
 	"upstreamupdates": 1,
 	"clusteraccess":   1,
-	"healthsla":       1,
 	"identityconfig":  1,
 	"openbao":         4,
 	"reachability":    1,

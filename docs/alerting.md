@@ -74,9 +74,12 @@ committed values flow the OpenBao path exists to avoid.
 > readiness, convergence, and credential age continuously and raises Prometheus
 > alerts — so the CIDR-fragile hosted-runner probes that duplicated that coverage
 > were **demoted from daily to weekly**: `health-openbao` (ESO) + `health-certmanager`
-> (via `LLZESOStoreNotReady` / `LLZCertificatesNotReady`), and
-> `health-loki-objkey-rotation` (via `LLZCredentialRotationOverdue`, which alerts on
-> `llz_credential_age_days > 90` for both the Loki and Harbor object-storage keys).
+> (via `LLZESOStoreNotReady` / `LLZCertificatesNotReady`). A third,
+> `health-loki-objkey-rotation`, was **retired outright** (#483) rather than demoted:
+> it needed `OPENBAO_ROOT_TOKEN`, which bootstrap revokes, so it had never produced
+> a verdict. `LLZCredentialRotationOverdue` alerts on
+> `llz_credential_age_days > 90` for both object-storage keys, and the daily
+> `llz ci assert-rotation-health` gates the same gauge in CI.
 > They still fire even when the observability stack itself is broken, and cover a
 > cluster whose operator has not wired a receiver. The remaining daily jobs
 > (`lke-admin-rotation`, Linode/GitHub PAT expiry) check external credentials the
@@ -223,7 +226,7 @@ nobody until a receiver is wired, so the dashboard is their window.
 | Linode PAT expiry policy breach | Any PAT with no expiry / >90d lifetime / expired (warn ≤14d before expiry) | `scheduled-checks.yml → credential-single-pane` runs the Linode credential audit tool (exit 1 → job red) → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered |
 | github.com service PAT expiry breach | Named service PAT with no expiry / >90d / 401 (warn ≤14d) | `scheduled-checks.yml → credential single pane` — `llz ci token-inventory` measures each token's `GitHub-Authentication-Token-Expiration` header into the `llz-token-inventory` ConfigMap; the reconciler exports `llz_token_expiry_*` and `LLZToken*` alerts fire → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered (named service PATs) |
 | Ad-hoc individual classic PATs | — | **Manual** — GitHub has no classic-PAT list API; enterprise audit-log / admin review only | ⚠️ manual only |
-| Loki object-storage bucket key overdue (≤120d) | `secret/loki/object-store` version age ≥105d (warn) / ≥120d (job red) | in-cluster `LLZCredentialRotationOverdue` alert (>90d, continuous) + `scheduled-checks.yml → loki-objkey-rotation-health` (weekly, belt-and-suspenders); declarative `time_rotating` replacement in the `object-storage` Terraform module | ✅ covered |
+| Loki object-storage bucket key overdue (≤120d policy, enforced at 90d) | `llz_credential_age_days{cred="loki-object-store"}` > 90d, **or no series at all** | in-cluster `LLZCredentialRotationOverdue` alert (>90d, continuous) + `scheduled-checks.yml → credential-single-pane → llz ci assert-rotation-health` (daily, and the only one that can fail on an absent series); rotated by the in-cluster `linodeCredRotator` lane every ~80d. The weekly `loki-objkey-rotation-health` step was retired in #483 — it needed a revoked root token and never fired. | ✅ covered |
 | TF-state object-storage bucket key overdue (≤120d) | — | Rotated by `secret-rotation.yml` (`scope: tf-state-key` / `tf-state-key-revoke`) outside Terraform. Linode exposes no OBJ-key creation time, so the SLA itself is calendar-tracked. | ⚠️ manual only |
 | Prometheus rule drift | Expected rule groups missing from cluster | `scheduled-checks.yml` — surfaces silently-broken alerting before an incident | ✅ covered |
 

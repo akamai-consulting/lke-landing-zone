@@ -32,7 +32,7 @@ separate, LKE-Enterprise-specific case — see
 | `LINODE_API_TOKEN` | Linode PAT (broad — LKE/VPC/NB/OBJ) | ≤90-day expiry | Manual create in Cloud Manager; **verified** daily by the `credential-single-pane` scheduled check | Job red |
 | `LINODE_DNS_TOKEN` | Linode PAT (DNS scope) | ≤90-day expiry | Same as above | Job red |
 | TF-state OBJ key (`TF_STATE_ACCESS_KEY` / `_SECRET_KEY`) | Linode OBJ key | Revoke ≤120 days | **Manual** (bootstrapping paradox — see below) | — (manual SLA) |
-| Loki OBJ key (`secret/loki/object-store`) | Linode OBJ key | Revoke ≤120 days | Rotated in-cluster by the `linodeCredRotator` lane (NOT Terraform — the TF-managed keys and their `time_rotating` clock were removed); age verified weekly by the `loki-objkey-rotation-health` step | Job red |
+| Loki OBJ key (`secret/loki/object-store`) | Linode OBJ key | Revoke ≤120 days (enforced at 90) | Rotated in-cluster by the `linodeCredRotator` lane every ~80 days (NOT Terraform — the TF-managed keys and their `time_rotating` clock were removed); age gated daily at 90 days by `llz ci assert-rotation-health` and alerted continuously by `LLZCredentialRotationOverdue` | Job red + alert |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | github.com classic PAT | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (credential single pane); alerts via `LLZToken*` | Alert fires |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write on the instance repo) | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (same as the other GitHub PATs). Rotate by minting a new fine-grained PAT and updating the `infra-<env>` env secret(s). Used as apl-core's `otomi.git.password` (apl-operator pushes its values tree) and the argocd repo Secrets. | Job red |
 
@@ -201,8 +201,15 @@ the reconciler:
 **Alerting (a rotation that has fallen behind = the reconciler is down/erroring):**
 - In-cluster: `LLZCredentialRotationOverdue` (`llz_credential_age_days > 90`, both
   keys) — the continuous signal.
-- Belt-and-suspenders: the `loki-objkey-rotation-health` scheduled check (weekly)
-  reads `secret/loki/object-store` age and warns at 105d / fails at 120d.
+- CI-visible: `llz ci assert-rotation-health`, in the daily `credential-single-pane`
+  job, reads the same gauge and fails the job at the same 90 days. It also fails on
+  an **absent** series, which is the failure an alert cannot make: a rule over a
+  series nobody publishes never evaluates.
+- There used to be a third, `loki-objkey-rotation-health`, which read the age by
+  exec'ing into OpenBao with `OPENBAO_ROOT_TOKEN`. Bootstrap revokes that token, so
+  it never measured anything and never failed; it was retired in #483. If you are
+  looking for it because a runbook or a habit points you at it, the two rows above
+  are what replaced it — at a stricter threshold and a shorter interval.
 
 ### If it's overdue
 
@@ -316,9 +323,13 @@ can automate. Track it as a quarterly manual review with the GitHub org admins.
   `llz ci token-inventory` (per-token header self-check) and alerted via
   `LLZToken*` on no-expiry / >90d / 401. Ad-hoc individual PATs: manual GitHub
   audit-log review only.
-- **Loki OBJ key:** revoke ≤120 days. The `loki-objkey-rotation-health` step of
-  the weekly `weekly-cluster-checks` job (warn 105d, job red 120d); replacement
-  is the in-cluster `linodeCredRotator` lane, not Terraform.
+- **Loki OBJ key:** the Guidelines ceiling is ≤120 days; the platform **enforces
+  90**, so it clears the mandate with margin. One number, in one place: the
+  `class: automated` SLA that `LLZCredentialRotationOverdue` alerts on and
+  `llz ci assert-rotation-health` gates daily. Replacement is the in-cluster
+  `linodeCredRotator` lane (~80-day cadence), not Terraform. The old 105/120-day
+  ladder belonged to `loki-objkey-rotation-health`, retired in #483 — it required
+  a root token bootstrap revokes, so it never once produced a verdict.
 - **TF-state OBJ key:** revoke ≤120 days. Rotated by `secret-rotation.yml`
   (`scope: tf-state-key` / `tf-state-key-revoke`), with a daily reaper cron
   draining superseded pairs. Linode exposes no OBJ-key creation time, so the

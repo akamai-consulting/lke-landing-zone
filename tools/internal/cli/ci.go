@@ -187,8 +187,8 @@ func ciCmd() *cobra.Command {
 	// (every gremlins failure mode so far surfaced as a flattering 100%).
 	c.AddCommand(mutate.MutateCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
-	c.AddCommand(healthsla.HealthLKEAdminRotationCmd(), healthsla.HealthLokiObjkeyRotationCmd(),
-		healthsla.HealthOpenbaoCmd(), healthsla.HealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
+	c.AddCommand(healthsla.HealthLKEAdminRotationCmd(), healthsla.HealthOpenbaoCmd(),
+		healthsla.HealthCertManagerCmd(), assertobs.HealthPromRulesCmd())
 	// Apply-time failure diagnostics (llz-terraform.yml). (The former
 	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
