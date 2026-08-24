@@ -51,7 +51,7 @@ const preflightJob = "llz-preflight"
 // Go, not a copier template, so it cannot read the YAML's pin; keep the two in
 // step when the action is bumped (`make version-pins-check` does not cover
 // third-party action SHAs).
-const checkoutAction = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0"
+const checkoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
 
 // promoCaller is the caller-stub boilerplate shared by every promote stage: which
 // reusable workflow to call and the instance repo. Reused verbatim across stages
