@@ -138,7 +138,7 @@ terraform state rm module.<name>.linode_firewall.this
 | `vpc_subnet_cidr` | `string` | `"10.0.0.0/13"` | Worker node subnet CIDR. LKE-E requires `/13` or `/14`. |
 | `vpc_id` | `string` | `""` | Attach to an EXISTING (shared) VPC by ID instead of creating a dedicated `<cluster_label>-vpc`. When set, only this cluster's subnet is created inside it; subnets across clusters sharing a VPC must not overlap. |
 | `control_plane_high_availability` | `bool` | `true` | Enable control-plane HA. |
-| `control_plane_audit_logs_enabled` | `bool` | `true` | Enable control-plane audit logs. |
+| `control_plane_audit_logs_enabled` | `bool` | `false` | Enable control-plane audit logs. EXPERIMENTAL on LKE-E and not rolled out to every account; on an account without it the apply succeeds and the setting never takes, leaving a permanent no-op diff. Opt in per deployment via `cluster.controlPlane.auditLogsEnabled`. |
 | `control_plane_acl_ipv4` | `list(string)` | `[]` | Static IPv4 CIDRs for the bootstrap control-plane ACL. |
 | `control_plane_acl_ipv6` | `list(string)` | `[]` | Static IPv6 CIDRs for the bootstrap control-plane ACL. |
 | `firewall_label` | `string` | `""` | Override the Cloud Firewall label. Defaults to `<cluster_label>-nodes`. |

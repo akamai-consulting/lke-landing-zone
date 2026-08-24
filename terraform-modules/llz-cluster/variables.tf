@@ -50,10 +50,37 @@ variable "control_plane_high_availability" {
   default     = true
 }
 
+# NOT REQUESTED BY DEFAULT, and that is a deliberate downgrade from `true`.
+# LKE-Enterprise control-plane audit logs are an EXPERIMENTAL feature that is not
+# yet rolled out to every account. On an account without it the API accepts the
+# field, the apply reports success, and the cluster keeps reporting
+# `audit_logs_enabled = false` — so the setting never takes and every subsequent
+# plan proposes the same change again:
+#
+#     ~ control_plane {
+#         ~ audit_logs_enabled = false -> true
+#     Plan: 0 to add, 1 to change, 0 to destroy.
+#
+# Defaulting it true therefore bought no audit logging on most accounts and cost
+# two real things: a SECURITY CONTROL BELIEVED ON WHILE OFF, which is worse than
+# one known to be off, and a permanent diff that makes every plan noisy enough to
+# stop being read. Found by `llz ci assert-upgrade-plan --expect-no-changes` on
+# its first run (2026-08-24).
+#
+# TO ENABLE IT on an account that HAS the rollout, set it in the spec — the
+# plumbing is already opt-in and emits the tfvar only when the field is present:
+#
+#     cluster:
+#       controlPlane:
+#         auditLogsEnabled: true
+#
+# Asking for it there is honest: if the account cannot deliver it, the same
+# perpetual diff appears and now names a choice somebody made rather than a
+# default nobody chose.
 variable "control_plane_audit_logs_enabled" {
   description = "Whether to enable control-plane audit logs."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "control_plane_acl_ipv4" {

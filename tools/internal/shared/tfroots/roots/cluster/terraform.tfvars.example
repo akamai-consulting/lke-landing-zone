@@ -50,7 +50,11 @@ node_type  = "g8-dedicated-8-4"
 node_count = 5
 
 control_plane_high_availability  = true
-control_plane_audit_logs_enabled = true
+# false, NOT true — see variables.tf. `llz render` layers the spec's assignments
+# ON TOP OF this file, so a value here is what every deployment that does not set
+# it in the spec actually gets. That is the same mechanism that made the databases
+# guard read `databases = {}` as a declaration (#496).
+control_plane_audit_logs_enabled = false
 
 # Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
 # Terraform seeds the ACL at cluster-create from the github_runner_* CIDRs below
