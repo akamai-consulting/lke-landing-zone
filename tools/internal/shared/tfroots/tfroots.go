@@ -108,3 +108,29 @@ func Files(dst, upstreamOrg, ref string) map[string]string {
 func TfvarsExample(root string) ([]byte, error) {
 	return embedded.ReadFile("roots/" + root + "/terraform.tfvars.example")
 }
+
+// RootVersions returns each embedded root's versions.tf body, keyed by root name
+// ("cluster", "object-storage", …).
+//
+// IT EXISTS FOR THE INSTANCE-SIDE PROVIDER-LOCK CHECK. In the template repo the
+// roots are ordinary files and a gate reads them off disk. In an ADOPTER's
+// instance they are not files at all — an instance commits zero Terraform, and
+// the roots arrive from this embed at render time — so the only copy of the
+// constraint an instance can consult is the one compiled into the llz it is
+// running. Which is precisely why the pin and the constraint could drift with
+// nothing noticing: they do not live in the same place.
+//
+// versions.tf carries no copier token, so no substitution is needed or wanted —
+// callers get the bytes verbatim.
+func RootVersions() map[string]string {
+	out := map[string]string{}
+	for _, r := range tfRel {
+		root, file, ok := strings.Cut(r, "/")
+		if !ok || file != "versions.tf" {
+			continue
+		}
+		raw, _ := embedded.ReadFile("roots/" + r) // enumerated at init — cannot fail
+		out[root] = string(raw)
+	}
+	return out
+}
