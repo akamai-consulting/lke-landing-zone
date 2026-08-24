@@ -510,7 +510,12 @@ func TestNoteDoesNotClaimAWriteThatDidNotHappen(t *testing.T) {
 		mustNotSay               string
 		mustSay                  string
 	}{
-		{"nothing on disk", 1, 0, 0, "generating", "nothing to generate yet"},
+		{"nothing on disk", 1, 0, 2, "generating", "nothing to generate yet"},
+		// Zero DECLARED deployments is not a rank shortage. This arm is what every
+		// fresh `llz new` sitting on the shipped placeholder reads, and it used to
+		// tell them to "set promotionRank on the deployments you want to chain" —
+		// naming deployments they do not have.
+		{"no deployments at all", 0, 0, 0, "promotionRank", "no deployments yet"},
 		{"valid unranked stages", 0, 3, 2, "generating", "not managing this file"},
 		// The solo arm: same claim about who owns the file, and a remedy that
 		// exists for an instance with nothing to chain to.
@@ -1472,10 +1477,17 @@ func TestUnmanagedNoteDoesNotClaimEveryStageWasChecked(t *testing.T) {
 // deployment" who has two of them therefore loses the pipeline on the FIRST add,
 // having done exactly what the error said. The message names all of them and says
 // what happens in between.
+//
+// TWO DECLARED DEPLOYMENTS THROUGHOUT, and that is the whole reason this test still
+// bites. The hazard it pins is a property of the PLACEHOLDER path, and a
+// single-deployment instance no longer takes it — regeneration there produces a
+// working one-stage pipeline, so the warning would be false and the arm is not
+// reached. Left at one declared deployment, every assertion below would pass or fail
+// for reasons that have nothing to do with the trap.
 func TestMultipleMissingDeploymentsAreAllNamed(t *testing.T) {
 	p := Plan{
 		Undeclared: []StageRef{{Job: "dev", Env: "dev"}, {Job: "staging", Env: "staging"}},
-		Declared:   []string{"prod"},
+		Declared:   []string{"prod", "qa"},
 	}
 	err := p.UndeclaredErr()
 	if err == nil {
@@ -1489,7 +1501,7 @@ func TestMultipleMissingDeploymentsAreAllNamed(t *testing.T) {
 
 	// One missing deployment has no such ordering hazard, and must not be dressed up
 	// with a warning that does not apply to it.
-	one := Plan{Undeclared: []StageRef{{Job: "dev", Env: "dev"}}, Declared: []string{"prod"}}
+	one := Plan{Undeclared: []StageRef{{Job: "dev", Env: "dev"}}, Declared: []string{"prod", "qa"}}
 	if msg := one.UndeclaredErr().Error(); strings.Contains(msg, "while any one of them") {
 		t.Errorf("a single missing deployment has no in-between state:\n%s", msg)
 	}
@@ -1498,7 +1510,7 @@ func TestMultipleMissingDeploymentsAreAllNamed(t *testing.T) {
 	// create, so it must not be counted into the "create ALL N" instruction.
 	noRegion := Plan{
 		Undeclared: []StageRef{{Job: "dev", Env: "dev"}, {Job: "broken", Env: ""}},
-		Declared:   []string{"prod"},
+		Declared:   []string{"prod", "qa"},
 	}
 	// Asserting on the COUNT alone would not pin this: gating on len(p.Undeclared)
 	// instead of the missing subset still prints "create ALL 1", which no check for
@@ -1599,5 +1611,58 @@ jobs:
 	}
 	if !strings.Contains(plan.Note, "llz env pipeline") {
 		t.Errorf("the note must still name the route to a managed file: %q", plan.Note)
+	}
+}
+
+// THE FIX TEXT IS A CLAIM ABOUT WHAT THE NEXT COMMAND DOES, so it has to move when
+// the generator moves. This is the message the failure that started all of this
+// actually printed, and after the single-stage pipeline landed it was still saying
+// the opposite of the truth: it warned that regenerating "replaces this file with
+// the empty placeholder" — which had stopped being true for exactly this instance —
+// and steered the reader into `llz env add dev` / `llz env add staging`, standing up
+// two deployments they never wanted, instead of the one command that now fixes it
+// without losing anything.
+func TestSingleDeploymentRemedyIsRegenerateNotProvision(t *testing.T) {
+	// The gsap-apl shape, verbatim: one declared deployment, a three-stage file.
+	p := Plan{
+		Undeclared: []StageRef{{Job: "dev", Env: "dev"}, {Job: "staging", Env: "staging"}},
+		Declared:   []string{"prod"},
+	}
+	msg := p.UndeclaredErr().Error()
+
+	// The one-command fix has to be the FIRST thing offered, not a footnote after
+	// two `llz env add`s.
+	fix := strings.Index(msg, "fix:")
+	if fix < 0 || !strings.Contains(msg[fix:fix+80], "llz env pipeline") {
+		t.Errorf("`llz env pipeline` must lead the remedy at one declared deployment:\n%s", msg)
+	}
+	// It must say what regenerating produces, because "will this delete my pipeline"
+	// is the question that stopped the reader last time.
+	if !strings.Contains(msg, `applies "prod"`) {
+		t.Errorf("the remedy must name what the regenerated stage applies:\n%s", msg)
+	}
+	// AND IT MUST NOT REPEAT THE WARNING THAT NO LONGER APPLIES. This is the
+	// assertion that fails if the solo branch is ever removed without this text
+	// following it back.
+	if strings.Contains(msg, "empty placeholder") {
+		t.Errorf("regenerating a one-deployment instance does not write the placeholder; the remedy must not say so:\n%s", msg)
+	}
+	// `llz env add` is still reachable, but as a want rather than a step.
+	if !strings.Contains(msg, "only if you actually want") {
+		t.Errorf("provisioning the named deployments must be offered as a choice, not an instruction:\n%s", msg)
+	}
+}
+
+// ZERO DECLARED DEPLOYMENTS IS NOT A RANK SHORTAGE either. Telling this reader to
+// "set promotionRank on the deployments you DO have" names an empty set, and
+// pointing them at a pipeline is premature: there is nothing for one to apply.
+func TestNoDeploymentsRemedyDoesNotNameRanks(t *testing.T) {
+	p := Plan{Undeclared: []StageRef{{Job: "dev", Env: "dev"}}}
+	msg := p.UndeclaredErr().Error()
+	if strings.Contains(msg, "promotionRank") {
+		t.Errorf("an instance with no deployments has nothing to rank:\n%s", msg)
+	}
+	if !strings.Contains(msg, "llz env add") {
+		t.Errorf("the only route forward must still be named:\n%s", msg)
 	}
 }

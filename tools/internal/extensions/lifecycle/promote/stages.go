@@ -316,26 +316,57 @@ func (p Plan) UndeclaredErr() error {
 	} else {
 		fmt.Fprintf(&b, "\ndeclared deployments: %s", strings.Join(p.Declared, ", "))
 	}
-	// THE REMEDY HAS TO ACCOUNT FOR THE NEXT COMMAND THE READER RUNS. `llz env add`
-	// regenerates promote.yml as its last step, and while ANY stage still names a
-	// deployment that does not exist the regeneration replaces the file with the empty
-	// placeholder. So an operator told to "create the missing deployment" who has two
-	// of them loses the pipeline on the first add — having done exactly as instructed.
-	// Naming every missing deployment, and saying what happens in between, is the
-	// difference between advice and a trap.
+	// THE REMEDY HAS TO ACCOUNT FOR THE NEXT COMMAND THE READER RUNS, and it has to
+	// be re-derived every time the generator's behaviour moves — because the fix text
+	// is a CLAIM about what that command will do, and a stale claim here is worse than
+	// no advice at all.
+	//
+	// It has been wrong twice, in opposite directions. First it said "create the
+	// missing deployment" to an operator with two of them, who lost the pipeline on
+	// the first `llz env add` having done exactly as instructed. Then the
+	// single-deployment case learned to regenerate into a working one-stage pipeline
+	// (see PlanWorkflow) and this text went on warning that regenerating "replaces
+	// this file with the empty placeholder" — deterring the one command that now
+	// fixes it, and steering the reader into `llz env add dev`/`llz env add staging`
+	// for deployments they never wanted, on the instance that reported the bug.
+	//
+	// So the remedy is chosen by the DECLARED COUNT, which is what decides what
+	// regenerating actually produces.
 	missing := namesMissingDeployment(p.Undeclared)
-	if len(missing) > 1 {
+	switch {
+	case len(p.Declared) == 1:
+		// One deployment: there is no order to answer, so regeneration is total and
+		// lossless. `llz env add` is offered second and only as a want, not a step.
+		fmt.Fprintf(&b, "\nfix: run `llz env pipeline` — with one declared deployment it regenerates this"+
+			"\n     file as the single stage that applies %q, which is dispatchable as it stands", p.Declared[0])
+		if len(missing) > 0 {
+			names := make([]string, 0, len(missing))
+			for _, st := range missing {
+				names = append(names, st.Env)
+			}
+			fmt.Fprintf(&b, "\n     (only if you actually want %s as deployments: `llz env add %s` first,"+
+				"\n      then set promotionRank on each and re-run `llz env pipeline` for a chain)",
+				strings.Join(names, ", "), strings.Join(names, "`, `llz env add "))
+		}
+	case len(p.Declared) == 0:
+		// Nothing to regenerate from and nothing to rank. Naming promotionRank here
+		// would point at deployments the reader does not have.
+		b.WriteString("\nfix: `llz env add <env> …` — this instance has no deployments, so there is nothing" +
+			"\n     for a pipeline to apply until one exists")
+	case len(missing) > 1:
 		names := make([]string, 0, len(missing))
-		for _, s := range missing {
-			names = append(names, s.Env)
+		for _, st := range missing {
+			names = append(names, st.Env)
 		}
 		fmt.Fprintf(&b, "\nfix: create ALL %d missing deployments (`llz env add %s`) — while any one of them"+
 			"\n     is still absent, regenerating replaces this file with the empty placeholder", len(missing), strings.Join(names, "`, `llz env add "))
-	} else {
+		b.WriteString("\n     or set promotionRank on the deployments you DO have and run `llz env pipeline`," +
+			"\n     which regenerates the chain from those")
+	default:
 		b.WriteString("\nfix: `llz env add <env> …` to create the missing deployment")
+		b.WriteString("\n     or set promotionRank on the deployments you DO have and run `llz env pipeline`," +
+			"\n     which regenerates the chain from those")
 	}
-	b.WriteString("\n     or set promotionRank on the deployments you DO have and run `llz env pipeline`," +
-		"\n     which regenerates the chain from those")
 	return fmt.Errorf("%s", b.String())
 }
 

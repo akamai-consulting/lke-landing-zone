@@ -170,7 +170,13 @@ func unmanagedNote(ranked, onDisk, declared int) string {
 		return fmt.Sprintf("promote.yml: %d stage(s) on disk, none naming a deployment this instance does not have — llz is not managing this file, because it did not write it. Leaving it as it is; delete it and run `llz env pipeline` to have llz generate and maintain the single-stage pipeline instead.", onDisk)
 	}
 	if onDisk == 0 {
-		return fmt.Sprintf("promote.yml: %d ranked deployment(s) — need ≥2 to form a pipeline; nothing to generate yet (set promotionRank on the deployments you want to chain).", ranked)
+		// "SET promotionRank ON THE DEPLOYMENTS YOU WANT TO CHAIN" NAMES NOTHING when
+		// there are none, and this arm is reached by every fresh `llz new` sitting on
+		// the shipped placeholder. Ranks are not what that tree is short of.
+		if declared == 0 {
+			return "promote.yml: this instance declares no deployments yet, so there is nothing for a pipeline to apply — `llz env add <env>` first; one deployment already generates a dispatchable single-stage pipeline."
+		}
+		return fmt.Sprintf("promote.yml: %d ranked deployment(s) — need ≥2 to chain %d declared deployments; nothing to generate yet (set promotionRank on the deployments you want to chain).", ranked, declared)
 	}
 	// "none naming a deployment that does not exist" rather than "all naming declared
 	// deployments": this path is reached when nothing AUTHORISES a rewrite, which is

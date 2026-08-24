@@ -402,9 +402,9 @@ func envPipelineCmd() *cobra.Command {
 			"--check writes nothing and exits non-zero when promote.yml has drifted from\n" +
 			"the ranks, when any stage names a deployment the spec does not declare, or\n" +
 			"when two or more applying stages have no needs: order over them (wire it into\n" +
-			"CI as the \"can this pipeline still run?\" gate). Regenerating needs ≥2 ranked\n" +
-			"deployments; the stage checks run at any count. Runs only in a rendered\n" +
-			"instance.",
+			"CI as the \"can this pipeline still run?\" gate). A chain needs ≥2 RANKED\n" +
+			"deployments; one DECLARED deployment regenerates as a single dispatchable\n" +
+			"stage, no rank needed. Stage checks run at any count; instances only.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// --require-pipeline is a question, so it needs the question mode. Without
@@ -432,7 +432,7 @@ func envPipelineCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "verify promote.yml matches the ranks, names only declared deployments, and orders its stages; exit non-zero otherwise (writes nothing)")
-	c.Flags().BoolVar(&requirePipeline, "require-pipeline", false, "with --check, also fail when promote.yml declares fewer than 2 applying stages (for promote.yml's own preflight, where having no pipeline IS the failure; a PR gate must NOT set this)")
+	c.Flags().BoolVar(&requirePipeline, "require-pipeline", false, "with --check, also fail when promote.yml would apply nothing on dispatch — no applying stage, or one that skips the other declared deployments (for promote.yml's own preflight, where having no pipeline IS the failure; a PR gate must NOT set this)")
 	return c
 }
 
