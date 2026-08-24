@@ -98,26 +98,6 @@ func TestSelectNodePoolID(t *testing.T) {
 	}
 }
 
-func TestParseStateID(t *testing.T) {
-	out := `# module.cluster.linode_vpc.this:
-resource "linode_vpc" "this" {
-    description = ""
-    id          = "12345"
-    label       = "primary-vpc"
-}`
-	if got := ParseStateID(out); got != "12345" {
-		t.Errorf("ParseStateID = %q, want 12345", got)
-	}
-	if got := ParseStateID("no id here"); got != "" {
-		t.Errorf("ParseStateID(no id) = %q, want empty", got)
-	}
-	// A later `something_id =` line must not be mistaken for the id attribute.
-	out2 := "    vpc_id = \"999\"\n    id     = \"42\"\n"
-	if got := ParseStateID(out2); got != "42" {
-		t.Errorf("ParseStateID = %q, want 42", got)
-	}
-}
-
 func TestKubeconfigContent(t *testing.T) {
 	// "apiVersion: v1" base64 -> decodes to real content.
 	content, stub := KubeconfigContent("YXBpVmVyc2lvbjogdjE=")

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
@@ -103,7 +104,15 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 	if err != nil {
 		return err
 	}
+	return runTFImport(ctx, g, client, region, nonfatal)
+}
 
+// runTFImport is the resource walk, split from the credential wiring above so a
+// test can drive it with a client aimed at a stub server and a state snapshot
+// that is not a real state file. The regression it exists to hold is behavioural
+// — "an address already in state is never imported" — and that is not a property
+// of any parser, so it could not be tested through the parse helper alone.
+func runTFImport(ctx context.Context, g cliopts.Opts, client *linode.Client, region string, nonfatal bool) error {
 	vars, varFile, err := tfvars.ReadRegion("", region)
 	if err != nil {
 		return err
@@ -112,6 +121,22 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 
 	if err := EnsureKubeconfig(ctx, g, client, labels.Cluster); err != nil {
 		return err
+	}
+
+	// ONE SNAPSHOT FOR THE WHOLE WALK, and re-reading between steps would buy
+	// nothing: no import below adds any OTHER address in this list to state
+	// (importing the VPC does not create the subnet; importing the cluster does
+	// not create the pool), so each address's presence is unaffected by the
+	// imports around it. Five `state show` execs became one `show -json`.
+	//
+	// A READ FAILURE IS FATAL. It used to be indistinguishable from "nothing is
+	// in state", which is how tf-import came to import a cluster OpenTofu was
+	// already managing — see terraform/state.go for the full account. An empty
+	// snapshot (greenfield, no state object yet) is NOT a failure and still
+	// arrives here as an empty index.
+	idx, err := readStateIndex()
+	if err != nil {
+		return fmt.Errorf("read terraform state: %w", err)
 	}
 
 	// ── VPC (always fatal — fast, no cluster dependency, even under --nonfatal) ──
@@ -126,12 +151,16 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 	dedicatedVPC := vars.VPCNetwork == ""
 	addrVPCEff := addrVPC + "[0]"
 	var vpcID string
-	if dedicatedVPC {
-		vpcID = TfStateID(addrVPCEff)
-	}
-	if vpcID != "" {
+	vpcInState := dedicatedVPC && idx.Has(addrVPCEff)
+	if vpcInState {
 		fmt.Printf("%s already in state — skipping\n", addrVPCEff)
-	} else {
+		vpcID = idx.ID(addrVPCEff)
+	}
+	// The id, separately from the import decision. IN STATE WITH AN UNREADABLE ID
+	// falls through to the API lookup for the id ALONE — vpcInState still
+	// suppresses the import, because "I cannot read its id" is not evidence that
+	// a resource is unmanaged.
+	if vpcID == "" {
 		vpcs, err := client.ListVPCs(ctx)
 		if err != nil {
 			return fmt.Errorf("list VPCs: %w", err)
@@ -141,18 +170,18 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 			// Only a dedicated VPC is managed (and thus imported) by this root; a
 			// shared VPC is owned by the vpc/<network> root — we just reuse its id
 			// for the subnet import.
-			if dedicatedVPC {
+			if dedicatedVPC && !vpcInState {
 				if _, err := TfImport(g, varFile, addrVPCEff, vpcID, false); err != nil {
 					return err
 				}
 			}
-		} else {
+		} else if !vpcInState {
 			fmt.Printf("VPC %q not found in Linode — skipping import\n", labels.VPC)
 		}
 	}
 
 	// ── VPC subnet (always fatal; needs the VPC id) ──
-	if subnetInState := TfStateID(addrSubnet); subnetInState != "" {
+	if idx.Has(addrSubnet) {
 		fmt.Printf("%s already in state — skipping\n", addrSubnet)
 	} else if vpcID == "" {
 		fmt.Println("No VPC id available — skipping subnet import")
@@ -181,7 +210,7 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 	// stranding the account's orphaned node firewall as a label collision the next
 	// apply trips over (exactly the wedge a killed cluster import left behind).
 	// Ordered here, the firewall lands in state regardless of how the cluster goes.
-	if fwInState := TfStateID(addrFirewall); fwInState != "" {
+	if idx.Has(addrFirewall) {
 		fmt.Printf("%s already in state — skipping\n", addrFirewall)
 	} else {
 		fws, err := client.ListFirewalls(ctx)
@@ -199,7 +228,13 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 
 	// ── LKE cluster (nonfatal-aware; a failed import clears the id so the pool
 	//    import is skipped too) ──
-	clusterID := TfStateID(addrCluster)
+	clusterInState := idx.Has(addrCluster)
+	clusterID := idx.ID(addrCluster)
+	if clusterInState {
+		fmt.Printf("%s already in state — skipping\n", addrCluster)
+	}
+	// Same split as the VPC: present-but-unreadable resolves the id from the API
+	// so the node-pool import below still has one, and imports nothing.
 	if clusterID == "" {
 		ids, err := client.ClustersWithLabel(ctx, labels.Cluster)
 		if err != nil {
@@ -207,22 +242,22 @@ func RunCITFImport(g cliopts.Opts, region string, nonfatal bool) error {
 		}
 		if len(ids) > 0 {
 			clusterID = strconv.FormatUint(ids[0], 10)
-			ok, err := TfImport(g, varFile, addrCluster, clusterID, !nonfatal)
-			if err != nil {
-				return err
+			if !clusterInState {
+				ok, err := TfImport(g, varFile, addrCluster, clusterID, !nonfatal)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					clusterID = ""
+				}
 			}
-			if !ok {
-				clusterID = ""
-			}
-		} else {
+		} else if !clusterInState {
 			fmt.Printf("Cluster %q not found in Linode — skipping import\n", labels.Cluster)
 		}
-	} else {
-		fmt.Printf("%s already in state — skipping\n", addrCluster)
 	}
 
 	// ── LKE node pool (nonfatal-aware; needs the cluster id) ──
-	if poolInState := TfStateID(addrNodePool); poolInState != "" {
+	if idx.Has(addrNodePool) {
 		fmt.Printf("%s already in state — skipping\n", addrNodePool)
 	} else if clusterID == "" {
 		fmt.Println("No cluster id available — skipping node pool import")
@@ -451,13 +486,32 @@ func TfImport(g cliopts.Opts, varFile, addr, id string, fatal bool) (ok bool, er
 	return true, nil
 }
 
-// TfStateID returns the id of an in-state resource via `terraform state show`,
-// or "" if the resource is not in state: `state show` of an absent address
-// exits non-zero, so the error path covers the not-in-state case.
-func TfStateID(addr string) string {
-	out, err := tfbin.Command("state", "show", addr).Output()
+// tfShowJSONFn is the `tofu show -json` exec seam. A package var on the same
+// pattern as tfPlanRunFn, so a test can hand the walk a state snapshot without a
+// backend, a provider or a state file.
+var tfShowJSONFn = func() ([]byte, error) {
+	cmd := tfbin.Command("show", "-json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		// The stderr text is the whole diagnostic value here — `.Output()` alone
+		// yields "exit status 1", which is what made the old helper's failure
+		// branch indistinguishable from an empty state in the first place.
+		return nil, fmt.Errorf("%s show -json: %w: %s", tfbin.Bin(), err, strings.TrimSpace(stderr.String()))
 	}
-	return tf.ParseStateID(string(out))
+	return out, nil
+}
+
+// readStateIndex returns every address currently in state, with its id.
+//
+// See terraform/state.go for why this reads `show -json` rather than
+// `state show` or `state list`, and why "no state at all" must be an empty
+// answer rather than an error.
+func readStateIndex() (tf.StateIndex, error) {
+	out, err := tfShowJSONFn()
+	if err != nil {
+		return nil, err
+	}
+	return tf.ParseStateIndex(out)
 }
