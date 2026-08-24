@@ -222,11 +222,21 @@ used to abstain below two ranks and print "in sync" for it, so an instance with
 one deployment and a three-stage workflow was reported as healthy right up until
 somebody pressed **Run workflow**. Abstaining is not agreement.
 
-It runs in two places, and both are needed: `promote-pipeline-drift` in
-`llz-terraform.yml` (on pull requests — catches the bad edit before it lands) and
-the `llz-preflight` job the generated `promote.yml` chains its first stage from
-(on dispatch — catches anything that reached `main` another way, before a single
-stage starts applying).
+It runs in three places, and each catches a population the others cannot:
+
+| Where | When | Catches |
+| --- | --- | --- |
+| `llz doctor` | locally, before you push | the bad edit *and* the state your instance was scaffolded in — this is the only one that runs before a commit exists |
+| `promote-pipeline-drift` in `llz-terraform.yml` | on every pull request | the bad edit before it lands |
+| the `llz-preflight` job the generated `promote.yml` chains its first stage from | on dispatch | anything that reached `main` another way, before a single stage starts applying |
+
+The first was added last, and the gap it closed was the expensive one. The other
+two only ever fire on a *change*, so an instance that carried an unrunnable
+`promote.yml` from the day it was scaffolded — nobody edits a file they never
+configured — met neither until some unrelated pull request happened to run the CI
+job months later. `llz upgrade` runs `llz doctor` as its post-upgrade readiness
+report, so the check now also reaches the operator at the one moment they are
+guaranteed to be looking.
 
 **`llz ci assert-image-fresh` runs first in the preflight, and the order is load
 bearing.** A `TF_IMAGE` that has not been re-pinned since the last upgrade is the
