@@ -992,7 +992,11 @@ node_type = "g8-dedicated-8-4"
 node_count = 5
 
 control_plane_high_availability = true
-control_plane_audit_logs_enabled = true
+# false, NOT true — see variables.tf. `llz render` layers the spec's assignments
+# ON TOP OF this file, so a value here is what every deployment that does not set
+# it in the spec actually gets. That is the same mechanism that made the databases
+# guard read `databases = {}` as a declaration (#496).
+control_plane_audit_logs_enabled = false
 
 # Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
 # Terraform seeds the ACL at cluster-create from the github_runner_* CIDRs below
@@ -1070,7 +1074,11 @@ node_type = "g6-standard-4"
 node_count = 2
 
 control_plane_high_availability = true
-control_plane_audit_logs_enabled = true
+# false, NOT true — see variables.tf. `llz render` layers the spec's assignments
+# ON TOP OF this file, so a value here is what every deployment that does not set
+# it in the spec actually gets. That is the same mechanism that made the databases
+# guard read `databases = {}` as a declaration (#496).
+control_plane_audit_logs_enabled = false
 
 # Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
 # Terraform seeds the ACL at cluster-create from the github_runner_* CIDRs below
@@ -1094,7 +1102,7 @@ autoscaler_enabled = false
 # Managed App Platform: true → Linode installs+manages apl-core + provisions the
 # akamai-apl.net domain (bootstrap-cluster skips its own apl-core install). ADR 0005.
 apl_enabled = false
---- terraform-iac-bootstrap/cluster/variables.tf  sha256=f5695913aeea924f5875e27c9a3a96bc110fbf4bcdfeaa64c2562d5d2ac697e7  bytes=7024
+--- terraform-iac-bootstrap/cluster/variables.tf  sha256=897df3df6f1de2e6054f3da606fafd07e50459c6de5b88d31a4de85273acb7c5  bytes=8342
 --- terraform-iac-bootstrap/cluster/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
 --- terraform-iac-bootstrap/databases/backend.tf  sha256=05b5bc85fcc4dbf59e7040db9e5b0ecd68673d4da0295b5315702e41894da6a6  bytes=1820
 --- terraform-iac-bootstrap/databases/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
