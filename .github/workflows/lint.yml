@@ -280,6 +280,16 @@ jobs:
         with:
           version: v${{ env.YQ_VERSION }}
 
+      # llz, because the Kyverno gate below applies its policies through
+      # `llz ci apply-kyverno-policy` rather than a bare `kubectl apply` — see that
+      # step. Via ./.github/actions/setup-llz, which is the ONLY sanctioned way to
+      # get a Go toolchain in this repo's workflows (`setup-go-sole-site` fails a
+      # second setup-go pin, and a second pin had already drifted a major version).
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: ${{ github.workspace }}/bin/llz
+
       # helm/kind-action installs kind (KIND_VERSION) and stands up the cluster in
       # one step; the ephemeral runner is torn down afterward, so no explicit
       # delete is needed.
@@ -487,7 +497,7 @@ jobs:
             --version "$KYVERNO_HELM_VERSION" \
             --wait --timeout 5m
           kubectl kustomize platform-apl/components/imageSignature > "$RUNNER_TEMP/policies.yaml"
-          KUBECONFIG_RAW="$(cat "$HOME/.kube/config")" POLICY_MANIFEST="$RUNNER_TEMP/policies.yaml" FIELD_MANAGER=lint-kind WEBHOOK_RACE_FATAL=true llz ci apply-kyverno-policy
+          KUBECONFIG_RAW="$(cat "$HOME/.kube/config")" POLICY_MANIFEST="$RUNNER_TEMP/policies.yaml" FIELD_MANAGER=lint-kind WEBHOOK_RACE_FATAL=true "$GITHUB_WORKSPACE/bin/llz" ci apply-kyverno-policy
 
 
 
