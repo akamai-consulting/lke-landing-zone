@@ -7,11 +7,28 @@ version: 2
 # `dependencies`, `github-actions` or `go`). Labelling nothing keeps the config
 # valid in any fork of this repo, and nothing consumes the labels: the
 # auto-merge workflow keys off `github.event.pull_request.user.login ==
-# 'dependabot[bot]'` and the PR body's `update-type:` line, not labels.
+# 'dependabot[bot]'` and the commit-message `update-type:` trailer, not labels.
+#
+# NOTHING HERE SCANS `instance-template/`, DELIBERATELY. The delivered
+# `.github/workflows/llz-*.yml` are class `managed` in `.template-manifest`, so
+# their sha256 lives in `instance-template/.template-managed.lock`. A bump to a
+# pin inside one changes that digest, and `managed-lock-check` (which lint.yml
+# runs on `instance-template/.github/**`) then fails until someone re-runs
+# `llz ci managed-fresh --write` — which Dependabot cannot do. Scanning that tree
+# would produce a stream of permanently red PRs, so the delivered pins are bumped
+# by hand alongside the lock. See .github/workflows/AGENTS.md.
 updates:
   # ── GitHub Actions ────────────────────────────────────────────────────────
+  # `directories`, not `directory`: for this ecosystem `/` means
+  # `.github/workflows` plus a root-level action.yml, and NOTHING ELSE. The one
+  # surviving `actions/setup-go` pin lives in `.github/actions/setup-llz/` —
+  # the `setup-go-sole-site` guard put it there — so `/` alone left the repo's
+  # only Go toolchain pin unscanned, and it went a major version stale in
+  # silence. Only `directories` supports globs, hence the shape.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -23,6 +40,39 @@ updates:
   # ── Go module (native tools) ──────────────────────────────────────────────
   - package-ecosystem: "gomod"
     directory: "/tools"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+
+  # ── Docker (the CI/toolbox image) ─────────────────────────────────────────
+  # Covers the `FROM` lines only — golang: and debian: bases. The ~15
+  # `ARG *_VERSION` tool pins below them (tofu, helm, kubectl, bao …) are
+  # invisible to Dependabot; `version-pins-check` owns those against the
+  # Dockerfile ARG block as the declared single source of truth.
+  - package-ecosystem: "docker"
+    directory: "/dockerfiles"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+
+  # ── Terraform (reusable modules) ──────────────────────────────────────────
+  # A MAJOR-VERSION TRIPWIRE, NOT A PR STREAM. These modules constrain the
+  # linode provider as `~> 3.11`, and Dependabot only opens a PR when a release
+  # falls OUTSIDE the declared constraint — so 3.12 arrives silently at the next
+  # `tofu init` and only a 4.0 raises a PR here. That is the point: the majors
+  # are what need a human. No `.terraform.lock.hcl` is tracked in this tree
+  # (the delivered ones are class `owned` — each instance owns its own).
+  - package-ecosystem: "terraform"
+    directories:
+      - "/terraform-modules/*"
     schedule:
       interval: "weekly"
       day: "monday"

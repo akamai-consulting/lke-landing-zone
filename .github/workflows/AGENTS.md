@@ -97,6 +97,27 @@ composite intentionally does not do. Note the exception is the *build* only: tha
 job still takes its **toolchain** from `setup-llz`, which is why the sole-site
 rule above holds with no exemptions at all.
 
+## Action pins and Dependabot
+
+Every `uses:` is SHA-pinned with a `# vX.Y.Z` comment, and `.github/dependabot.yml`
+bumps them. It scans **two** directories, `/` and `/.github/actions/*`: for the
+`github-actions` ecosystem `/` covers `.github/workflows` plus a *root-level*
+`action.yml` and nothing else, so when the sole-site rule above moved this repo's
+only `actions/setup-go` pin into a composite action, it moved it out of
+Dependabot's reach at the same time. It sat a major version behind for as long as
+it was invisible, which is the failure mode to watch for whenever a pin moves into
+a new directory.
+
+Dependabot deliberately does **not** scan `instance-template/.github/`. Those
+`llz-*.yml` are class `managed`, so their sha256 lives in
+`instance-template/.template-managed.lock`: a bump changes the digest, and
+`managed-lock-check` then fails until `llz ci managed-fresh --write` regenerates
+the lock — which Dependabot cannot run, so every such PR would land red. The
+delivered pins are therefore bumped **by hand, in the same PR as the lock write**.
+When you take a Dependabot bump for an action both trees use — today
+`actions/checkout` and `actions/upload-artifact` — carry it into
+`instance-template/.github/` yourself.
+
 ## Tool installation pattern
 
 On GitHub-hosted runners, install CLI tools with the official marketplace setup actions (SHA-pinned, with an explicit pinned version) rather than hand-rolled `curl | tar` steps (a legacy `$HOME/.local/bin` workaround). The setup actions cache the tool and put it on `PATH`:
