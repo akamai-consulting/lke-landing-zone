@@ -99,7 +99,7 @@ jobs:
       REGION:              ${{ matrix.region }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
@@ -182,7 +182,7 @@ jobs:
       REGION:              ${{ matrix.region }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Opens this runner's dynamic egress IP in the LKE-E control-plane ACL
       # (revoked at job end). allow-missing — a torn-down cluster is skipped
       # internally and the checks below gate on the `available` output.
@@ -273,7 +273,7 @@ jobs:
       AWS_ENDPOINT_URL_S3:         ${{ vars.TF_STATE_ENDPOINT }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
@@ -372,7 +372,7 @@ jobs:
       REGION:              ${{ matrix.region }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Opens this runner's dynamic egress IP in the LKE-E control-plane ACL
       # (revoked at job end). allow-missing — a torn-down cluster is skipped
       # internally and the checks below gate on `available`.
@@ -464,7 +464,7 @@ jobs:
       # Instance at the workspace root — the pin in its .copier-answers.yml is
       # what we compare.
       - name: Checkout the instance
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Compare the instance's template pin against the template head
         env:

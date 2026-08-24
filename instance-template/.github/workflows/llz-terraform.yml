@@ -236,7 +236,7 @@ jobs:
       KUBE_IMAGE: ${{ vars.KUBE_IMAGE }}
     steps:
       - name: Checkout the instance (the template pin)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # IMAGE SKEW IS CHECKED FIRST, AND THE ORDER IS THE WHOLE POINT.
       #
       # THE IMAGE EVERY JOB IN THIS PIPELINE RUNS IN, checked on the cheapest job
@@ -284,7 +284,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # NEW FLAGS BELOW, SO THE IMAGE IS CHECKED FIRST — the rule repo-readiness
       # records. `--if-spec` and `--strict` shipped this release; a TF_IMAGE that
       # has not been re-pinned since the last upgrade is the NORMAL state right
@@ -334,7 +334,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # NEW FLAGS BELOW, SO THE IMAGE IS CHECKED FIRST — the rule repo-readiness
       # records. `--if-spec` and `--strict` shipped this release; a TF_IMAGE that
       # has not been re-pinned since the last upgrade is the NORMAL state right
@@ -382,7 +382,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout the instance (tfvars + promote.yml)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify promote.yml matches the promotion_rank ordering
         run: llz env pipeline --check
 
@@ -416,7 +416,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # ── Front-loaded preflights ────────────────────────────────────────────────
       # This is the first job apply-cluster depends on, so these cheap checks fail
       # BEFORE the ~15-min cluster apply. TF_IMAGE (baked llz) and the instance's
@@ -615,7 +615,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Rendered EXPLICITLY here, rather than left to the terraform-init composite,
       # because the preflight below reads <region>.tfvars and runs BEFORE that
       # composite would have rendered it.
@@ -813,7 +813,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate: it supplies the
       # cluster/<region>.tfvars label source and the confirm token.
       - name: Checkout the instance
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
@@ -888,7 +888,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate — it supplies the TF roots
       # and the confirm token.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
@@ -943,7 +943,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         id: confirm
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
@@ -1122,7 +1122,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Terraform init — object-storage
         uses: ./.github/actions/terraform-init
         # Bounded: `tofu init` is a provider/module/state fetch with no internal
@@ -1198,7 +1198,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate — it supplies the TF roots
       # and the confirm token.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
@@ -1248,7 +1248,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate — it supplies the TF roots
       # and the confirm token.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
@@ -1423,7 +1423,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Terraform init — databases
         uses: ./.github/actions/terraform-init
         # Bounded: `tofu init` is a provider/module/state fetch with no internal
@@ -1478,7 +1478,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate — it supplies the TF roots
       # and the confirm token.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "databases" "$CONFIRM_DESTROY"
 
@@ -1534,7 +1534,7 @@ jobs:
       # Checkout must precede the destroy-confirm gate — it supplies the TF roots
       # and the confirm token.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "databases" "$CONFIRM_DESTROY"
 
