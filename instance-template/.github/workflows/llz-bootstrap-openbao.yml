@@ -140,7 +140,7 @@ jobs:
       peer: ${{ steps.r.outputs.peer }}
     steps:
       - name: Checkout the instance (tfvars)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve role + peer
         id: r
         # Emits role=/peer= to $GITHUB_OUTPUT (peer empty for standalone).
@@ -186,7 +186,7 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Two steps: the verb emits role=/peer= step outputs; the export promotes them
       # to job-wide env so later steps can use env.HA_ROLE in their `if:`.
@@ -903,7 +903,7 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Targets the PEER's region, not this deployment's. Revoked at job end.
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
@@ -959,7 +959,7 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Targets the standby (self). Revoked at job end.
       - name: Cluster access (standby kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
@@ -1013,7 +1013,7 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Targets the PEER's region, not this deployment's. Revoked at job end.
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access

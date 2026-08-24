@@ -243,7 +243,9 @@ Just so you don't burn time looking:
 
 - **Delete OpenBao recovery keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
 - **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
-- **Change a `*.terraform.lock.hcl` provider version casually** — these come through dependabot PRs that the CVE gate audits.
+- **Change a `*.terraform.lock.hcl` provider version casually** — nothing bumps these for you. Your instance ships no Dependabot
+  config, and the lock file is yours (`owned` in `.template-manifest`), so `llz upgrade` never touches it either. A provider move
+  is a deliberate `tofu init -upgrade` in its own PR, with the resulting plan read before merge.
 
 ---
 

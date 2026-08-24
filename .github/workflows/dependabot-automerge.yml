@@ -38,13 +38,29 @@ jobs:
         # exits non-zero when it fails.
         run: |
           set -euo pipefail
-          body="$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')"
+          # THE METADATA IS IN THE COMMIT MESSAGE, NEVER THE PR BODY. This step
+          # used to read `gh pr view --json body` and grep it for
+          # `update-type: version-update:semver-*`. Dependabot does not put that
+          # string there — the body carries release notes and an
+          # "Updates `x` from a to b" line, while the `updated-dependencies:`
+          # block (dependency-name, dependency-version, update-type,
+          # dependency-group) is a commit-message trailer. So the second grep
+          # fell through to "No recognised semver update-type found — skipping"
+          # on EVERY Dependabot PR since this workflow was written: nothing ever
+          # auto-merged, and the major-version guard below never rejected
+          # anything either, because it was shadowed by a check that could not
+          # match. Measured on PR #498: `update-type` appears 0 times in the
+          # body and once in the commit message.
+          #
+          # A grouped PR trailer lists every dependency in the group, so a
+          # single major anywhere in the group still trips the first grep.
+          meta="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER/commits" --jq '.[].commit.message')"
 
-          if grep -qF 'update-type: version-update:semver-major' <<<"$body"; then
+          if grep -qF 'update-type: version-update:semver-major' <<<"$meta"; then
             echo "Contains major update — skipping auto-merge"
             exit 0
           fi
-          if ! grep -qF 'update-type: version-update:semver-' <<<"$body"; then
+          if ! grep -qF 'update-type: version-update:semver-' <<<"$meta"; then
             echo "No recognised semver update-type found — skipping"
             exit 0
           fi
