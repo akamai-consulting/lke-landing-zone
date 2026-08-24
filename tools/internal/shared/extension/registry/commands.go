@@ -66,6 +66,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/summarysecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
@@ -226,6 +227,7 @@ var commands = []Command{
 	{"openbao", openbao.RegenRootCmd},
 	{"openbao", openbao.SeedBroadPATCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
+	{"summarysecret", summarysecret.Cmd},
 	{"pincoherence", pincoherence.Cmd},
 	{"reachability", reachability.VerifyCmd},
 	{"reconciler", reconciler.AssertVolumeEncryptionCmd},

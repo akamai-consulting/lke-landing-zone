@@ -138,9 +138,16 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
    gh workflow run bootstrap-openbao.yml -f region=<env>
    ```
 
-   The workflow's only input is `region` (the *deployment* name, not a Linode
-   region), and it detects cluster state itself — there is no `mode` to select.
-   Copy the static seal key (`OPENBAO_SEAL_KEY`) + recovery keys 4-5 + root token to offline storage. See
+   `region` is the *deployment* name, not a Linode region, and the workflow
+   detects cluster state itself — there is no `mode` to select. On a FIRST init,
+   pass `-f openbao_escrow_pubkey_b64=<base64 of your RSA public-key PEM>` as
+   well: it is the only way to obtain an offline copy of the recovery shares, and
+   they are minted exactly once.
+
+   Then copy the static seal key (`OPENBAO_SEAL_KEY`, read from the cluster — it
+   is never printed) to offline storage, and decrypt the escrowed shares with
+   your offline private key. **Keep at least 3 of the 5**: the threshold is 3, so
+   a copy of fewer authorizes nothing. See
    [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md).
 
 8. **Verify ESO ClusterSecretStore + downstream ExternalSecrets** are syncing:

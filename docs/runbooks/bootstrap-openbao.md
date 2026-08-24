@@ -56,6 +56,7 @@ The workflow detects cluster state automatically and chooses the right path:
 | `OPENBAO_RECOVERY_KEY_1` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_RECOVERY_KEY_2` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_RECOVERY_KEY_3` | generate-root quorum | Set automatically during first-time bootstrap |
+| `OPENBAO_RECOVERY_KEY_4/5` | Redundancy only | Set automatically during first-time bootstrap **only when no escrow key was supplied**. With one, those two shares exist solely as ciphertext you hold. Either way the quorum is 1–3. |
 | `OPENBAO_ROOT_TOKEN` | Re-configure only | Set manually; delete immediately after the run |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist the OpenBao seal/recovery keys. **Permissions — see the box below; getting this wrong is the single most common bootstrap failure.** |
 
@@ -132,6 +133,54 @@ gh workflow run bootstrap-openbao.yml \
   --field region=<env>
 ```
 
+### Escrowing the recovery shares
+
+`bao operator init` mints 5 recovery shares with a threshold of 3, **exactly
+once**. Shares 1–3 always land in the `infra-<env>` environment as
+`OPENBAO_RECOVERY_KEY_1/2/3`, which is what `bao-regen-root` and
+`breakglass-openbao.yml` use. The question this input answers is whether *you*
+also get a copy that lives outside GitHub.
+
+| `openbao_escrow_pubkey_b64` | You get | GitHub holds |
+|---|---|---|
+| set | all 5 shares RSA-OAEP/SHA-256-encrypted to your key — ciphertext in the job summary **and** the `openbao-recovery-keys-<env>-encrypted` artifact | shares 1–3 |
+| empty (default) | nothing; there is no offline copy | all 5, as `OPENBAO_RECOVERY_KEY_1`–`5` |
+
+Neither path is broken — break-glass works either way, because the quorum is 1–3.
+The difference is blast radius: with no escrow, losing the `infra-<env>`
+environment loses the quorum outright, and the only way to obtain an offline copy
+afterwards is `bao operator rekey`, which mints a new set and invalidates the old.
+
+Generate a keypair before dispatching:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out escrow-priv.pem
+openssl rsa -pubout -in escrow-priv.pem -out escrow-pub.pem
+base64 < escrow-pub.pem | tr -d '\n'      # paste as openbao_escrow_pubkey_b64
+```
+
+Keep `escrow-priv.pem` offline — nothing in CI ever sees it, and it is the only
+thing that can read what comes back. **Keep at least 3 of the 5 decrypted shares**:
+the threshold is 3, so an escrow copy of fewer authorizes nothing. Decrypt with:
+
+```bash
+while read -r b; do printf '%s' "$b" | base64 -d \
+  | openssl pkeyutl -decrypt -inkey escrow-priv.pem \
+      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo; \
+done < openbao-recovery-keys.b64
+```
+
+A malformed key fails **before** `operator init` runs, so a bad paste costs you a
+re-dispatch and never a set of shares you cannot escrow.
+
+> **The job summary carries no key material on either path**, and this is a
+> change. It used to print the raw `operator init` payload — root token and all 5
+> shares. The values were masked one line earlier, which is what made it look
+> reviewed: masking redacts the **log stream**, while a job summary is a Markdown
+> file rendered exactly as written. Actions **read** on this repo — a far wider
+> grant than environment-secret write — was enough to open it and reconstitute a
+> full quorum plus root.
+
 ### What the workflow does
 
 1. Retrieves kubeconfig from the Terraform S3 state (`cluster/<env>/terraform.tfstate`).
@@ -140,7 +189,7 @@ gh workflow run bootstrap-openbao.yml \
 4. Waits for the `<release>-openbao` StatefulSet pods to be running.
 5. Runs `bao operator init -recovery-shares=5 -recovery-threshold=3`.
 6. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<env>` environment secrets.
-7. Prints all 5 recovery keys + root token to the job summary (copy to secure offline storage immediately).
+7. Delivers the 5 shares according to the `openbao_escrow_pubkey_b64` dispatch input — see [Escrowing the recovery shares](#escrowing-the-recovery-shares). **No key material is written to the job summary on either path.**
 8. Waits for all 3 pods to auto-unseal from the static seal key (followers join the leader via Raft `retry_join`).
 9. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
 10. Seeds the following secrets into OpenBao:
@@ -178,7 +227,7 @@ gh workflow run bootstrap-openbao.yml \
 
    That is the same base64 value the GitHub secret holds. Losing it *and* the
    recovery quorum is unrecoverable.
-> - **Copy recovery keys 4 and 5 and the root token from the job summary to secure offline storage.** They are never stored automatically and will not be shown again.
+> - **Escrow the recovery shares.** If you dispatched with `openbao_escrow_pubkey_b64`, decrypt the ciphertext from the job summary (or the `openbao-recovery-keys-<env>-encrypted` artifact, which expires in 1 day) with your offline private key and store the plaintext outside GitHub — see [Escrowing the recovery shares](#escrowing-the-recovery-shares). If you did not, all 5 shares are in the `infra-<env>` environment and **no offline copy exists**; the only way to create one is `bao operator rekey`, which mints a new set.
 > - **Delete `OPENBAO_ROOT_TOKEN`** from the `infra-<env>` environment secrets if it was set before this run.
 
 ---
@@ -259,7 +308,7 @@ run against a cluster you already have a kubeconfig for:
 | verb | what it does | reach for it when |
 |---|---|---|
 | `llz ci bao-status` | probes every OpenBao pod, reports initialized/sealed | you want the seal state without changing anything — always safe, start here |
-| `llz ci bao-init` | first-time `bao operator init`; persists recovery keys + root token | the cluster is genuinely uninitialized and the automated branch did not run |
+| `llz ci bao-init` | first-time `bao operator init`; escrows or persists the recovery shares, persists the root token | the cluster is genuinely uninitialized and the automated branch did not run |
 | `llz ci bao-regen-root` | regenerates the root token by quorum | the loaded root token was revoked (the end-of-run revoke raced a retry) and you need a usable one back |
 
 Two more in the same category, listed so nobody mistakes them for dead code:

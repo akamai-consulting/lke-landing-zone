@@ -317,7 +317,7 @@ func upCmd() *cobra.Command {
 		Long: "Sequences the first-build flow into one command: provision credentials\n" +
 			"(`llz tokens`), confirm the readiness gate (`llz doctor`), then dispatch the\n" +
 			"apply (`llz build`). Stops at the first failure, and ends by printing the\n" +
-			"steps the tooling cannot do for you (escrow the OpenBao unseal keys + root\n" +
+			"steps the tooling cannot do for you (escrow the OpenBao recovery shares\n" +
 			"token, delete OPENBAO_ROOT_TOKEN). Cloud-mutating steps need --yes; --dry-run\n" +
 			"previews the whole chain.",
 		Args: cobra.ExactArgs(1),

@@ -51,6 +51,11 @@ on:
         required: false
         type: boolean
         default: false
+      openbao_escrow_pubkey_b64:
+        description: 'OPTIONAL, first bootstrap only. base64 of an RSA public-key PEM (>= 2048-bit). When set, the 5 OpenBao recovery shares are RSA-OAEP/SHA-256-encrypted to it and delivered as ciphertext — inline in the job summary and as the openbao-recovery-keys artifact — so you get an OFFLINE escrow copy that no reader of this run can use. When empty, no key material is emitted at all and all 5 shares are held as infra-<deployment> environment secrets instead, which means break-glass works but you have no offline copy. Generate one with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out escrow-priv.pem && openssl rsa -pubout -in escrow-priv.pem -out escrow-pub.pem && base64 < escrow-pub.pem | tr -d "\n". Keep escrow-priv.pem offline.'
+        required: false
+        type: string
+        default: ''
       cluster_id:
         description: 'Numeric LKE cluster id (the `cluster` workspace''s cluster_id output), forwarded by llz-terraform.yml''s chained call. Rendered into the block-storage-retain StorageClass''s lke<id> volumeTag, which is the ownership signal `llz reap`''s cluster-liveness gate keys on. Only read when bootstrap_cluster is true; bootstrap-cluster hard-fails on an empty value, because StorageClass parameters are immutable — a silently-untagged class could never be fixed in place and every Volume it provisioned would be un-reapable.'
         required: false
@@ -391,6 +396,13 @@ jobs:
       # Writes available=<bool> to $GITHUB_OUTPUT (the gate every step below checks)
       # and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV. The recovery
       # keys are empty on a first bootstrap — init mints and persists them.
+      #
+      # OPENBAO_ESCROW_PUBKEY_B64 is read on the FIRST-INIT branch only, and is
+      # passed through `env:` rather than spliced into the argv: a PEM is base64
+      # with `+` and `/` in it, and an empty input would otherwise leave a bare
+      # `--escrow-pubkey-b64` swallowing the next flag. It is a PUBLIC key, so it
+      # is an input rather than a secret. Nothing here needs the private half —
+      # encryption happens in-job and only the operator can decrypt.
       - name: Ensure OpenBao initialized + unsealed + root token
         id: ensure
         env:
@@ -398,7 +410,24 @@ jobs:
           RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
           RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
           RECOVERY_K3: ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
+          OPENBAO_ESCROW_PUBKEY_B64: ${{ inputs.openbao_escrow_pubkey_b64 }}
         run: llz ci bao-ensure-ready --region "$REGION"
+
+      # The escrow artifact is a CONVENIENCE, never the only copy: bao-init also
+      # writes the same ciphertext blocks inline into the job summary, because this
+      # step can be skipped by a cancelled run and the shares are minted exactly
+      # once. `if: always()` for the same reason — a later step failing must not
+      # cost the operator their only downloadable escrow. Ciphertext is useless
+      # without the offline private key, so the short retention is hygiene rather
+      # than protection.
+      - name: Upload encrypted OpenBao recovery shares
+        if: always() && inputs.openbao_escrow_pubkey_b64 != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openbao-recovery-keys-${{ env.REGION }}-encrypted
+          path: ${{ runner.temp }}/openbao-recovery-keys.b64
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Pre-flight — verify GitHub secrets-write token for configuration
         if: steps.ensure.outputs.available == 'true'

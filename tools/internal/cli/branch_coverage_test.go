@@ -256,7 +256,10 @@ func TestPrintManualActions(t *testing.T) {
 	out := captureStdout(t, func() { printManualActions("lab") })
 	for _, want := range []string{
 		"llz status lab",
-		"unseal keys 4 & 5",
+		// The escrow line, which must keep naming the INPUT: an operator who never
+		// passed it has no offline copy to make, and the old wording ("copy keys 4 & 5
+		// from the job summary") described a channel that no longer carries them.
+		"openbao_escrow_pubkey_b64",
 		"OPENBAO_ROOT_TOKEN from infra-lab",
 		"TF_VAR_linode_dns_token",
 	} {

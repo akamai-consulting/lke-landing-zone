@@ -109,6 +109,10 @@ var componentless = map[string]bool{
 	"guard-manifests":             true,
 	"guard-monitoring-labels":     true,
 	"guard-source-refs":           true,
+	// Whether a job summary may carry secret material is a property of the CODE,
+	// not of any component an instance can turn off — and the summary is written
+	// by the OpenBao bootstrap, which every instance that has OpenBao at all runs.
+	"guard-summary-secret": true,
 	// Its subject is this repo's own CI wiring, which no instance can turn off.
 	"setup-go-sole-site": true,
 	// Same again: which tags build-images.yml may publish is a property of THIS

@@ -149,8 +149,8 @@ func printManualActions(env string) {
 	fmt.Println(color.Dim("      export KUBECONFIG=~/.kube/" + env + ".yaml"))
 	fmt.Println(color.Dim("      (refused? `llz ci runner-acl open --region " + env + "` — the ACL never held this host)"))
 	fmt.Println(b("3. Watch convergence:   " + color.Cyan("llz status "+env+" --wait")))
-	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
-	fmt.Println(color.Dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
+	fmt.Println(b("After OpenBao bootstrap:"))
+	fmt.Println(color.Dim("      – escrow the recovery shares: decrypt the job-summary ciphertext with your offline key.\n        Emitted ONLY if you dispatched with openbao_escrow_pubkey_b64; without it, no copy exists to make."))
 	// Repeated here because stage 1's banner has scrolled past a full build by now,
 	// and this secret has the same "lose it and the data is gone" blast radius.
 	fmt.Println(color.Dim("      – and TF_STATE_ENCRYPTION_PASSPHRASE, if `llz tokens` generated one above"))

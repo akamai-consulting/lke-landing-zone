@@ -43,6 +43,22 @@ on:
         required: false
         type: boolean
         default: false
+      openbao_escrow_pubkey_b64:
+        description: >
+          OPTIONAL, first bootstrap only. base64 of your RSA public-key PEM
+          (>= 2048-bit). Set it and the 5 recovery shares come back encrypted to
+          you — ciphertext in the job summary and in the openbao-recovery-keys
+          artifact — which is the only way to get an OFFLINE escrow copy. Leave
+          it empty and no key material is emitted at all; all 5 shares are held
+          as infra-<deployment> environment secrets, so break-glass still works
+          but you have no copy outside GitHub. Generate a key with:
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096
+          -out escrow-priv.pem && openssl rsa -pubout -in escrow-priv.pem
+          -out escrow-pub.pem && base64 < escrow-pub.pem | tr -d '\n'
+          — then keep escrow-priv.pem offline.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -68,5 +84,6 @@ jobs:
       region:                   ${{ inputs.region }}
       reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
       preserve_root_on_failure: ${{ inputs.preserve_root_on_failure || false }}
+      openbao_escrow_pubkey_b64: ${{ inputs.openbao_escrow_pubkey_b64 }}
       instance_repo:            <@ instance_repo @>
     secrets: inherit

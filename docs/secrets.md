@@ -122,7 +122,33 @@ useful context for emergency recovery and understanding the secret layout.
 
 ### What bootstrap-openbao.yml does (reference)
 
-1. **Seed the static seal key + Initialize Raft** — first creates the 32-byte static auto-unseal key as the `openbao-unseal-key` Secret (so the pods can start and unseal themselves; the key is also persisted as `OPENBAO_SEAL_KEY` in the `infra-<deployment>` environment for disaster recovery and must be copied offline — losing it loses the data). Then runs `bao operator init -recovery-shares=5 -recovery-threshold=3`. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<deployment>` environment (one of `infra-primary`, `infra-secondary`, `infra-staging`, `infra-lab`); prints all 5 recovery keys + root token to the job summary. The recovery keys authorize `bao operator generate-root` / `rekey` — they do **not** unseal (the static seal key does) and **cannot** decrypt the root key.
+1. **Seed the static seal key + Initialize Raft** — first creates the 32-byte static auto-unseal key as the `openbao-unseal-key` Secret (so the pods can start and unseal themselves; the key is also persisted as `OPENBAO_SEAL_KEY` in the `infra-<deployment>` environment for disaster recovery and must be copied offline — losing it loses the data). Then runs `bao operator init -recovery-shares=5 -recovery-threshold=3`. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<deployment>` environment (one of `infra-primary`, `infra-secondary`, `infra-staging`, `infra-lab`). The recovery keys authorize `bao operator generate-root` / `rekey` — they do **not** unseal (the static seal key does) and **cannot** decrypt the root key.
+
+   **How you receive the shares depends on the `openbao_escrow_pubkey_b64` dispatch input**, and this is the one decision on the first bootstrap you cannot revisit — the 5 shares are minted exactly once.
+
+   | `openbao_escrow_pubkey_b64` | What you get | What GitHub holds |
+   |---|---|---|
+   | set (base64 of your RSA public-key PEM, ≥ 2048-bit) | all 5 shares RSA-OAEP/SHA-256-encrypted to your key, as ciphertext in the job summary **and** the `openbao-recovery-keys-<deployment>-encrypted` artifact. Decrypt with your offline private key. | shares 1–3 only |
+   | empty (default) | **nothing** — no offline copy exists | all 5 shares, as `OPENBAO_RECOVERY_KEY_1`–`5` |
+
+   Generate a key first if you want the escrow:
+
+   ```bash
+   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out escrow-priv.pem
+   openssl rsa -pubout -in escrow-priv.pem -out escrow-pub.pem
+   base64 < escrow-pub.pem | tr -d '\n'      # paste this as openbao_escrow_pubkey_b64
+   ```
+
+   Keep `escrow-priv.pem` offline. Decrypt what comes back with:
+
+   ```bash
+   while read -r b; do printf '%s' "$b" | base64 -d \
+     | openssl pkeyutl -decrypt -inkey escrow-priv.pem \
+         -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo; \
+   done < openbao-recovery-keys.b64
+   ```
+
+   **Nothing writes key material to the job summary on either path.** It used to write the raw `bao operator init` payload — root token and all 5 shares — which read as safe because the values were masked one line earlier. Masking redacts the **log stream**; a job summary is a Markdown file rendered exactly as written, and Actions **read** on the instance repo (a much wider grant than environment-secret write) was enough to open it and reconstitute a 3-of-5 quorum plus full root. `llz ci summary-secret-guard` is the gate that keeps it that way.
 
 2. **Auto-unseal** — each pod unseals itself at boot from the static seal key (`seal "static"` in the chart); the workflow waits for all 3 to converge to unsealed (followers join the leader via Raft `retry_join`). There is no manual key submission.
 
@@ -156,7 +182,7 @@ dispatched `bootstrap-openbao.yml` is a thin caller; the body is
 | verb | what it does |
 |---|---|
 | `llz ci bao-status` | probes every pod, reports initialized/sealed — always safe, start here |
-| `llz ci bao-init` | first-time `bao operator init`; persists recovery keys + root token |
+| `llz ci bao-init` | first-time `bao operator init`; escrows or persists the recovery shares, persists the root token |
 | `llz ci bao-regen-root` | regenerates the root token by quorum |
 | `llz ci bao-configure` | KV v2, auth methods, policies, roles, audit device |
 | `llz ci bao-seed-all` | seeds the platform secret set |
@@ -337,14 +363,15 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | GitHub-OIDC tokens (`platform-ci`, `secret-propagator`) | 15m TTL / 30m max | **Ephemeral** — minted per workflow run, auto-expires |
 | `OPENBAO_ROOT_TOKEN` | Per bootstrap run | **Ephemeral** — revoked unconditionally at end of bootstrap; regenerated via recovery-key quorum |
 | `OPENBAO_SEAL_KEY` | Permanent | **Static by design** — a changed key bricks auto-unseal; escrow offline |
-| `OPENBAO_RECOVERY_KEY_1/2/3` | Permanent | **Static by design** — offline escrow; authorize `generate-root`/`rekey` quorum only |
+| `OPENBAO_RECOVERY_KEY_1/2/3` | Permanent | **Static by design** — the quorum; authorize `generate-root`/`rekey` only |
+| `OPENBAO_RECOVERY_KEY_4/5` | Permanent | **Static by design** — present only on a deployment bootstrapped **without** an escrow key; otherwise those two shares exist solely as ciphertext you hold |
 
 Scheduled verification of these lives in `scheduled-checks.yml` (daily `0 6 * * *`):
 Linode + GitHub PAT expiry audits (≤90-day policy, warn before expiry) and the
 in-cluster rotation-SLA age checks. `secret-rotation.yml` carries the automated and
 on-demand rotation jobs.
 
-**These five are on the credential single pane too.** They have no expiry to read
+**These are on the credential single pane too.** They have no expiry to read
 and cannot live in OpenBao — they *are* OpenBao's escrow, so storing them there
 loses all of them together — which is exactly the shape ADR 0009 built the
 GitHub-secret **write-time** probe for. They were simply not in the list it wrote,
@@ -355,6 +382,7 @@ uses stay off that list. What each publishes:
 |---|---|---|---|
 | `OPENBAO_SEAL_KEY` | `static` | expected **present** | The at-rest key for everything else in OpenBao. `LLZCredentialNeverRotated` at 365d; a rewrap is not implemented, so the yearly nudge is the honest signal. |
 | `OPENBAO_RECOVERY_KEY_1/2/3` | `static` | expected **present** | An **absent** one means break-glass is impossible, and you would find out on the day you need it — `LLZCredentialUnconfigured`. |
+| `OPENBAO_RECOVERY_KEY_4/5` | `static` | **optional** | Set only when the first bootstrap ran **without** `openbao_escrow_pubkey_b64`, where persisting them is the only way shares minted once survive. Absent means they were escrowed to you as ciphertext instead — the better posture — so neither state alerts. They are redundancy, not quorum: the threshold is 3 and 1–3 are always present. |
 | `OPENBAO_ROOT_TOKEN` | `on-demand` | expected **absent** | Bootstrap revokes it; the quorum is what survives. A **set** one is a live full-admin credential left by a break-glass that never ran its revoke — `LLZCredentialRootTokenParked`, remedy `action=revoke`. |
 | `HARBOR_PASSWORD` / `HARBOR_PULL_PASSWORD` | `static` | **optional** | Published by the **active** peer's `harbor-robot-provisioner`, so a standby peer (and any deployment before Harbor first comes up) legitimately has neither. Measured when present, never alerted either way. |
 

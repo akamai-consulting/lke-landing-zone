@@ -66,7 +66,7 @@ func TestRunCIBaoEnsureReadyFirstInit(t *testing.T) {
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
 
-	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
+	if err := RunEnsureReady(false, "primary", "", 30*time.Second, 30*time.Second); err != nil {
 		t.Fatalf("RunEnsureReady (first init): %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=true") {
@@ -89,7 +89,7 @@ func TestRunCIBaoEnsureReadyFirstInitNeedsGHToken(t *testing.T) {
 	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
 		return statusJSON(false, true), "", nil // uninitialized
 	})
-	err := RunEnsureReady(false, "primary", time.Second, time.Second)
+	err := RunEnsureReady(false, "primary", "", time.Second, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "GH_TOKEN") {
 		t.Errorf("err = %v, want a GH_TOKEN-required error on uninitialized cluster", err)
 	}
@@ -114,7 +114,7 @@ func TestRunCIBaoEnsureReadyReseal(t *testing.T) {
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
-	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
+	if err := RunEnsureReady(false, "primary", "", 30*time.Second, 30*time.Second); err != nil {
 		t.Fatalf("RunEnsureReady (reseal): %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=false") {
@@ -149,7 +149,7 @@ func TestRunCIBaoEnsureReadyReconfigureValidToken(t *testing.T) {
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
-	if err := RunEnsureReady(false, "primary", time.Second, time.Second); err != nil {
+	if err := RunEnsureReady(false, "primary", "", time.Second, time.Second); err != nil {
 		t.Fatalf("RunEnsureReady (reconfigure): %v", err)
 	}
 	if sawInit || sawUnseal {
@@ -193,7 +193,7 @@ func TestRunCIBaoEnsureReadyRegeneratesFromQuorumWithoutARootToken(t *testing.T)
 
 	// The decode + GitHub write are past the point this test is about; it only has
 	// to prove the quorum path is ENTERED, which the old gate made impossible.
-	_ = RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second)
+	_ = RunEnsureReady(false, "primary", "", 30*time.Second, 30*time.Second)
 
 	if !genRootInit {
 		t.Fatal("no root token + a full recovery quorum must regenerate, not skip to available=false")
@@ -217,7 +217,7 @@ func TestRunCIBaoEnsureReadyStillSkipsWithNeitherTokenNorQuorum(t *testing.T) {
 		}
 		return "", "unexpected " + strings.Join(args, " "), fmt.Errorf("unexpected")
 	})
-	if err := RunEnsureReady(false, "primary", 30*time.Second, 30*time.Second); err != nil {
+	if err := RunEnsureReady(false, "primary", "", 30*time.Second, 30*time.Second); err != nil {
 		t.Fatalf("no token and no quorum must skip, not fail: %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=false") {

@@ -45,6 +45,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/summarysecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
@@ -287,7 +288,7 @@ func ciCmd() *cobra.Command {
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(wavehealth.HealthGuardCmd())
 	c.AddCommand(mtlsguard.Cmd())
-	c.AddCommand(plaintext.PlaintextGuardCmd())
+	c.AddCommand(plaintext.PlaintextGuardCmd(), summarysecret.Cmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).
