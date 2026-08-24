@@ -639,13 +639,32 @@ jobs:
       # exposes no quota API — the account owner is the only source. Unset = the
       # census still prints, the hard guard stays off. Set them to your account's
       # limits (Linode Cloud Manager → Account → Limits) to fail fast instead.
+      #
+      # REPORT-ONLY ON A PLAN, and all three blocking knobs are neutralised — not
+      # just the orphan one. Every guard here exists to stop an APPLY stalling on
+      # the account's active-services quota; a `tofu plan` creates nothing, so
+      # there is no quota for it to exceed and nothing for it to stall. Failing a
+      # plan on the account's state punishes a read for the sins of a write.
+      #
+      # THE COST WAS MEASURED. release-e2e dispatches a plan straight after its
+      # apply to assert the plan is empty (`assert_no_changes`, llz ci
+      # assert-upgrade-plan). That assertion was blocked here THREE separate times
+      # by orphans left in a SHARED account — 8 live LKE clusters across teams —
+      # none of which the run had created and none of which a plan would touch. A
+      # gate that keeps not running is indistinguishable from one that passes, so
+      # a blocker on the plan path costs coverage, not just time.
+      #
+      # The census still PRINTS: the operator planning before an apply is exactly
+      # who wants the forewarning, and the step's own comment already names an
+      # unset limit as "the census still prints, the hard guard stays off".
       - name: Pre-flight — Linode account capacity / orphan check
         env:
-          FAIL_ON_ORPHANS:  ${{ vars.PREFLIGHT_FAIL_ON_ORPHANS || 'true' }}
+          FAIL_ON_ORPHANS:  ${{ (inputs.action == 'plan' && 'false') || vars.PREFLIGHT_FAIL_ON_ORPHANS || 'true' }}
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
           # Read by llz as flag defaults (cli.EnvInt), so this stays a one-liner.
-          PREFLIGHT_VPC_LIMIT:  ${{ vars.PREFLIGHT_VPC_LIMIT || '0' }}
-          PREFLIGHT_VCPU_LIMIT: ${{ vars.PREFLIGHT_VCPU_LIMIT || '0' }}
+          # 0 disables the hard guard while leaving the census intact.
+          PREFLIGHT_VPC_LIMIT:  ${{ (inputs.action == 'plan' && '0') || vars.PREFLIGHT_VPC_LIMIT || '0' }}
+          PREFLIGHT_VCPU_LIMIT: ${{ (inputs.action == 'plan' && '0') || vars.PREFLIGHT_VCPU_LIMIT || '0' }}
         run: llz ci preflight --deployment "$REGION" --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD"
 
       - name: Terraform init — cluster
