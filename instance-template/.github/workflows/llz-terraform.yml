@@ -1163,6 +1163,30 @@ jobs:
           llz ci tf-plan --out plan.txt --title "Object Storage plan (${REGION})" --lines 40 \
             -- -var-file="${REGION}.tfvars" -out=tfplan.bin
 
+      # NO APPLY MAY DELETE A LIVE BUCKET. gsap-apl's prod deployment planned
+      # `2 to add, 0 to change, 2 to destroy` on v0.0.44 and AGAIN on v0.0.45 —
+      # loki-chunks and harbor-registry, renamed by the objLabelPrefix change,
+      # and a bucket label is create-time only so a rename is a destroy. Both
+      # applies reached the Linode API and were refused only because the buckets
+      # were not empty. An instance whose buckets happened to be EMPTY would have
+      # had them deleted and recreated with no error at all, and the run that
+      # goes green is the one that loses the data.
+      #
+      # A LANE CHECK RATHER THAN `prevent_destroy` IN THE MODULE, because these
+      # buckets DO get destroyed legitimately: every `action: destroy` and every
+      # e2e teardown removes them, and prevent_destroy blocks that too — it is
+      # not overridable from the destroy path, you have to edit the module to get
+      # past it. Gating here on ACTION == 'apply' covers exactly the destructive
+      # path that has NO confirmation input; `destroy` already carries
+      # confirm_destroy and drain_data_buckets.
+      #
+      # tofu show -json tfplan.bin, not a re-plan: these are the same bytes the
+      # plan step printed, so the check and the summary above it cannot disagree.
+      - name: Refuse a plan that would destroy a live bucket
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/object-storage
+        run: tofu show -json tfplan.bin | llz ci assert-upgrade-plan
+
       - name: Terraform apply — object-storage
         if: env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/object-storage

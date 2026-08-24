@@ -60,6 +60,14 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 	for _, f := range v.Destructive {
 		fmt.Fprintf(errOut, "    %s\n", f)
 	}
+	// THE SPECIFIC REMEDY WINS. The generic advice below is about module changes —
+	// moved{} blocks, non-forcing spellings, release notes — and none of it applies
+	// to a bucket rename, which has no moved{} and no non-forcing form. Printing
+	// both would bury the one instruction that works under four that do not.
+	if remedy := RenameRemedy(v.Destructive); remedy != "" {
+		fmt.Fprint(errOut, remedy)
+		return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(v.Destructive))
+	}
 	fmt.Fprintf(errOut, `
 WHAT THIS MEANS. The plan was taken against state an EARLIER release created, so
 these are resources an adopter already has. An apply would recycle them — for a
