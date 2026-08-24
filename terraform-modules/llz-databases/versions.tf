@@ -20,7 +20,7 @@ terraform {
       # `make sbom-terraform`, which builds release provenance by parsing every
       # .terraform.lock.hcl. Adding one is a deliberate supply-chain choice — which
       # version to pin — so it is left to the branch owner rather than fixed here.
-      version = "~> 3.11"
+      version = "~> 4.3"
     }
   }
 }
