@@ -104,6 +104,13 @@ func (f *fakeKubectl) run(args ...string) (string, bool) {
 			return r.out, r.ok
 		}
 	}
+	// DEFAULT: kyverno-svc HAS a ready endpoint. Apply's readiness poll requires
+	// one — the Deployment being Available is not the webhook being reachable —
+	// and every fixture here models a cluster that finished starting. A test that
+	// wants the RACE sets an explicit response for `endpointslice`.
+	if strings.Contains(joined, "endpointslice") {
+		return "true", true
+	}
 	return "", true // default: success, no output
 }
 
@@ -352,3 +359,106 @@ func TestPolicyName(t *testing.T) {
 
 // errKubectlFailed marks a non-zero exit for the Writer fakes above.
 var errKubectlFailed = errors.New("kubectl exited non-zero")
+
+// ── The webhook race: prevent it, and fail closed when it cannot be prevented ──
+//
+// The bug: `helm install --wait` returns when the DEPLOYMENT is Available, which
+// is not the webhook being reachable. Kyverno registers its policy webhooks
+// separately, so kyverno-svc can still have no ready endpoint — and an apply
+// landing there is refused by the apiserver with a message NAMING A WEBHOOK, so
+// it reads as a policy failure. It reddened a pull request that touched no
+// Kubernetes at all (2026-08-24).
+
+// The readiness poll must not pass on a Service with no ready endpoint, or the
+// apply goes straight back into the race this exists to close.
+func TestApplyWaitsForAReadyWebhookEndpoint(t *testing.T) {
+	f := &fakeKubectl{responses: []kubectlRule{
+		// Deployment Available, but kyverno-svc has NO ready endpoint yet.
+		{match: "endpointslice", out: "", ok: true},
+	}}
+	base := Opts{policyManifest: "m.yaml", fieldManager: "fm", waitForKyverno: true, waitTimeout: 20 * time.Second}
+
+	if err := Apply(base, testDeps(f, time.Second)); err != nil {
+		t.Fatalf("without WEBHOOK_RACE_FATAL this skips rather than errors: %v", err)
+	}
+	if f.called("apply") {
+		t.Error("applied while kyverno-svc had no ready endpoint — that is the race, not a fix for it")
+	}
+}
+
+// A GATE must not skip its own subject. Bootstrap can warn and re-run; a check
+// that passes having applied nothing is the vacuous pass docs/e2e-gates.md
+// forbids, so WEBHOOK_RACE_FATAL turns both skip paths into failures.
+func TestWebhookRaceFatalRefusesToSkip(t *testing.T) {
+	t.Run("never becomes ready", func(t *testing.T) {
+		f := &fakeKubectl{responses: []kubectlRule{{match: "endpointslice", out: "", ok: true}}}
+		o := Opts{policyManifest: "m.yaml", fieldManager: "fm", waitForKyverno: true,
+			waitTimeout: 20 * time.Second, webhookRaceFatal: true}
+		if err := Apply(o, testDeps(f, time.Second)); err == nil {
+			t.Fatal("a gate must fail when kyverno never becomes answerable, not pass having applied nothing")
+		}
+	})
+
+	t.Run("apply itself hits the race", func(t *testing.T) {
+		f := &fakeKubectl{responses: []kubectlRule{
+			{match: "apply", out: `failed calling webhook "mutate-policy.kyverno.svc": ` +
+				`dial tcp 10.96.75.24:443: connect: connection refused`, ok: false},
+		}}
+		o := Opts{policyManifest: "m.yaml", fieldManager: "fm", waitForKyverno: true,
+			waitTimeout: 20 * time.Second, webhookRaceFatal: true}
+		if err := Apply(o, testDeps(f, time.Second)); err == nil {
+			t.Fatal("a gate must fail on the webhook race rather than soft-skipping it")
+		}
+	})
+}
+
+// The default stays a SOFT skip, because cluster-bootstrap's null_resource
+// legitimately re-runs. Flipping that for everyone would turn a re-runnable
+// bootstrap step into a hard provisioning failure.
+func TestWebhookRaceStaysSoftByDefault(t *testing.T) {
+	f := &fakeKubectl{responses: []kubectlRule{
+		{match: "apply", out: `failed calling webhook "mutate-policy.kyverno.svc": connection refused`, ok: false},
+	}}
+	o := Opts{policyManifest: "m.yaml", fieldManager: "fm", waitForKyverno: true, waitTimeout: 20 * time.Second}
+	if err := Apply(o, testDeps(f, time.Second)); err != nil {
+		t.Fatalf("default must soft-skip the race for bootstrap: %v", err)
+	}
+}
+
+// WEBHOOK_RACE_FATAL must not swallow a REAL rejection into the race path — a
+// CEL error or a schema violation is the finding the gate exists to surface.
+func TestFatalModeStillDistinguishesARealRejection(t *testing.T) {
+	f := &fakeKubectl{responses: []kubectlRule{
+		{match: "apply", out: "admission webhook denied the request: policy is invalid: CEL compile error", ok: false},
+	}}
+	o := Opts{policyManifest: "m.yaml", fieldManager: "fm", waitForKyverno: true,
+		waitTimeout: 20 * time.Second, webhookRaceFatal: true}
+	err := Apply(o, testDeps(f, time.Second))
+	if err == nil {
+		t.Fatal("a real rejection must fail")
+	}
+	if strings.Contains(err.Error(), "unreachable") {
+		t.Errorf("a policy rejection was reported as a startup race: %v", err)
+	}
+}
+
+func TestWebhookRaceFatalReadsItsEnvVar(t *testing.T) {
+	get := func(k string) string {
+		switch k {
+		case "KUBECONFIG_RAW":
+			return "kc"
+		case "POLICY_MANIFEST":
+			return "m.yaml"
+		case "WEBHOOK_RACE_FATAL":
+			return "true"
+		}
+		return ""
+	}
+	o, err := kyvernoOptsFromEnv(get)
+	if err != nil {
+		t.Fatalf("kyvernoOptsFromEnv: %v", err)
+	}
+	if !o.webhookRaceFatal {
+		t.Error("WEBHOOK_RACE_FATAL=true did not reach Opts")
+	}
+}

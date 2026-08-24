@@ -48,6 +48,10 @@ type Opts struct {
 	timeoutWarning     string
 	crdMissingWarning  string
 	webhookRaceWarning string
+	// webhookRaceFatal turns the race soft-fail into a hard one. A BOOTSTRAP may
+	// skip and re-run; a GATE that skips its own subject has passed having applied
+	// nothing, which is the vacuous pass docs/e2e-gates.md exists to forbid.
+	webhookRaceFatal bool
 
 	retrofitConfigMap string
 	retrofitNamespace string
@@ -79,6 +83,7 @@ func kyvernoOptsFromEnv(getenv func(string) string) (Opts, error) {
 		timeoutWarning:     getenv("TIMEOUT_WARNING"),
 		crdMissingWarning:  getenv("CRD_MISSING_WARNING"),
 		webhookRaceWarning: getenv("WEBHOOK_RACE_WARNING"),
+		webhookRaceFatal:   getenv("WEBHOOK_RACE_FATAL") == "true",
 		retrofitConfigMap:  getenv("RETROFIT_CONFIGMAP"),
 		retrofitNamespace:  cigate.EnvOrDefault(getenv, "RETROFIT_NAMESPACE", "monitoring"),
 		retrofitRollout:    getenv("RETROFIT_ROLLOUT"),
@@ -125,13 +130,35 @@ func Apply(o Opts, d cigate.Deps) error {
 			if _, ok := d.Kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
 				return false
 			}
-			_, ok := d.Kubectl("-n", "kyverno", "wait", "--for=condition=Available",
-				"deployment/kyverno-admission-controller", "--timeout=5s")
-			return ok
+			if _, ok := d.Kubectl("-n", "kyverno", "wait", "--for=condition=Available",
+				"deployment/kyverno-admission-controller", "--timeout=5s"); !ok {
+				return false
+			}
+			// AND A READY ENDPOINT BEHIND kyverno-svc, which is the half that was
+			// missing. The Deployment going Available is not the webhook being
+			// reachable: Kyverno registers its policy webhooks separately, so there
+			// is a window where the MutatingWebhookConfiguration exists while the
+			// Service has no ready endpoint. An apply landing there is refused with
+			// `dial tcp …: connect: connection refused` from mutate-policy.kyverno.svc
+			// — which names a webhook and so reads as a policy failure when it is a
+			// startup race. It red-flagged a pull request that touched no Kubernetes
+			// at all (2026-08-24).
+			//
+			// EndpointSlice, not the legacy Endpoints: on a Service with no ready
+			// addresses Endpoints returns an empty `subsets` that is indistinguishable
+			// from a parse failure, while a slice states readiness per endpoint.
+			out, ok := d.Kubectl("-n", "kyverno", "get", "endpointslice",
+				"-l", "kubernetes.io/service-name=kyverno-svc",
+				"-o", "jsonpath={.items[*].endpoints[*].conditions.ready}")
+			return ok && strings.Contains(string(out), "true")
 		})
 		if !ready {
-			warn(firstNonEmpty(o.timeoutWarning,
-				"Kyverno admission controller not Ready within deadline — skipping policy apply. Re-run terraform apply once Kyverno is up."))
+			msg := firstNonEmpty(o.timeoutWarning,
+				"Kyverno admission controller not Ready within deadline — skipping policy apply. Re-run terraform apply once Kyverno is up.")
+			if o.webhookRaceFatal {
+				return fmt.Errorf("kyverno never became answerable within the deadline: %s", msg)
+			}
+			warn(msg)
 			return nil
 		}
 	} else if _, ok := d.Kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
@@ -150,9 +177,13 @@ func Apply(o Opts, d cigate.Deps) error {
 			out = applyErr.Error()
 		}
 		if health.IsWebhookRace(out) {
-			warn(firstNonEmpty(o.webhookRaceWarning,
-				"Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."))
+			msg := firstNonEmpty(o.webhookRaceWarning,
+				"Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints.")
 			fmt.Fprint(os.Stderr, out)
+			if o.webhookRaceFatal {
+				return fmt.Errorf("kyverno admission webhook unreachable after the readiness wait: %s", msg)
+			}
+			warn(msg)
 			return nil
 		}
 		fmt.Fprint(os.Stderr, out)
