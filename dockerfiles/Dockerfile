@@ -54,7 +54,7 @@
 # instead, which means getting this line wrong now reddens every adopter pipeline
 # at its first step rather than going quiet. The blast radius is the argument for
 # version_stamp_test.go, not against the fatal arm.
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gotools
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS gotools
 ARG TARGETOS
 ARG TARGETARCH
 ARG LLZ_VERSION=dev
