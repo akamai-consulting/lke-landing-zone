@@ -28,24 +28,10 @@ type Deps struct {
 	// Used for seal status, which is a read.
 	BaoExec func(pod, token, stdin string, args ...string) (string, string, error)
 
-	// Exec captures a command's stdout. Only the Loki OBJ-key check needs it: it
-	// builds a `kubectl exec … bao kv metadata get` argv that carries the OpenBao
-	// ROOT token, which is why this extension declares secret-custody.
-	Exec func(name string, args ...string) ([]byte, error)
-
 	// Reachable reports whether the cluster API answers at all. Separate from the
 	// probes because "no cluster" is a legitimate SKIP for a scheduled check —
 	// a torn-down cluster or a stale kubeconfig in TF state must not page anyone.
 	Reachable func() bool
-
-	// BaoExecArgv builds the `kubectl exec` argv for a bao call. Injected rather
-	// than rebuilt here so this package cannot drift from `llz openbao exec`'s
-	// argument shape — a mismatch there once made every `bao status` call error,
-	// and the stub hid it because it ignored args (see baoStatus's comment).
-	BaoExecArgv func(pod, token string, args []string) []string
-
-	// RootPod is the pod `llz openbao exec` targets.
-	RootPod string
 }
 
 // readyResourceItem is the narrow projection these checks decode: a name, a

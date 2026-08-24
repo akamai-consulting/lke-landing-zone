@@ -10,7 +10,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"github.com/spf13/cobra"
 )
 
@@ -25,10 +24,7 @@ func HealthSLADeps() Deps {
 		BaoExec: func(pod, token, stdin string, args ...string) (string, string, error) {
 			return baoread.ExecFn(pod, token, stdin, args...)
 		},
-		Exec:        execOutput,
-		Reachable:   kubectlprobe.Reachable,
-		BaoExecArgv: openbao.ExecArgv,
-		RootPod:     baoread.RootPod,
+		Reachable: kubectlprobe.Reachable,
 	}
 }
 
@@ -48,25 +44,6 @@ func HealthLKEAdminRotationCmd() *cobra.Command {
 	}
 	c.Flags().IntVar(&warnDays, "warn-days", 35, "warn when the newest token is older than this many days")
 	c.Flags().IntVar(&criticalDays, "critical-days", 90, "fail when the newest token is older than this many days (hard SLA)")
-	return c
-}
-
-func HealthLokiObjkeyRotationCmd() *cobra.Command {
-	var warnDays, criticalDays int
-	c := &cobra.Command{
-		Use:   "health-loki-objkey-rotation",
-		Short: "fail when the Loki object-store key in OpenBao breaches the rotation SLA",
-		Long: "Native port of the loki-objkey-rotation-health scheduled job. Reads the age of\n" +
-			"the secret/loki/object-store version in OpenBao (via kubectl exec bao) and fails\n" +
-			"the job past --critical-days (the 120-day Guidelines SLA), warning past\n" +
-			"--warn-days. Reads OPENBAO_ROOT_TOKEN; a missing secret/token is a non-fatal warn.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return RunLokiObjkeyRotation(HealthSLADeps(), warnDays, criticalDays)
-		},
-	}
-	c.Flags().IntVar(&warnDays, "warn-days", 105, "warn when the key is older than this many days")
-	c.Flags().IntVar(&criticalDays, "critical-days", 120, "fail when the key is older than this many days (hard SLA)")
 	return c
 }
 

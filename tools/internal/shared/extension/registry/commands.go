@@ -194,7 +194,6 @@ var commands = []Command{
 	{"harbor", harbor.SeedStandbyHarborRobotsCmd},
 	{"healthsla", healthsla.HealthCertManagerCmd},
 	{"healthsla", healthsla.HealthLKEAdminRotationCmd},
-	{"healthsla", healthsla.HealthLokiObjkeyRotationCmd},
 	{"healthsla", healthsla.HealthOpenbaoCmd},
 	{"identityconfig", identityconfig.AplUserCmd},
 	{"identityconfig", identityconfig.BaoConfigureCmd},

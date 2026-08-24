@@ -44,12 +44,7 @@ func testDeps(t *testing.T) {
 		BaoExec: func(string, string, string, ...string) (string, string, error) {
 			return "", "", fmt.Errorf("no bao stub installed")
 		},
-		Exec:      func(string, ...string) ([]byte, error) { return nil, fmt.Errorf("no exec stub installed") },
 		Reachable: func() bool { return true },
-		BaoExecArgv: func(pod, token string, args []string) []string {
-			return append([]string{"exec", pod, "--", "bao"}, args...)
-		},
-		RootPod: "platform-openbao-0",
 	}
 	// The probes hold their own seam; leaving it live would shell out for real.
 	orig := kubectlprobe.Exec
@@ -73,11 +68,9 @@ func realAppend(envVar string, lines ...string) error {
 	return err
 }
 
-// stubKubectl drives the classified probes AND the direct Exec seam from canned
-// output. Both, because this extension reads the cluster two ways: through
-// internal/kubectlprobe (the list/jsonpath probes) and through Deps.Exec (the
-// `kubectl exec … bao kv metadata get` that carries the root token). Stubbing
-// only one leaves the other reaching for a real cluster.
+// stubKubectl drives the classified probes from canned output. It drove the
+// direct Deps.Exec seam too until #483 retired the check that owned it — this
+// extension now reads the cluster only through internal/kubectlprobe.
 func stubKubectl(t *testing.T, fn func(args []string) ([]byte, error)) {
 	t.Helper()
 	ensureDeps(t)
@@ -87,7 +80,6 @@ func stubKubectl(t *testing.T, fn func(args []string) ([]byte, error)) {
 		}
 		return fn(args)
 	}
-	td.Exec = wrapped
 	td.Reachable = func() bool {
 		_, err := wrapped("kubectl", "version", "--request-timeout=10s")
 		return err == nil

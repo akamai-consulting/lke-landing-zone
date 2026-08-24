@@ -30,8 +30,6 @@ on:
         required: true
       LINODE_API_TOKEN:
         required: false
-      OPENBAO_ROOT_TOKEN:
-        required: false
       OPENBAO_SECRETS_WRITE_TOKEN:
         required: false
       APL_VALUES_REPO_TOKEN:
@@ -140,10 +138,24 @@ jobs:
         continue-on-error: true
         run: llz ci keycloak-configure --region "${{ matrix.region }}"
 
-      # THE GATE — deliberately no continue-on-error, and last.
-      - name: Check secret/loki/object-store age
-        if: always() && steps.kubeconfig.outputs.available == 'true'
-        run: llz ci health-loki-objkey-rotation
+      # NO LOKI OBJ-KEY STEP HERE, AND DO NOT ADD ONE BACK (#483). This job used
+      # to end with the health-loki-objkey-rotation verb, labelled "THE GATE —
+      # deliberately no continue-on-error, and last". It could never fire. The
+      # check measured secret/loki/object-store by exec'ing `bao kv metadata get`
+      # with OPENBAO_ROOT_TOKEN, and it was inert twice over: bootstrap REVOKES
+      # that token (this workflow declared it `required: false` and said as much
+      # itself), and this job never mapped it into the step's environment anyway.
+      # So on every instance it read an empty token, warned, and passed green.
+      #
+      # The credential is not unmeasured. The reconciler samples that same KV path
+      # over KUBERNETES auth (--reconcile-openbao-gauges) and publishes
+      # llz_credential_age_days{cred="loki-object-store"}; the credential-single-pane
+      # job below gates that gauge with `llz ci assert-rotation-health`, DAILY
+      # rather than weekly, at 90 days rather than 120, and fails on an ABSENT
+      # series as well as an overdue one — which an exec that never ran could not
+      # do at all. LLZCredentialRotationOverdue alerts on it continuously.
+      # TestLokiObjectStoreIsGatedByTheAgeLane, in assertsecrets, holds that
+      # replacement to the coverage this step was retired on.
 
       - name: Cleanup kubeconfig
         if: always()

@@ -486,3 +486,86 @@ func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
 		}
 	}
 }
+
+// ── the check this gate inherited ────────────────────────────────────────────
+
+// TestLokiObjectStoreIsGatedByTheAgeLane is the gate that made retiring
+// `llz ci health-loki-objkey-rotation` safe (#483).
+//
+// THE FAILURE THAT PRECEDED IT. That check measured secret/loki/object-store by
+// exec'ing `bao kv metadata get` with OPENBAO_ROOT_TOKEN — a token bootstrap
+// deliberately revokes. On every correctly-configured instance it took its
+// no-token branch, warned, and passed. It was labelled "THE GATE — deliberately
+// no continue-on-error" and had never once been able to fire. A test asserting
+// "it returns nil on a healthy cluster" would have passed for its entire life.
+//
+// So the replacement is not allowed to be believed either. It is not enough that
+// this lane CAN see loki-object-store today; what must hold is that the
+// declaration and the predicate still agree, and both of them live in files this
+// test does not own:
+//
+//	credpaths.CredPaths    declares the credential, its class and whether it is
+//	                       optional — one line in a table of a dozen.
+//	evalRotationHealth     decides, from that class, whether an absent series or
+//	                       an overdue age is a FINDING or a skip.
+//
+// Demote the class to `static`, or flip Optional, and coverage of the Loki key
+// silently reverts to exactly the nothing the retired check provided — with every
+// other test in this file still green, because none of them names this credential.
+// That is the split contract docs/e2e-gates.md is about, so this feeds the REAL
+// declaration into the REAL predicate rather than restating either.
+func TestLokiObjectStoreIsGatedByTheAgeLane(t *testing.T) {
+	const cred = "loki-object-store"
+
+	var declared *credpaths.CredPath
+	for i, cp := range credpaths.CredPaths {
+		if cp.Cred == cred {
+			declared = &credpaths.CredPaths[i]
+		}
+	}
+	if declared == nil {
+		t.Fatalf("%s is no longer declared in credpaths.CredPaths. Nothing samples it, so no "+
+			"llz_credential_age_days series exists and LLZCredentialRotationOverdue cannot fire for "+
+			"it — and health-loki-objkey-rotation, the check that used to cover it, was retired in "+
+			"#483 on the strength of this lane", cred)
+	}
+	if declared.Optional {
+		t.Errorf("%s is marked Optional, so evalRotationHealth treats an ABSENT series as a skip. "+
+			"It is seeded on every deployment (Loki is not opt-in), and absence is precisely the "+
+			"dark-sampler failure this lane exists to catch", cred)
+	}
+
+	// The real predicate, over the real declaration. Two arms, because they are
+	// different failures with different causes: a sampler that stopped publishing,
+	// and a rotator that stopped rotating.
+	expected := expectedRotationCreds()
+	verdictFor := func(ages map[string]float64) credVerdict {
+		t.Helper()
+		for _, v := range evalRotationHealth(expected, ages, false) {
+			if v.Cred == cred {
+				return v
+			}
+		}
+		t.Fatalf("evalRotationHealth returned no verdict for %s", cred)
+		return credVerdict{}
+	}
+
+	if v := verdictFor(map[string]float64{}); v.FailWhy == "" {
+		t.Errorf("%s publishing NO llz_credential_age_days series must FAIL the gate (class %q). "+
+			"An absent series is invisible on the single pane and no alert over it can ever "+
+			"evaluate — this arm is the one the exec'ing check could not make at all", cred, v.Class)
+	}
+
+	overdue := float64(rotationSLAAlertableDays + 1)
+	if v := verdictFor(map[string]float64{cred: overdue}); v.FailWhy == "" {
+		t.Errorf("%s at %.0f days must FAIL the gate; class %q carries a %.0f-day SLA. If this "+
+			"passes, the class was demoted to a non-alertable one and the credential is now "+
+			"only REPORTED, never gated", cred, overdue, v.Class, slaForClass(v.Class))
+	}
+
+	// Pin the exclusion too: a gate that only ever says no is one edit from
+	// saying no to everything, and this one runs daily against every instance.
+	if v := verdictFor(map[string]float64{cred: float64(rotationSLAAlertableDays - 1)}); v.FailWhy != "" {
+		t.Errorf("a freshly-rotated %s must PASS: %s", cred, v.FailWhy)
+	}
+}

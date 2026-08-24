@@ -402,7 +402,11 @@ ADR 0003.)
 - The daily `scheduled-checks` port-forward health jobs (`openbao-health`,
   `certmanager-health`, `prometheusrule-health`, `lke-admin-rotation-health`,
   `loki-objkey-rotation-health`) → in-cluster metrics + PrometheusRules (demoted
-  to belt-and-suspenders, not deleted, per the alerting-doc layering).
+  to belt-and-suspenders, not deleted, per the alerting-doc layering). One
+  exception since: `loki-objkey-rotation-health` WAS deleted (#483). Belt-and-
+  suspenders assumes the demoted check can still measure; that one needed
+  `OPENBAO_ROOT_TOKEN`, which bootstrap revokes, so it had never produced a
+  verdict. `llz ci assert-rotation-health` carries the CI-visible half instead.
 - `sc-default-patcher` → the `sc-demote` reconciler (watch + resync floor). NOT a
   deletion in favour of Kyverno: that policy is admission-only and gets starved
   (see the sc-demote entry above), so the resync floor is load-bearing.

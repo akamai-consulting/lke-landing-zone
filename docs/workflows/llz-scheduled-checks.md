@@ -49,12 +49,15 @@ unchecked" deployments structurally impossible rather than merely unlikely.
 
 ## Job: `weekly-cluster-checks`
 
-### One job, four checks — why it was folded
+### One job, three checks — why it was folded
 
 This was previously **four separate jobs**: `openbao-health`,
 `loki-objkey-rotation-health`, `certmanager-health`, and `wave-health-vap`. All
 four sat on the same weekly cron, and each paid its own container init +
 checkout + kubeconfig fetch + control-plane ACL open/revoke.
+
+Three remain: `loki-objkey-rotation-health` was **retired** in #483 — see
+[Retired: the Loki OBJ-key step](#retired-the-loki-obj-key-step) below.
 
 Folding them into one job saves three of those cycles per region per week. The
 part that matters more than runner minutes: it makes **three fewer
@@ -74,16 +77,18 @@ checkout, a failed ACL open, a bad image pull. That is precisely what this
 weekly run exists to prove still works, and a probe that cannot report itself
 broken re-proves nothing.
 
-Two of the checks *do* fail on a real finding, and now say so:
+One of the checks *does* fail on a real finding, and says so:
 
 | Check | Fails when |
 |---|---|
 | `assert-wave-health-vap` | the wave-health guard VAP stopped enforcing — the PR #142 bootstrap-wedge class it exists to prevent |
-| `health-loki-objkey` | the object-store key breached its rotation SLA |
+
+There were two. `health-loki-objkey` was the other, and it is gone (#483) — it
+never once fired, which is the whole story below.
 
 Every check carries `if: always()` (except the first, which has nothing before
-it to skip on), so one failure does not skip its siblings — all four still run
-and report. Cleanup and ACL revoke are `if: always()` too.
+it to skip on), so one failure does not skip its siblings — all still run and
+report. Cleanup and ACL revoke are `if: always()` too.
 
 ### Step: Check OpenBao seal + ESO readiness
 
@@ -128,22 +133,47 @@ Note the `tee -a`, not `tee`. As its own job this step truncated
 wrote to it. Sharing a job with three other checks makes that a live bug: it
 would clobber whatever the steps above had written.
 
-### Step: Check secret/loki/object-store age
+### Retired: the Loki OBJ-key step
 
-**The gate** — deliberately no `continue-on-error`, and deliberately last.
+This job used to end with the `health-loki-objkey-rotation` verb, labelled *"THE
+GATE — deliberately no `continue-on-error`, and deliberately last."* It was
+removed in #483. **Do not add it back**; read this first if you are tempted.
 
-Linode Object Storage keys have no native expiry, and the Guidelines mandate
-revoking bucket access keys after 120 days. The object-storage Terraform module
-force-rotates the key declaratively (`time_rotating`), but the OpenBao reseed
-hop is manual — this check reads the age of the current
-`secret/loki/object-store` version and alerts if the live credential has fallen
-behind the 120-day clock.
+**It could not fire.** The check measured `secret/loki/object-store` by
+`kubectl exec`-ing `bao kv metadata get` inside the OpenBao pod with
+`OPENBAO_ROOT_TOKEN`. That token is *expected absent*: bootstrap revokes it, and
+this workflow declared it `required: false` and said so in its own comment.
+Worse, this job never mapped the secret into the step's environment at all — so
+even an instance that had left a root token parked would have measured nothing.
+Every run took the no-token branch, warned, and exited 0. A gate labelled as a
+gate, green for its entire life, on a credential nobody was checking.
 
-**Demoted to weekly (was daily).** The in-cluster `llz-reconciler` samples the
-same OpenBao rotation age continuously (`llz_credential_age_days{cred=...}`) and
-fires `LLZCredentialRotationOverdue` (>90d) for both the Loki and Harbor
-object-storage keys, so the daily hosted-runner probe is redundant. Weekly stays
-as belt-and-suspenders. Still on demand via `workflow_dispatch`.
+**The measurement did not go with it.** Three mechanisms cover
+`secret/loki/object-store` today, none of them needing a root token:
+
+| Mechanism | Where it runs | Threshold | Cadence |
+|---|---|---|---|
+| `llz_credential_age_days{cred="loki-object-store"}` | `llz-reconciler`, over Kubernetes auth | — (a gauge) | every sample pass |
+| `LLZCredentialRotationOverdue` | in-cluster alert | > 90d | continuous |
+| `llz ci assert-rotation-health` | the credential-single-pane job below | > 90d | **daily** |
+
+Every column is a tightening: 90 days rather than 120, daily rather than weekly,
+and `assert-rotation-health` fails on an **absent series** as well as an overdue
+age — which an exec that never ran could not do at all.
+
+**What holds the replacement to it.**
+`TestLokiObjectStoreIsGatedByTheAgeLane`
+(`tools/internal/extensions/assertions/assertsecrets/ci_assert_rotation_health_test.go`)
+feeds the real
+`credpaths.CredPaths` declaration into the real `evalRotationHealth` predicate
+and fails if this credential is dropped from the table, marked `Optional`, or
+demoted to a class the gate only reports on. Any of those would silently return
+coverage to the nothing the retired step provided.
+
+**The 120-day number is gone too.** Two mechanisms claiming different SLAs for
+one credential is worse than either number; 90 is the stricter, it is what the
+alert has always used, and `TestRotationSLAsMatchThePrometheusRules` pins the
+gate to it.
 
 ---
 
