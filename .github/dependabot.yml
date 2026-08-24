@@ -1,4 +1,13 @@
 version: 2
+
+# No `labels:` on any ecosystem below. Dependabot does not create labels it is
+# asked for — it fails the whole update run with "The following labels could not
+# be found ... Please create them before Dependabot can add them to a pull
+# request", and this repo carries only the GitHub default label set (no
+# `dependencies`, `github-actions` or `go`). Labelling nothing keeps the config
+# valid in any fork of this repo, and nothing consumes the labels: the
+# auto-merge workflow keys off `github.event.pull_request.user.login ==
+# 'dependabot[bot]'` and the PR body's `update-type:` line, not labels.
 updates:
   # ── GitHub Actions ────────────────────────────────────────────────────────
   - package-ecosystem: "github-actions"
@@ -7,7 +16,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "github-actions"]
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -19,7 +27,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "go"]
     groups:
       all-dependencies:
         patterns: ["*"]
