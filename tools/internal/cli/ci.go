@@ -288,11 +288,7 @@ func ciCmd() *cobra.Command {
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(wavehealth.HealthGuardCmd())
 	c.AddCommand(mtlsguard.Cmd())
-	c.AddCommand(plaintext.PlaintextGuardCmd())
-	// Static guard on secret material reaching $GITHUB_STEP_SUMMARY: bao-init
-	// masked the root token and all 5 recovery shares, then wrote the raw init
-	// payload to the summary — masking covers logs, not the summary file.
-	c.AddCommand(summarysecret.Cmd())
+	c.AddCommand(plaintext.PlaintextGuardCmd(), summarysecret.Cmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).

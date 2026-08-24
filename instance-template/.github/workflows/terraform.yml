@@ -137,6 +137,11 @@ on:
         required: false
         type: boolean
         default: false
+      openbao_escrow_pubkey_b64:
+        description: 'OPTIONAL, first bootstrap of a deployment only. base64 of your RSA public-key PEM (>= 2048-bit). Set it and OpenBao''s 5 recovery shares come back encrypted to you — job summary + openbao-recovery-keys artifact — which is the only way to get an OFFLINE escrow copy. Empty (default) emits no key material at all and holds all 5 shares as infra-<deployment> environment secrets: break-glass works, but nothing outside GitHub holds the quorum.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -160,4 +165,5 @@ jobs:
       # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
       assert_loki: ${{ inputs.assert_loki || false }}
       assert_no_changes: ${{ inputs.assert_no_changes || false }}
+      openbao_escrow_pubkey_b64: ${{ inputs.openbao_escrow_pubkey_b64 }}
     secrets: inherit

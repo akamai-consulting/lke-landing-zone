@@ -1556,7 +1556,15 @@ categories:
     #                       down. So the constructor moved to the extension that
     #                       owns the seams and this layer kept the one line that
     #                       delegates.
-    budget: 1952
+    #   1,953 / 129 files  +1 the `summarysecret` import for `llz ci
+    #                       summary-secret-guard`. IRREDUCIBLE, the same shape as the
+    #                       three +1 entries above: the command was folded onto the
+    #                       existing plaintext-guard AddCommand call, and the AST
+    #                       scan, the registry and the reporting all live in
+    #                       extensions/guards/summarysecret — including the scar
+    #                       comment that would otherwise have sat here. The only
+    #                       line this layer gains is the import.
+    budget: 1953
     exact: true
     include:
       - "tools/internal/cli/*.go"

@@ -42,10 +42,16 @@ is the coaching layer on top, not a replacement.
 6. **Build** (§4): `llz up <env> --yes` chains tokens → doctor → build and
    stops at the first failure.
 7. **Post-bootstrap manual steps** — the two things the bootstrap cannot do
-   (runbook: `docs/runbooks/bootstrap-openbao.md`): copy the static seal key +
-   recovery keys 4 & 5 + root token to offline storage (shown ONCE), and delete
-   `OPENBAO_ROOT_TOKEN` from the `infra-<env>` environment if seeded
-   (`llz status` nags until done).
+   (runbook: `docs/runbooks/bootstrap-openbao.md`): copy the static seal key to
+   offline storage (read it from the cluster — it is never printed), escrow the
+   OpenBao recovery shares, and delete `OPENBAO_ROOT_TOKEN` from the
+   `infra-<env>` environment if seeded (`llz status` nags until done).
+
+   Escrowing the shares is only possible if the build was dispatched with
+   `openbao_escrow_pubkey_b64` — the shares are minted once, and without that
+   input nothing leaves the job in a form the operator can keep. Tell them to
+   generate a keypair BEFORE step 6, not after. No key material is ever printed
+   in the clear on either path.
 8. **Finish + verify**: `llz bootstrap dns <env> --yes` (needs
    `LINODE_DNS_TOKEN`), then **fetch a kubeconfig before asking for status** —
    the cluster was built in CI, so this machine has none:

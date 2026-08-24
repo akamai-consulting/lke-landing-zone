@@ -190,14 +190,18 @@ func TestRunCIBaoInitEscrowDeliversCiphertextOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Every share, in index order, recoverable ONLY with the private key.
+	// ALL FIVE, in index order, recoverable ONLY with the private key.
+	//
+	// FIVE, not "the two GitHub does not hold": the threshold is 3, so an escrow
+	// copy of fewer than 3 authorizes nothing — useless in the one scenario escrow
+	// exists for, which is losing the infra-<region> environment.
 	raw, err := os.ReadFile(filepath.Join(dir, "openbao-recovery-keys.b64"))
 	if err != nil {
 		t.Fatalf("escrow file not written: %v", err)
 	}
 	blocks := strings.Fields(string(raw))
 	if len(blocks) != 5 {
-		t.Fatalf("escrow file has %d blocks, want 5", len(blocks))
+		t.Fatalf("escrow file has %d blocks, want all 5 — an escrow copy below the 3-of-5 threshold authorizes nothing", len(blocks))
 	}
 	summary, _ := os.ReadFile(filepath.Join(dir, "GITHUB_STEP_SUMMARY"))
 	for i, b := range blocks {
@@ -218,6 +222,12 @@ func TestRunCIBaoInitEscrowDeliversCiphertextOnly(t *testing.T) {
 		if !strings.Contains(string(summary), b) {
 			t.Errorf("ciphertext block %d is not in the job summary", i+1)
 		}
+	}
+
+	// The summary must state the threshold, so an operator who decrypts three
+	// blocks and stops knows that is enough — and one who keeps two knows it is not.
+	if !strings.Contains(string(summary), "3 of 5") {
+		t.Error("the escrow summary does not state the 3-of-5 threshold")
 	}
 
 	// On this path shares 4 and 5 live in the ciphertext, NOT in GitHub — that is

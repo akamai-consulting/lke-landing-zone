@@ -61,7 +61,7 @@ flowchart LR
 
     U ==>|"workflow_dispatch"| TF
     CONV ==> K
-    CONV -.->|"<b>7.</b> escrow offline"| M["🔑 recovery keys 4 &amp; 5 + root token<br/>(job summary, shown once)<br/>seal key (never printed —<br/>read from the cluster)"]
+    CONV -.->|"<b>7.</b> escrow offline"| M["🔑 recovery shares (encrypted to your key,<br/>only if you passed one at dispatch)<br/>seal key (never printed —<br/>read from the cluster)"]
 
     classDef local fill:#e8f0fe,stroke:#4285f4,color:#111;
     classDef ci fill:#f3e8fd,stroke:#a142f4,color:#111;
@@ -133,7 +133,9 @@ llz up lab --yes
 
 # 7. AFTER the build, do the manual steps the bootstrap can't (§4). Each value
 #    comes from a DIFFERENT place — see the escrow table in §4:
-#    • recovery keys 4 & 5 + the root token — printed in the job summary, shown once
+#    • the 5 recovery shares — encrypted to your RSA key IF you passed
+#      openbao_escrow_pubkey_b64 at dispatch; nothing is ever printed in the clear.
+#      Without a key they stay as infra-lab secrets and you get no offline copy.
 #    • OPENBAO_SEAL_KEY — never printed anywhere; read it out of the cluster:
 #        kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'
 #    • TF_STATE_ENCRYPTION_PASSPHRASE, if step 6 generated one — printed by
@@ -633,7 +635,7 @@ takes ~40 minutes, so that is your only view of it.
 >
 > | What | Where to get it |
 > |---|---|
-> | Recovery keys 4 & 5 + the root token | printed in the job summary — **shown once** |
+> | The 5 recovery shares | **only if you dispatched with `openbao_escrow_pubkey_b64`** — RSA-OAEP ciphertext in the job summary and the `openbao-recovery-keys-*-encrypted` artifact, decryptable with your offline private key. Without that input nothing is emitted and all 5 live as `infra-lab` secrets, so there is no offline copy to make. Nothing is ever printed in the clear. |
 > | `TF_STATE_ENCRYPTION_PASSPHRASE` | printed by `llz tokens`; also cached in `.llz/secrets.env` |
 > | **`OPENBAO_SEAL_KEY`** | **never printed** — read it from the cluster (below) |
 >
@@ -911,7 +913,7 @@ versioned charts + external actions*.
 - [ ] spec + overlay **pushed** — `env add` commits its own output, but anything you changed after it is yours to commit; the build renders from the pushed tree (§4)
 - [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); kubeconfig fetched (`llz ci fetch-kubeconfig --region <env>`); cluster converges (`llz status <env> --wait`) (§4)
 - [ ] **`TF_STATE_ENCRYPTION_PASSPHRASE` saved offline** — printed once by `llz tokens`; lose it and every Terraform state file is unreadable ([ADR 0007](adr/0007-terraform-state-encryption.md))
-- [ ] Recovery keys 4 & 5 + root token (job summary) **and** the static seal key (`kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'` — it is never printed) saved offline; `OPENBAO_ROOT_TOKEN` deleted
+- [ ] Recovery shares decrypted from the job summary and saved offline (only possible if you dispatched with `openbao_escrow_pubkey_b64`) **and** the static seal key (`kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'` — it is never printed) saved offline; `OPENBAO_ROOT_TOKEN` deleted
 - [ ] `LINODE_DNS_TOKEN` set — `llz ci bootstrap-cluster` renders it into apl-core's DNS values; the ClusterIssuers then sync via Argo CD (no dedicated command)
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)
 - [ ] Know where to go if a build fails: [runbooks/first-build-failed.md](runbooks/first-build-failed.md)

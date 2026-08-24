@@ -377,7 +377,8 @@ func PrintNextSteps(env string) {
 	cmd("llz doctor --env "+env, "confirm every required value is set")
 	cmd("llz build "+env+" --yes", "dispatch the apply  (or `llz up "+env+" --yes` chains doctor → build)")
 	cmd("llz status "+env, "watch OpenBao / ArgoCD / ESO converge")
-	fmt.Println(color.Dim("  after the first build: escrow OpenBao unseal keys 4 & 5 + the root token offline,"))
+	fmt.Println(color.Dim("  after the first build: escrow the OpenBao recovery shares offline (only possible if"))
+	fmt.Println(color.Dim("  the build was dispatched with openbao_escrow_pubkey_b64 — nothing is printed in the clear),"))
 	fmt.Println(color.Dim("  and delete OPENBAO_ROOT_TOKEN from infra-" + env + " (DNS-01 certs wire automatically via TF_VAR_linode_dns_token)."))
 }
 

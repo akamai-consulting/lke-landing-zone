@@ -34,6 +34,11 @@ var clusterScopedSecrets = []string{
 	"OPENBAO_RECOVERY_KEY_1",
 	"OPENBAO_RECOVERY_KEY_2",
 	"OPENBAO_RECOVERY_KEY_3",
+	// 4 and 5 are present only on instances bootstrapped without an escrow key
+	// (see credtargets). Clearing an absent secret is a no-op, and leaving a stale
+	// share behind on a torn-down deployment is not.
+	"OPENBAO_RECOVERY_KEY_4",
+	"OPENBAO_RECOVERY_KEY_5",
 	"OPENBAO_SEAL_KEY",
 	"OPENBAO_APPROLE_SECRET_ID",
 	"OPENBAO_APPROLE_SECRET_ID_STANDBY",

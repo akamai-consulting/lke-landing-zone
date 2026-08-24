@@ -55,6 +55,11 @@ on:
         required: false
         type: boolean
         default: false
+      openbao_escrow_pubkey_b64:
+        description: 'OPTIONAL, first bootstrap only. base64 of an RSA public-key PEM (>= 2048-bit) to escrow the 5 OpenBao recovery shares to. Set it and they come back RSA-OAEP encrypted — job summary + openbao-recovery-keys artifact — which is the only way to get an OFFLINE copy. Empty (default) emits no key material at all and holds all 5 shares as infra-<deployment> environment secrets instead: break-glass works, but nothing outside GitHub holds the quorum. Ignored on every run except the first init of a deployment.'
+        required: false
+        type: string
+        default: ''
     secrets:
       # All `required: false` on purpose: these are environment-scoped secrets,
       # which cannot satisfy a workflow_call `secrets` contract at call time.
@@ -822,6 +827,10 @@ jobs:
       assert_loki: ${{ inputs.assert_loki }}
       bootstrap_cluster: true
       cluster_id: ${{ needs.apply-cluster.outputs.cluster_id }}
+      # Only ever read on a FIRST init; a re-bootstrap of an initialized cluster
+      # never reaches the branch that mints shares, so passing it always is safe
+      # and saves the operator remembering which dispatch needs it.
+      openbao_escrow_pubkey_b64: ${{ inputs.openbao_escrow_pubkey_b64 }}
     # Forwards repo + environment-scoped secrets; the callee declares the same
     # `environment:` so env-scoped secrets resolve at runtime.
     secrets: inherit

@@ -69,8 +69,10 @@ revoked its root token, so:
 > The steps marked *needs root* below assume one. A bootstrapped cluster has
 > **revoked** its root token, and the recovery keys that regenerate it are **not**
 > distributed to operators — they're stored in the `infra-<region>` GitHub
-> environment (`OPENBAO_RECOVERY_KEY_1..3`) and printed once to the bootstrap job
-> summary. So unless you personally kept 3 of the 5 keys offline, use the
+> environment (`OPENBAO_RECOVERY_KEY_1..3`). They reach an operator only if the
+> first bootstrap was dispatched with `openbao_escrow_pubkey_b64`, and then only
+> as ciphertext you can decrypt. So unless you personally kept 3 of the 5 keys
+> offline, use the
 > **break-glass workflow**, which reconstitutes root from that stored quorum with
 > no operator-held keys:
 >

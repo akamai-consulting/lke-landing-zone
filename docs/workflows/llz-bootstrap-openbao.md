@@ -70,7 +70,7 @@ flag. The aggregated-soft-fail pattern is the one we're explicitly trying to rem
 * Runs `bao operator init` → 5 RECOVERY keys + root token (recovery keys authorize
   `generate-root`; they do NOT unseal — the static seal key does)
 * Stores recovery keys 1–3 as `infra-<region>` environment secrets
-* Prints all 5 recovery keys + root token to the job summary (copy offline)
+* Delivers the 5 recovery shares per the `openbao_escrow_pubkey_b64` input — RSA-OAEP ciphertext (summary + artifact) when set, `OPENBAO_RECOVERY_KEY_4/5` environment secrets when not. **No key material reaches the job summary on either path**; see the bootstrap runbook's "Escrowing the recovery shares"
 * Waits for all 3 pods to auto-unseal (followers join via `retry_join`)
 * Configures KV v2, Kubernetes auth, GitHub-OIDC auth, policies, roles, audit log
 * Seeds `secret/infra/github-dispatch-token` and the other env-sourced KV paths
