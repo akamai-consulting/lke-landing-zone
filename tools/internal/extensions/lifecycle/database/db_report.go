@@ -9,6 +9,7 @@ package database
 //   llz ci db-summary   → the $GITHUB_STEP_SUMMARY block for apply / destroy-plan
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,11 +20,81 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
 )
 
-// dbDeclaredAssignRe matches the `databases = …` assignment in a rendered tfvars.
-// The gate is exact rather than heuristic: DatabasesTFVars OMITS the assignment
-// entirely when the map is empty, so the line is present if and only if the spec
-// declared at least one cluster.
-var dbDeclaredAssignRe = regexp.MustCompile(`(?m)^[ \t]*databases[ \t]*=`)
+// dbDeclaredAssignRe finds the `databases = …` assignment in a rendered tfvars.
+// It locates the assignment; declaresDatabases below decides whether the VALUE
+// declares anything.
+//
+// THE ASSIGNMENT'S PRESENCE IS NOT THE ANSWER, and believing it was broke every
+// deployment that declares no databases. The reasoning went: DatabasesTFVars
+// omits the assignment when the map is empty, so the line is present if and only
+// if at least one cluster was declared. The first half is true and the
+// conclusion does not follow — `llz render` builds every tfvars by applying
+// assignments ON TOP OF the root's terraform.tfvars.example, and that example
+// ships a literal, uncommented
+//
+//	databases = {}
+//
+// So omitting the assignment leaves the example's own empty map in place, and a
+// presence test matches it. Declared came back true for a deployment with zero
+// databases, seed-db-admin refused to exit 0, and the bootstrap died telling the
+// operator to "run the databases apply first" — advice that cannot help, because
+// the apply had already run in the same pipeline and correctly created nothing
+// (`Apply complete! Resources: 0 added, 0 changed, 0 destroyed`).
+//
+// That is the DEFAULT configuration: a deployment with no Managed Postgres. It
+// shipped on 2026-08-22 and was caught by the first e2e run after it.
+var dbDeclaredAssignRe = regexp.MustCompile(`(?m)^[ \t]*databases[ \t]*=[ \t]*`)
+
+// declaresDatabases reports whether the tfvars assign a NON-EMPTY databases map.
+//
+// A commented-out example block cannot match: the regex above anchors the
+// assignment at line start, so a leading `#` excludes it — which is what lets the
+// databases example carry a fully worked illustration above its real assignment.
+//
+// UNBALANCED BRACES COUNT AS DECLARED, deliberately. A truncated or unparseable
+// value means this cannot tell, and the two errors are not symmetric: reporting
+// "declared" makes seed-db-admin fail loudly and stop, while reporting "none"
+// makes it exit 0 — leaving OpenBao with no db-admin credential while the
+// PROVISIONING password stays live in Terraform state. That is the outcome the
+// whole guard exists to prevent, so uncertainty resolves toward the loud side.
+func declaresDatabases(body []byte) bool {
+	loc := dbDeclaredAssignRe.FindIndex(body)
+	if loc == nil {
+		return false
+	}
+	rest := body[loc[1]:]
+	open := bytes.IndexByte(rest, '{')
+	if open < 0 {
+		// Not a map literal at all — a variable reference, or a value this does not
+		// model. Cannot confirm it is empty, so treat it as declared.
+		return true
+	}
+	depth, close := 0, -1
+	for i := open; i < len(rest); i++ {
+		switch rest[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				close = i
+			}
+		}
+		if close >= 0 {
+			break
+		}
+	}
+	if close < 0 {
+		return true // unbalanced — see the header
+	}
+	for _, line := range bytes.Split(rest[open+1:close], []byte("\n")) {
+		t := bytes.TrimSpace(line)
+		if len(t) == 0 || bytes.HasPrefix(t, []byte("#")) || bytes.HasPrefix(t, []byte("//")) {
+			continue
+		}
+		return true
+	}
+	return false
+}
 
 // dbTFVarsCandidates are the two places <region>.tfvars can be, because the
 // delivered pipeline runs these commands from two different directories:
@@ -64,7 +135,7 @@ func dbDeclares(region string) dbDeclaration {
 		}
 		body, err := os.ReadFile(p)
 		if err == nil {
-			return dbDeclaration{Declared: dbDeclaredAssignRe.Match(body), Present: true, Answered: true, Path: p}
+			return dbDeclaration{Declared: declaresDatabases(body), Present: true, Answered: true, Path: p}
 		}
 		if !os.IsNotExist(err) {
 			return dbDeclaration{Answered: false, Path: p}
