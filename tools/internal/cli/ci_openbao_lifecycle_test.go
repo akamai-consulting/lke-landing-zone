@@ -17,10 +17,10 @@ func TestRunCIBaoEnsureReadyDryRunAndWiring(t *testing.T) {
 		t.Error("dry-run must not exec")
 		return "", "", nil
 	})
-	if err := openbao.RunEnsureReady(true, "primary", time.Second, time.Second); err != nil {
+	if err := openbao.RunEnsureReady(true, "primary", "", time.Second, time.Second); err != nil {
 		t.Fatalf("dry-run: %v", err)
 	}
-	if err := openbao.RunEnsureReady(false, "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
+	if err := openbao.RunEnsureReady(false, "", "", time.Second, time.Second); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Errorf("missing region = %v, want --region error", err)
 	}
 	if c := openbao.BaoEnsureReadyCmd(); c.Use != "bao-ensure-ready" {

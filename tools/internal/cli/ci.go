@@ -45,6 +45,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/summarysecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
@@ -288,6 +289,10 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(wavehealth.HealthGuardCmd())
 	c.AddCommand(mtlsguard.Cmd())
 	c.AddCommand(plaintext.PlaintextGuardCmd())
+	// Static guard on secret material reaching $GITHUB_STEP_SUMMARY: bao-init
+	// masked the root token and all 5 recovery shares, then wrote the raw init
+	// payload to the summary — masking covers logs, not the summary file.
+	c.AddCommand(summarysecret.Cmd())
 	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
 	// workflow consumes must be measured by one of the single-pane feeds or
 	// registered as a reasoned exemption (Makefile credential-coverage-guard).

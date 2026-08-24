@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site dependabot-coverage mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site dependabot-coverage mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard summary-secret-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -126,6 +126,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/deliverdocs=93 \
 	internal/verbs/argodiag=81 \
 	internal/extensions/guards/plaintext=90 \
+	internal/extensions/guards/summarysecret=85 \
 	internal/extensions/lifecycle/chartpublish=55 \
 	internal/extensions/assertions/manifestguard=73 \
 	internal/extensions/lifecycle/assertobjstore=23 \
@@ -237,6 +238,7 @@ help:
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
 	@echo "  mtls-wiring-guard  OpenBao consumers must mount the mTLS material they read (ADR 0010)"
 	@echo "  plaintext-guard  registry gate on unencrypted in-cluster hops (ADR 0010)"
+	@echo "  summary-secret-guard  a file that masks secrets may not compute into \$$GITHUB_STEP_SUMMARY"
 	@echo "  credential-coverage-guard  every workflow secret is measured, or registered as an exemption"
 	@echo "  k8s-validate    kubeconform — schema validation against k8s $(KUBECTL_VERSION)"
 	@echo "  prom-rules-check  promtool check rules — PromQL syntax + rule structure"
@@ -593,6 +595,27 @@ mtls-wiring-guard:
 # list cannot rot into a rubber stamp.
 plaintext-guard:
 	$(call LLZ_CI,gates --only plaintext-guard,)
+
+# summary-secret-guard: `llz ci summary-secret-guard` — the gate on SECRET
+# MATERIAL REACHING $GITHUB_STEP_SUMMARY. `llz ci bao-init` masked the OpenBao
+# root token and all five recovery shares, then wrote the raw `bao operator init`
+# payload — those same six values — into a fenced block in the job summary. The
+# mask is what made the append look reviewed: ghsecret.Mask redacts the LOG
+# stream, while a job summary is a Markdown file GitHub renders untouched, and
+# Actions READ (far wider than environment-secret write) is enough to open it.
+# Anyone with it could reconstitute a 3-of-5 quorum and full root.
+#
+# So: in any FILE that calls ghsecret.Mask, every argument to a step-summary
+# append must be a string literal, or be registered in summaryComputedAllowed
+# with a reason naming what the expression evaluates to. Unregistered hits fail;
+# so do registry entries whose call site is gone.
+#
+# LLZ_FORCE_SOURCE because the guard reads the working tree it lives in — the
+# prebuilt image binary is built from the merge-base and does not have this verb
+# at all on the PR that introduces it.
+summary-secret-guard: export LLZ_FORCE_SOURCE := 1
+summary-secret-guard:
+	$(call LLZ_CI,gates --only summary-secret-guard,)
 
 # credential-coverage-guard: `llz ci credential-coverage-guard` — the drift gate on
 # credential OBSERVABILITY. Every `secrets.NAME` an instance workflow consumes must

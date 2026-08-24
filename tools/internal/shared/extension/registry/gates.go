@@ -80,6 +80,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/secretscope"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/setupgosite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/sourceref"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/summarysecret"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/templatemanifest"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/versionpins"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/wavehealth"
@@ -94,8 +95,8 @@ import (
 // FLAG AND SUBTREE REPLACED A LITERAL `Args: []string{"--root", ".."}` ON EVERY
 // ROW, and the change is not cosmetic — see repoRoot below for the defect that
 // literal carried. What it also bought is that the table now states only what is
-// UNUSUAL about a row: twenty-seven of the thirty gates read the repository root
-// through `--root`, so twenty-seven rows say nothing about their subject at all, and
+// UNUSUAL about a row: twenty-eight of the thirty-one gates read the repository
+// root through `--root`, so twenty-eight rows say nothing about their subject at all, and
 // the three that differ say so in the field that differs — `guard-workflow-shells`
 // (a different flag AND a subtree), `template-manifest` and `template-sustain` (a
 // subtree each).
@@ -251,6 +252,7 @@ var gates = []Gate{
 	{Extension: "posture-credential-coverage", New: credcoverage.ExternalSecretPathsCmd},
 	{Extension: "guard-docs", NewWithTree: docsguard.DocsGuardCmdFor},
 	{Extension: "posture-plaintext", New: plaintext.PlaintextGuardCmd},
+	{Extension: "guard-summary-secret", New: summarysecret.Cmd},
 	{Extension: "wave-health", New: wavehealth.DependencyGuardCmd},
 	{Extension: "wave-health", New: wavehealth.HealthGuardCmd},
 
@@ -450,7 +452,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (33 rows, 30 of them taking the default subject — both pinned by
+	// table (34 rows, 31 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

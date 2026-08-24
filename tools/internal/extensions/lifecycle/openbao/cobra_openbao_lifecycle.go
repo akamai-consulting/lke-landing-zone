@@ -1,6 +1,8 @@
 package openbao
 
 import (
+	"os"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
@@ -17,7 +19,7 @@ import (
 // Four functions had been carrying a three-field struct to use a third of it.
 
 func BaoEnsureReadyCmd() *cobra.Command {
-	var region string
+	var region, escrowPubKey string
 	var leaderTimeout, joinTimeout int
 	c := &cobra.Command{
 		Use:   "bao-ensure-ready",
@@ -33,40 +35,67 @@ func BaoEnsureReadyCmd() *cobra.Command {
 			"available=<bool> to $GITHUB_OUTPUT (the gate downstream configure/seed steps\n" +
 			"check) and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV. Reads\n" +
 			"RECOVERY_K1/2/3 + OPENBAO_ROOT_TOKEN (infra-<region> secrets) and\n" +
-			"GH_TOKEN/GH_REPO (first-init persistence).",
+			"GH_TOKEN/GH_REPO (first-init persistence). On the first-init branch,\n" +
+			"--escrow-pubkey-b64 is forwarded to bao-init and is validated up front so\n" +
+			"--dry-run vets it before any share is minted.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return RunEnsureReady(cliopts.Global.DryRun, region,
+			return RunEnsureReady(cliopts.Global.DryRun, region, escrowPubKeyOrEnv(escrowPubKey),
 				time.Duration(leaderTimeout)*time.Second, time.Duration(joinTimeout)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment holds the keys/token (required)")
+	c.Flags().StringVar(&escrowPubKey, "escrow-pubkey-b64", "", "base64 of an RSA public-key PEM to encrypt the recovery shares to on first init (default $OPENBAO_ESCROW_PUBKEY_B64)")
 	c.Flags().IntVar(&leaderTimeout, "leader-timeout", 180, "seconds to wait for pod-0 to report unsealed (first-init)")
 	c.Flags().IntVar(&joinTimeout, "join-timeout", 300, "seconds to wait for each follower to reach initialized=true (first-init)")
 	return c
 }
 
 func BaoInitCmd() *cobra.Command {
-	var region string
+	var region, escrowPubKey string
 	c := &cobra.Command{
 		Use:   "bao-init",
-		Short: "first-time `bao operator init`: mask, persist recovery keys + root, write job summary",
+		Short: "first-time `bao operator init`: mask, escrow or persist recovery shares, write job summary",
 		Long: "Native port of init-cluster.sh (bootstrap-openbao.yml Branch A). Runs\n" +
 			"`bao operator init -recovery-shares=5 -recovery-threshold=3` on pod-0. Under\n" +
 			"the chart's `seal \"static\"` auto-unseal the pods unseal themselves at boot,\n" +
 			"so init yields RECOVERY shares (for generate-root/rekey quorum), not unseal\n" +
-			"keys. Masks all six values, writes the full init payload to\n" +
-			"$GITHUB_STEP_SUMMARY FIRST (the shares are generated exactly once and cannot\n" +
-			"be recovered — capturing them must not be gated on gh/network success),\n" +
-			"exports OPENBAO_ROOT_TOKEN + RECOVERY_K1-3 to $GITHUB_ENV for the downstream\n" +
-			"steps, and persists recovery keys 1-3 plus the root token as infra-<region>\n" +
-			"environment secrets. Emits did_init=true. Requires GH_TOKEN/GH_REPO (the\n" +
-			"secrets-write PAT).",
+			"keys. Exports OPENBAO_ROOT_TOKEN + RECOVERY_K1-3 to $GITHUB_ENV for the\n" +
+			"downstream steps, and persists recovery shares 1-3 plus the root token as\n" +
+			"infra-<region> environment secrets. Emits did_init=true. Requires\n" +
+			"GH_TOKEN/GH_REPO (the secrets-write PAT).\n" +
+			"\n" +
+			"NO KEY MATERIAL IS EVER WRITTEN TO $GITHUB_STEP_SUMMARY. Masking redacts\n" +
+			"logs; a job summary is rendered from a file that masking never touches, so\n" +
+			"the payload this used to print handed anyone with Actions READ a full 3-of-5\n" +
+			"quorum and the root token. With --escrow-pubkey-b64 the 5 shares are\n" +
+			"RSA-OAEP/SHA-256-encrypted to your key (ciphertext in the summary plus\n" +
+			"$RUNNER_TEMP/openbao-recovery-keys.b64); without it, shares 4 and 5 are\n" +
+			"persisted as OPENBAO_RECOVERY_KEY_4/5 instead and you get no offline copy.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return RunInit(cliopts.Global.DryRun, region) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return RunInit(cliopts.Global.DryRun, region, escrowPubKeyOrEnv(escrowPubKey))
+		},
 	}
 	c.Flags().StringVar(&region, "region", "", "region whose infra-<region> GHA environment receives the secrets (required)")
+	c.Flags().StringVar(&escrowPubKey, "escrow-pubkey-b64", "", "base64 of an RSA public-key PEM to encrypt the 5 recovery shares to (default $OPENBAO_ESCROW_PUBKEY_B64)")
 	return c
+}
+
+// escrowPubKeyOrEnv resolves the escrow key from the flag, falling back to
+// $OPENBAO_ESCROW_PUBKEY_B64.
+//
+// THE ENV FALLBACK IS THE PATH THAT ACTUALLY RUNS. The delivered bootstrap
+// invokes `bao-ensure-ready` from a workflow step, and a workflow passes an
+// optional value far more safely through `env:` than by splicing it into a
+// `run:` argv — a PEM is base64 with `+`/`/` in it, and an empty input would
+// otherwise leave a bare `--escrow-pubkey-b64` consuming the next flag. The flag
+// stays for the by-hand `llz ci bao-init` handle.
+func escrowPubKeyOrEnv(flagValue string) string {
+	if strings.TrimSpace(flagValue) != "" {
+		return flagValue
+	}
+	return os.Getenv("OPENBAO_ESCROW_PUBKEY_B64")
 }
 
 func BaoRegenRootCmd() *cobra.Command {

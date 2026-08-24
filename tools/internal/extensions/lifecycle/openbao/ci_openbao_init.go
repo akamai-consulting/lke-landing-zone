@@ -10,9 +10,14 @@ package openbao
 // GHA environment. Both reuse regenroot.go's baoExec + JSON parse helpers.
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
@@ -39,10 +44,24 @@ func ParseInit(s string) (baoInitResult, error) {
 	return r, nil
 }
 
-func RunInit(dryRun bool, region string) error {
+func RunInit(dryRun bool, region, escrowPubKeyB64 string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
+
+	// Parse + validate the escrow key BEFORE `operator init` runs. The recovery
+	// shares are generated exactly once and there is no second chance to deliver
+	// them, so a malformed key must fail while there is still nothing to lose —
+	// the same ordering, for the same reason, as bao-breakglass refusing to burn a
+	// quorum regeneration on a bad key.
+	var escrow *rsa.PublicKey
+	if strings.TrimSpace(escrowPubKeyB64) != "" {
+		var err error
+		if escrow, err = ParseRecipientRSAPubKey(escrowPubKeyB64); err != nil {
+			return fmt.Errorf("escrow public key rejected (nothing was initialized): %w", err)
+		}
+	}
+
 	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would run `bao operator init` and persist recovery keys to infra-"+region)
 		return nil
@@ -64,22 +83,42 @@ func RunInit(dryRun bool, region string) error {
 		ghsecret.Mask(k)
 	}
 
-	// Job summary first — before any step that can fail (see Long help).
-	if err := ghaout.Append("GITHUB_STEP_SUMMARY",
-		"## OpenBao Initialized — Save These Keys Now",
-		"",
-		"**OPERATOR ACTION REQUIRED:**",
-		"Copy all 5 recovery keys and the root token to secure offline storage",
-		"immediately. They will not be shown again.",
-		"Back up the cluster's 32-byte static unseal key offline TOO — recovery keys",
-		"authorize generate-root but CANNOT decrypt the root key, so losing the static",
-		"key loses the data.",
-		"Delete the `OPENBAO_ROOT_TOKEN` environment secret once bootstrap completes.",
-		"",
-		"```json",
-		strings.TrimSpace(initOut),
-		"```"); err != nil {
-		return err
+	// THE JOB SUMMARY IS NOT A PRIVATE CHANNEL, and this step used to treat it as
+	// one: it wrote the raw `operator init` payload — the root token and ALL FIVE
+	// recovery shares — into a fenced block, on the reasoning that the shares are
+	// minted once and capturing them must not be gated on gh/network success.
+	// The durability reasoning was right; the channel was wrong. ghsecret.Mask
+	// redacts LOGS, and a job summary is rendered from a file that masking never
+	// touches, so anyone with Actions **read** on the instance repo could read a
+	// 3-of-5 threshold's worth of shares — five of five, in fact — and the root
+	// token beside them, and reconstitute full admin. Actions-read is a much wider
+	// grant than environment-secret write, which is the boundary every other copy
+	// of these values sits behind.
+	//
+	// So nothing derived from the init payload is written in the clear on either
+	// path below. What replaces it depends on whether an escrow key was supplied:
+	//
+	//   escrow    all five shares, RSA-OAEP/SHA-256-encrypted to the operator's
+	//             key — ciphertext in the summary (durable, and useless to a log
+	//             reader) plus a $RUNNER_TEMP file for artifact upload.
+	//   fallback  no key material anywhere; shares 4 and 5 are persisted as
+	//             infra-<region> environment secrets so they still exist.
+	//
+	// WHY LOSING A SHARE IS SURVIVABLE, and why the fallback is not a durability
+	// regression dressed up: the quorum is 3-of-5 and shares 1-3 are persisted on
+	// both paths, hard-failing if they cannot be. Shares 4 and 5 are redundancy
+	// for a lost 1-3, never the difference between break-glass working and not.
+	// That is what lets the fallback warn on a failed 4/5 write instead of wedging
+	// a bootstrap over a loss no retry can repair.
+	//
+	// The shares are encrypted ONE PER BLOCK rather than as a single JSON payload:
+	// RSA-OAEP/SHA-256 on a 2048-bit key carries 190 bytes, and five base64 shares
+	// do not fit. Per-share blocks keep the primitive identical to break-glass's
+	// instead of introducing a hybrid envelope for one call site.
+	if escrow != nil {
+		if err := deliverEscrowedShares(region, escrow, res.RecoveryKeysB64); err != nil {
+			return err
+		}
 	}
 
 	if err := ghaout.Append("GITHUB_ENV",
@@ -118,8 +157,134 @@ func RunInit(dryRun bool, region string) error {
 		return err
 	}
 
+	if escrow == nil {
+		persistFallbackShares(ghEnv, res.RecoveryKeysB64[3:5])
+	}
+	if err := appendInitSummary(region, escrow != nil); err != nil {
+		return err
+	}
+
 	fmt.Printf("OpenBao initialized; recovery keys 1-3 + root token persisted to %s.\n", ghEnv)
 	return ghaout.Append("GITHUB_OUTPUT", "did_init=true")
+}
+
+// deliverEscrowedShares encrypts each recovery share to the operator's key and
+// delivers ONLY ciphertext: one base64 block per line in
+// $RUNNER_TEMP/openbao-recovery-keys.b64 (for artifact upload) and the same
+// blocks inline in the job summary.
+//
+// INLINE IN THE SUMMARY TOO, deliberately. The artifact is uploaded by a separate
+// workflow step that a caller can omit, mis-wire, or lose to a cancelled run,
+// and these shares do not come round again. Ciphertext costs nothing to
+// duplicate: it is unreadable without the operator's offline private key, which
+// is the whole reason this path exists.
+func deliverEscrowedShares(region string, escrow *rsa.PublicKey, shares []string) error {
+	blocks := make([]string, 0, len(shares))
+	for i, share := range shares {
+		ct, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, escrow, []byte(share), nil)
+		if err != nil {
+			// A share is ~45 bytes, far under the single-block OAEP limit for a
+			// >= 2048-bit key, and ParseRecipientRSAPubKey already rejected
+			// anything smaller — so this is unreachable short of a broken key.
+			return fmt.Errorf("RSA-OAEP encryption of recovery share %d failed: %w", i+1, err)
+		}
+		blocks = append(blocks, base64.StdEncoding.EncodeToString(ct))
+	}
+
+	outDir := os.Getenv("RUNNER_TEMP")
+	if outDir == "" {
+		outDir = os.TempDir()
+	}
+	outPath := filepath.Join(outDir, "openbao-recovery-keys.b64")
+	if err := os.WriteFile(outPath, []byte(strings.Join(blocks, "\n")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write encrypted recovery shares to %s: %w", outPath, err)
+	}
+	fmt.Printf("5 encrypted recovery shares written to %s (ciphertext only — useless without your offline private key).\n", outPath)
+
+	lines := []string{
+		"## OpenBao Initialized — Escrow These Shares Now",
+		"",
+		"All 5 recovery shares, RSA-OAEP / SHA-256-encrypted to the public key you supplied.",
+		"They are minted once and are not recoverable from OpenBao. Decrypt locally with your",
+		"OFFLINE private key and store the plaintext outside GitHub:",
+		"",
+		"```bash",
+		"cat > openbao-recovery-keys.b64 <<'CIPHER_EOF'",
+	}
+	lines = append(lines, blocks...)
+	lines = append(lines,
+		"CIPHER_EOF",
+		"while read -r b; do printf '%s' \"$b\" | base64 -d \\",
+		"  | openssl pkeyutl -decrypt -inkey escrow-priv.pem \\",
+		"      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo; \\",
+		"done < openbao-recovery-keys.b64",
+		"```",
+		"",
+		"Shares are in index order (1-5); the quorum threshold is **3 of 5**.",
+		fmt.Sprintf("> Shares 1-3 are ALSO live in `infra-%s` as `OPENBAO_RECOVERY_KEY_1/2/3` (write-only in the UI),", region),
+		"> which is what `bao-breakglass` and `bao-regen-root` use. Shares 4 and 5 exist ONLY in the",
+		"> ciphertext above — losing your private key loses them, though not the quorum.",
+	)
+	return ghaout.Append("GITHUB_STEP_SUMMARY", lines...)
+}
+
+// persistFallbackShares stores shares 4 and 5 as environment secrets when no
+// escrow key was supplied, so values that are minted exactly once still exist
+// somewhere.
+//
+// IT DOES NOT WIDEN THE BLAST RADIUS. The threshold is 3 and shares 1-3 are
+// already in this environment, so anyone who can read it already holds a
+// complete quorum; adding 4 and 5 changes nothing about what a compromise of it
+// yields. (That co-location is a real finding — see docs/secrets.md — but it is
+// the escrow path above, not this one, that closes it.)
+//
+// WARNS RATHER THAN FAILS, and that asymmetry with shares 1-3 is deliberate. A
+// failed 1-3 write is fatal because it costs the quorum. Shares 4 and 5 are
+// redundancy: losing them leaves break-glass fully working, and by the time this
+// runs the shares are already minted, so failing the bootstrap would wedge it
+// over a loss that re-running cannot repair.
+func persistFallbackShares(ghEnv string, shares []string) {
+	for i, key := range shares {
+		name := fmt.Sprintf("OPENBAO_RECOVERY_KEY_%d", i+4)
+		if err := ghsecret.SetFn(name, ghEnv, key); err != nil {
+			fmt.Printf("::warning::could not persist %s to %s: %v. Shares 1-3 are stored and the 3-of-5 quorum is intact, so break-glass still works — but this share is now LOST (they are minted once). Re-run with an escrow public key on the next cold bootstrap to get an offline copy.\n", name, ghEnv, err)
+			continue
+		}
+		fmt.Printf("Recovery share %d persisted to %s (no escrow key was supplied).\n", i+4, name)
+	}
+}
+
+// appendInitSummary writes the operator-facing banner. It carries NO key
+// material on either path — see the block in RunInit — so it says where the
+// shares went and what the operator still has to do.
+func appendInitSummary(region string, escrowed bool) error {
+	lines := []string{
+		"### OpenBao — what to do next",
+		"",
+		"**OPERATOR ACTION REQUIRED:**",
+	}
+	if escrowed {
+		lines = append(lines,
+			"Decrypt the recovery shares above with your offline private key and store them",
+			"outside GitHub. Nothing here holds a plaintext copy of shares 4 and 5.",
+		)
+	} else {
+		lines = append(lines,
+			"No escrow public key was supplied, so the recovery shares were NOT delivered to you —",
+			fmt.Sprintf("all 5 are held as `infra-%s` environment secrets (`OPENBAO_RECOVERY_KEY_1`-`5`),", region),
+			"which are write-only in the UI and cannot be read back. Break-glass works, but you have",
+			"**no offline escrow copy**, so losing that environment loses the quorum. To obtain one you",
+			"must re-shard with `bao operator rekey`, which mints new shares and invalidates these.",
+			"Supply an escrow public key on the next cold bootstrap to avoid this.",
+		)
+	}
+	return ghaout.Append("GITHUB_STEP_SUMMARY", append(lines,
+		"",
+		"Back up the cluster's 32-byte static unseal key offline TOO — recovery shares",
+		"authorize generate-root but CANNOT decrypt the root key, so losing the static",
+		"key loses the data.",
+		fmt.Sprintf("Delete the `OPENBAO_ROOT_TOKEN` secret on `infra-%s` once bootstrap completes.", region),
+	)...)
 }
 
 // ── bao-regen-root ────────────────────────────────────────────────────────────

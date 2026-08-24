@@ -1,6 +1,12 @@
 package openbao
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -45,11 +51,15 @@ func TestParseBaoInit(t *testing.T) {
 	}
 }
 
-func TestRunCIBaoInit(t *testing.T) {
+// initHarness wires the three GHA output files, the bao exec seam and the
+// gh-secret seam, returning the temp dir so a test can read what was written.
+func initHarness(t *testing.T, failSet func(name string) error) (string, *[]string) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, v := range []string{"GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"} {
 		t.Setenv(v, filepath.Join(dir, v))
 	}
+	t.Setenv("RUNNER_TEMP", dir)
 	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
 		want := "operator init -recovery-shares=5 -recovery-threshold=3 -format=json"
 		if pod != "platform-openbao-0" || strings.Join(args, " ") != want {
@@ -57,9 +67,17 @@ func TestRunCIBaoInit(t *testing.T) {
 		}
 		return initJSON, "", nil
 	})
-	ghCalls := withGHSetSecret(t, nil)
+	return dir, withGHSetSecret(t, failSet)
+}
 
-	if err := RunInit(false, "primary"); err != nil {
+// allInitSecrets is every value `operator init` mints. NOTHING in this list may
+// appear in the job summary on any path — see the next test for why.
+var allInitSecrets = []string{"uk1", "uk2", "uk3", "uk4", "uk5", "s.root"}
+
+func TestRunCIBaoInit(t *testing.T) {
+	dir, ghCalls := initHarness(t, nil)
+
+	if err := RunInit(false, "primary", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,49 +90,171 @@ func TestRunCIBaoInit(t *testing.T) {
 	if string(out) != "did_init=true\n" {
 		t.Errorf("GITHUB_OUTPUT = %q, want did_init=true", out)
 	}
-	summary, _ := os.ReadFile(filepath.Join(dir, "GITHUB_STEP_SUMMARY"))
-	if !strings.Contains(string(summary), "Save These Keys Now") || !strings.Contains(string(summary), initJSON) {
-		t.Errorf("summary missing banner or init payload: %q", summary)
-	}
+	// Shares 4 and 5 have no other home on this path, so they must be persisted.
 	want := []string{
 		"OPENBAO_RECOVERY_KEY_1@infra-primary=uk1",
 		"OPENBAO_RECOVERY_KEY_2@infra-primary=uk2",
 		"OPENBAO_RECOVERY_KEY_3@infra-primary=uk3",
 		"OPENBAO_ROOT_TOKEN@infra-primary=s.root",
+		"OPENBAO_RECOVERY_KEY_4@infra-primary=uk4",
+		"OPENBAO_RECOVERY_KEY_5@infra-primary=uk5",
 	}
 	if strings.Join(*ghCalls, " ") != strings.Join(want, " ") {
 		t.Errorf("gh calls = %v, want %v", *ghCalls, want)
 	}
 }
 
-func TestRunCIBaoInitSummaryBeforeGHFailure(t *testing.T) {
-	dir := t.TempDir()
-	for _, v := range []string{"GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"} {
-		t.Setenv(v, filepath.Join(dir, v))
+// THE REGRESSION TEST FOR THE DISCLOSURE. This used to be
+// TestRunCIBaoInitSummaryBeforeGHFailure, which asserted the raw init payload
+// WAS in the summary — the durability argument was sound and the channel was
+// not. ghsecret.Mask redacts logs; a job summary is rendered from a file that
+// masking never touches, so Actions-read on the instance repo could read all
+// five shares (threshold 3) and the root token. Both paths are checked here so
+// neither can regress alone.
+func TestRunCIBaoInitNeverWritesKeyMaterialToSummary(t *testing.T) {
+	for _, tc := range []struct{ name, escrow string }{
+		{"fallback", ""},
+		{"escrow", testEscrowPubKeyB64(t)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, _ := initHarness(t, nil)
+			if err := RunInit(false, "primary", tc.escrow); err != nil {
+				t.Fatal(err)
+			}
+			summary, _ := os.ReadFile(filepath.Join(dir, "GITHUB_STEP_SUMMARY"))
+			if strings.Contains(string(summary), initJSON) {
+				t.Error("the raw operator-init payload is in the job summary")
+			}
+			for _, secret := range allInitSecrets {
+				if strings.Contains(string(summary), secret) {
+					t.Errorf("secret %q appears in the job summary: %s", secret, summary)
+				}
+			}
+		})
 	}
+}
+
+// A gh-secret write failure is still fatal — shares 1-3 ARE the quorum, so the
+// bootstrap must not report success having failed to persist them. (The old test
+// of this name checked the summary held the payload first; that guarantee moved
+// to the ciphertext block on the escrow path.)
+func TestRunCIBaoInitQuorumWriteFailureIsFatal(t *testing.T) {
+	initHarness(t, func(string) error { return errors.New("403 secrets: write denied") })
+	if err := RunInit(false, "primary", ""); err == nil {
+		t.Fatal("want error when the gh secret set for a quorum share fails")
+	}
+}
+
+// Shares 4 and 5 are redundancy, not quorum, and by the time they are written
+// the shares are already minted — so a failure there warns and the bootstrap
+// carries on. Failing would wedge a run over a loss no retry can repair.
+func TestRunCIBaoInitRedundantShareWriteFailureIsNotFatal(t *testing.T) {
+	initHarness(t, func(name string) error {
+		if name == "OPENBAO_RECOVERY_KEY_4" || name == "OPENBAO_RECOVERY_KEY_5" {
+			return errors.New("403 secrets: write denied")
+		}
+		return nil
+	})
+	if err := RunInit(false, "primary", ""); err != nil {
+		t.Fatalf("RunInit = %v, want nil — losing share 4/5 leaves the 3-of-5 quorum intact", err)
+	}
+}
+
+// testEscrowPubKeyB64 generates a throwaway 2048-bit key and returns
+// base64(PEM) of its public half, matching what an operator pastes.
+func testEscrowPubKeyB64(t *testing.T) string {
+	t.Helper()
+	if testEscrowKey == nil {
+		var err error
+		if testEscrowKey, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+			t.Fatal(err)
+		}
+	}
+	der, err := x509.MarshalPKIXPublicKey(&testEscrowKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	return base64.StdEncoding.EncodeToString(pemBytes)
+}
+
+// Generated once per test binary: 2048-bit keygen is slow enough that doing it
+// per subtest showed up in the package's runtime.
+var testEscrowKey *rsa.PrivateKey
+
+func TestRunCIBaoInitEscrowDeliversCiphertextOnly(t *testing.T) {
+	pub := testEscrowPubKeyB64(t)
+	dir, ghCalls := initHarness(t, nil)
+
+	if err := RunInit(false, "primary", pub); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every share, in index order, recoverable ONLY with the private key.
+	raw, err := os.ReadFile(filepath.Join(dir, "openbao-recovery-keys.b64"))
+	if err != nil {
+		t.Fatalf("escrow file not written: %v", err)
+	}
+	blocks := strings.Fields(string(raw))
+	if len(blocks) != 5 {
+		t.Fatalf("escrow file has %d blocks, want 5", len(blocks))
+	}
+	summary, _ := os.ReadFile(filepath.Join(dir, "GITHUB_STEP_SUMMARY"))
+	for i, b := range blocks {
+		ct, err := base64.StdEncoding.DecodeString(b)
+		if err != nil {
+			t.Fatalf("block %d is not base64: %v", i+1, err)
+		}
+		got, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, testEscrowKey, ct, nil)
+		if err != nil {
+			t.Fatalf("block %d did not decrypt: %v", i+1, err)
+		}
+		if want := fmt.Sprintf("uk%d", i+1); string(got) != want {
+			t.Errorf("block %d = %q, want %q", i+1, got, want)
+		}
+		// The same ciphertext must ALSO be inline in the summary: the artifact
+		// upload is a separate step a caller can omit, and these do not come round
+		// again.
+		if !strings.Contains(string(summary), b) {
+			t.Errorf("ciphertext block %d is not in the job summary", i+1)
+		}
+	}
+
+	// On this path shares 4 and 5 live in the ciphertext, NOT in GitHub — that is
+	// the whole point of supplying a key.
+	for _, call := range *ghCalls {
+		if strings.HasPrefix(call, "OPENBAO_RECOVERY_KEY_4") || strings.HasPrefix(call, "OPENBAO_RECOVERY_KEY_5") {
+			t.Errorf("escrow path persisted %q to GitHub; it should exist only as ciphertext", call)
+		}
+	}
+}
+
+// A malformed key must fail BEFORE `operator init` runs. The shares are minted
+// exactly once, so discovering a bad key afterwards means they can never be
+// escrowed.
+func TestRunCIBaoInitRejectsBadEscrowKeyBeforeInit(t *testing.T) {
+	ran := false
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
+		ran = true
 		return initJSON, "", nil
 	})
-	withGHSetSecret(t, func(string) error { return errors.New("403 secrets: write denied") })
-
-	if err := RunInit(false, "primary"); err == nil {
-		t.Fatal("want error when gh secret set fails")
+	err := RunInit(false, "primary", "not-base64-at-all!!")
+	if err == nil || !strings.Contains(err.Error(), "escrow public key rejected") {
+		t.Errorf("err = %v, want the escrow-key rejection", err)
 	}
-	// The one-shot init payload must already be in the summary regardless.
-	summary, _ := os.ReadFile(filepath.Join(dir, "GITHUB_STEP_SUMMARY"))
-	if !strings.Contains(string(summary), initJSON) {
-		t.Error("init payload not captured in summary before the gh failure")
+	if ran {
+		t.Error("`operator init` ran despite a malformed escrow key — the shares were minted and cannot be escrowed")
 	}
 }
 
 func TestRunCIBaoInitRequiresRegionAndInitSuccess(t *testing.T) {
-	if err := RunInit(false, ""); err == nil {
+	if err := RunInit(false, "", ""); err == nil {
 		t.Error("missing --region accepted")
 	}
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		return "", "Error initializing: Vault is already initialized", errors.New("exit status 2")
 	})
-	err := RunInit(false, "primary")
+	err := RunInit(false, "primary", "")
 	if err == nil || !strings.Contains(err.Error(), "already initialized") {
 		t.Errorf("err = %v, want operator-init failure with stderr", err)
 	}

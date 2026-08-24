@@ -33,6 +33,7 @@ package openbao
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
@@ -40,9 +41,18 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghsecret"
 )
 
-func RunEnsureReady(dryRun bool, region string, leaderTimeout, joinTimeout time.Duration) error {
+func RunEnsureReady(dryRun bool, region, escrowPubKeyB64 string, leaderTimeout, joinTimeout time.Duration) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
+	}
+	// Vet the escrow key HERE as well as inside RunInit, and before the dry-run
+	// return, so `--dry-run` is a usable preflight for it. The recovery shares are
+	// minted exactly once; an operator who finds out their key was malformed
+	// afterwards has no second chance to escrow them.
+	if strings.TrimSpace(escrowPubKeyB64) != "" {
+		if _, err := ParseRecipientRSAPubKey(escrowPubKeyB64); err != nil {
+			return fmt.Errorf("escrow public key rejected (nothing was initialized): %w", err)
+		}
 	}
 	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would probe OpenBao and init/wait-for-auto-unseal/regen-root as needed")
@@ -74,7 +84,7 @@ func RunEnsureReady(dryRun bool, region string, leaderTimeout, joinTimeout time.
 		// $GITHUB_ENV AND the process env (for the in-process regen path + the
 		// availability gate). Under static seal each pod then unseals itself at
 		// boot once retry_join has joined it — wait for that convergence.
-		if err := RunInit(dryRun, region); err != nil {
+		if err := RunInit(dryRun, region, escrowPubKeyB64); err != nil {
 			return err
 		}
 		if err := baoread.WaitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
