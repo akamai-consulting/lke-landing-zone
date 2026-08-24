@@ -97,4 +97,4 @@ password.
 | | Version |
 |---|---|
 | terraform | >= 1.5.0 |
-| linode/linode | ~> 3.11 |
+| linode/linode | ~> 4.3 |

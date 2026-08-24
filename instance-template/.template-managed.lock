@@ -25,7 +25,7 @@ cca2ff1d675d15b148d716e88d170e85f695fb1d9e9edb0fc5276ed7b66082bd  .github/action
 f0d4fa3e06e5fa1b142b2f1618f2a9427b05ece28911107f5d83a57a92f423fa  .github/actions/fetch-kubeconfig/action.yml
 eddf2f18c86c9b14684cc5e30515477f0b12faf00c24a6d83faa21e7d8a032df  .github/actions/linode-credentials/action.yml
 7ac75fd58edda442666228b059fddc55d603d7a98a504c415fdd47c0768a7cdb  .github/actions/lke-runner-acl/action.yml
-5ebc1ccfe46863a45348526eeab167c39d1b29111e880f9da01e5fd7743a8584  .github/actions/terraform-init/action.yml
+a79f538dcf484c3770dcf8a0612eca40e149bc9514df181c2dc10518808ddb9a  .github/actions/terraform-init/action.yml
 13a9c39f414be0f40c4c5e3a60bab8de827829e0160be1f5efb2175866d7978c  .github/actions/tf-encryption-env/action.yml
 e51553387b439ab7cb8364d50491929d4f098c2b6eaf3df21a2ca2aa2c7e17d5  .github/workflows/llz-bootstrap-openbao.yml
 2c04737205e437dcf83b7d981bcb4dc0bd5459dd2035a1cba30679be29f00788  .github/workflows/llz-breakglass-openbao.yml

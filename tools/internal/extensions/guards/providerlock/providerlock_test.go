@@ -163,6 +163,25 @@ provider "registry.opentofu.org/linode/linode" {
 }
 `
 
+// moduleVersionsTF is the terraform-modules/ half of the corpus. Run reads BOTH
+// trees now (agreement.go), so a Run test that writes only roots is not a
+// smaller repo — it is a repo the gate rightly refuses to judge.
+func moduleVersionsTF(spec string) string {
+	return `terraform {
+  required_providers {
+    linode = {
+      source  = "linode/linode"
+      version = "` + spec + `"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
+  }
+}
+`
+}
+
 func TestParseLock(t *testing.T) {
 	got := ParseLock(clusterLock)
 	if len(got) != 2 {
@@ -285,6 +304,7 @@ func TestRunFailsWhenNothingLinedUp(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
 		"tools/internal/shared/tfroots/roots/cluster/versions.tf": clusterVersionsTF,
+		"terraform-modules/llz-cluster/versions.tf":               moduleVersionsTF("~> 3.11"),
 		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": `
 provider "registry.opentofu.org/someone/else" {
   version = "1.0.0"
@@ -370,6 +390,7 @@ func TestRunExplainsTheAsymmetryAndBothHalvesOfTheFix(t *testing.T) {
 	writeTree(t, repo, map[string]string{
 		"tools/internal/shared/tfroots/roots/cluster/versions.tf": strings.Replace(
 			clusterVersionsTF, `version = "~> 3.11"`, `version = "~> 4.0"`, 1),
+		"terraform-modules/llz-cluster/versions.tf":                             moduleVersionsTF("~> 4.0"),
 		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	var out, errOut bytes.Buffer
@@ -401,6 +422,7 @@ func TestRunReportsWhatItCompared(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
 		"tools/internal/shared/tfroots/roots/cluster/versions.tf":               clusterVersionsTF,
+		"terraform-modules/llz-cluster/versions.tf":                             moduleVersionsTF("~> 3.11"),
 		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	var out, errOut bytes.Buffer
