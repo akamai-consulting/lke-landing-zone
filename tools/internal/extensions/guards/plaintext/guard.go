@@ -223,7 +223,7 @@ var plaintextAllowed = map[string]plaintextRule{
 	},
 
 	// ── apl-core owned ───────────────────────────────────────────────────────
-	"platform-apl/components/observability/cert-manager-servicemonitor.yaml:tcp-prometheus-servicemonitor": {
+	"platform-apl/components/observability/cert-manager-servicemonitor.yaml:http-metrics": {
 		owner: "apl-core",
 		reason: "cert-manager is installed and configured by apl-core; its metrics listener serves " +
 			"HTTP and LLZ ships no values for it. Payload is cert-manager counters plus certificate " +
@@ -235,7 +235,10 @@ var plaintextAllowed = map[string]plaintextRule{
 			"values repo, contrary to the earlier note here. Worse under sidecars: that same file " +
 			"sets `podAnnotations.sidecar.istio.io/inject: \"false\"`, so even a meshed Prometheus " +
 			"could not mTLS to it. It closes only under Istio AMBIENT, where that annotation is " +
-			"inert and the pods enrol via the namespace — see docs/adr/0010-in-cluster-mtls.md",
+			"inert and the pods enrol via the namespace — see docs/adr/0010-in-cluster-mtls.md. " +
+			"RE-KEYED from `tcp-prometheus-servicemonitor`: the hop did not move, the PORT NAME did " +
+			"— cert-manager v1.21.1 exposes its metrics port as `http-metrics` on the same 9402, and " +
+			"the ServiceMonitor was still asking for the old name, so it had no scrape target at all",
 	},
 
 	// ── upstream limited ─────────────────────────────────────────────────────
