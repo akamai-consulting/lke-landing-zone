@@ -152,3 +152,32 @@ func TestDefaultVPCSubnetCIDRMatchesRoot(t *testing.T) {
 		t.Errorf("DefaultVPCSubnetCIDR = %q, but roots/cluster/variables.tf defaults to %q", DefaultVPCSubnetCIDR, want)
 	}
 }
+
+// RootVersions is what the instance-side provider-lock check reads its
+// constraints from, so an empty or truncated answer there would turn that gate
+// into a green check over nothing. Asserts the shape, not the pinned versions —
+// those move with every dependabot bump, and a test that tracks them asserts
+// nothing.
+func TestRootVersionsCarriesEveryRootsRequiredProviders(t *testing.T) {
+	got := RootVersions()
+	if len(got) == 0 {
+		t.Fatal("RootVersions returned nothing — the instance-side provider-lock gate would compare zero constraints")
+	}
+	for _, root := range []string{"cluster", "object-storage"} {
+		body, ok := got[root]
+		if !ok {
+			t.Errorf("no versions.tf for the %s root", root)
+			continue
+		}
+		if !strings.Contains(body, "required_providers") || !strings.Contains(body, "linode/linode") {
+			t.Errorf("%s/versions.tf does not declare the linode provider:\n%s", root, body)
+		}
+	}
+	// Only versions.tf, keyed by root — a stray key would mean the filter matched
+	// something else in the embedded tree.
+	for root := range got {
+		if strings.Contains(root, "/") {
+			t.Errorf("key %q is not a bare root name", root)
+		}
+	}
+}

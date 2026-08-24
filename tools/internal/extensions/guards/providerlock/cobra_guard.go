@@ -10,6 +10,7 @@ import "github.com/spf13/cobra"
 // Cmd is `llz ci provider-lock-guard`.
 func Cmd() *cobra.Command {
 	var root string
+	var instance bool
 	c := &cobra.Command{
 		Use:   "provider-lock-guard",
 		Short: "fail when a delivered provider lockfile cannot satisfy a constraint the template ships",
@@ -28,12 +29,24 @@ func Cmd() *cobra.Command {
 			"REPORTED ONLY: a constraint with no pin (tofu records it on first init) and a\n" +
 			"pin nothing constrains (dead weight tofu ignores). Neither breaks an adopter.\n\n" +
 			"Offline; reads this repo only. Roots that ship no lockfile (vpc, databases) are\n" +
-			"skipped — their providers resolve fresh on every init.",
+			"skipped — their providers resolve fresh on every init.\n\n" +
+			"--instance asks the same question INSIDE AN ADOPTER'S REPO, which is where the\n" +
+			"asymmetry above actually bites. It reads the locks from terraform-iac-bootstrap/\n" +
+			"at the repo root and the constraints from the roots COMPILED INTO THIS BINARY —\n" +
+			"an instance has no tools/ tree to read them from, and the llz running the check\n" +
+			"is the one whose `llz render` writes the roots. Run it on the upgrade PR, where\n" +
+			"a newly-raised constraint and an untouched `owned` lockfile first disagree; with\n" +
+			"no lock committed at all it passes, because nothing can be stale.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if instance {
+				return RunInstance(root, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			return Run(root, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	c.Flags().StringVar(&root, "root", ".", "repo root to scan")
+	c.Flags().BoolVar(&instance, "instance", false,
+		"scan an ADOPTER'S instance repo: locks from terraform-iac-bootstrap/, constraints from the roots embedded in this binary")
 	return c
 }

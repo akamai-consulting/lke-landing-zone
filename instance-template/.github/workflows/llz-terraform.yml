@@ -271,6 +271,26 @@ jobs:
       - name: Required repo-level secrets and variables are set
         run: llz ci require-repo-config
 
+      # THE ONE HALF OF A PROVIDER BUMP THAT AN UPGRADE CANNOT DELIVER.
+      # `.terraform.lock.hcl` is `owned` in .template-manifest — seeded when this
+      # instance was scaffolded and never re-touched by `llz upgrade` — while the
+      # constraint it has to satisfy travels the other way, inside the ci image.
+      # So a release that raises a provider constraint leaves the pair mismatched
+      # BY DESIGN on every instance in the field, and until now nothing looked at
+      # it: gsap-apl merged its v0.0.45 upgrade PR with this job green and a lock
+      # still pinning linode/linode 3.12.0 against `~> 4.3`. The mismatch first
+      # appeared in a production apply.
+      #
+      # HERE, ON THE UPGRADE PR, because that is the one commit where the two
+      # halves first disagree and the fix (`tofu init -upgrade`, commit the lock)
+      # belongs in the same PR that moved the constraint.
+      #
+      # BELOW assert-image-fresh, for the reason that block spells out: a stale
+      # TF_IMAGE is the normal state right after an upgrade, and that image's
+      # baked llz does not have this flag.
+      - name: Committed provider pins satisfy the constraints this llz ships
+        run: llz ci provider-lock-guard --instance
+
   # ── tflint ───────────────────────────────────────────────────────────────────
   # Local HCL only — no provider credentials or remote state needed.
   tf-lint:
