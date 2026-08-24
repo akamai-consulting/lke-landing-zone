@@ -31,6 +31,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
@@ -480,7 +481,7 @@ func ciCmd() *cobra.Command {
 	// `:<version>` only from the default branch's HEAD (#451). provider-lock-guard is
 	// the same shape one layer down: the provider constraint and the provider pin
 	// reach an instance by DIFFERENT routes, so neither file can be wrong alone.
-	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd(), providerlock.Cmd())
+	c.AddCommand(setupgosite.Cmd(), mutabletags.Cmd(), providerlock.Cmd(), dependabotcoverage.Cmd())
 	c.AddCommand(callerperms.Cmd(), runinjection.Cmd(), secretscope.Cmd(), defaultdeny.Cmd())
 	c.AddCommand(upstreamupdates.UpgradePRCmd())
 	c.AddCommand(sourceref.Cmd(), sourceref.SymbolsCmd())

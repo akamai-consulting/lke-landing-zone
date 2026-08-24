@@ -66,6 +66,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
@@ -266,6 +267,10 @@ var gates = []Gate{
 	// whose corpus is one directory. The two scan roots are the gate's own
 	// business; handing it a subtree would silently halve what it checks.
 	{Extension: "setup-go-sole-site", New: setupgosite.Cmd},
+	// Takes --root rather than a Subtree: its whole subject is the relation
+	// between .github/dependabot.yml and the manifests scattered across every
+	// other tree, so any narrowing would hide the directories it exists to find.
+	{Extension: "dependabot-coverage", New: dependabotcoverage.Cmd},
 	// Reads ONE workflow — the image publisher — so it takes the repo root like
 	// the majority rather than a Subtree: its subject is a single named file, and
 	// handing it .github/workflows would only shorten the path it opens.
@@ -445,7 +450,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (32 rows, 29 of them taking the default subject — both pinned by
+	// table (33 rows, 30 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

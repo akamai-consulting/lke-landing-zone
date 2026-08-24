@@ -1,0 +1,48 @@
+# .dependabot-coverage.yaml — the dependency manifests this repo deliberately
+# leaves unscanned, and why.
+#
+# `llz ci dependabot-coverage` (in `make lint`) walks the tree for manifests —
+# go.mod, Dockerfile, action.yml, .github/workflows, devcontainer.json, and .tf
+# files declaring required_providers — and fails when one is covered by no
+# .github/dependabot.yml entry. Every genuine exception belongs here, with the
+# argument for it, because an exclusion is a decision to leave a dependency
+# unwatched and the next reader has to be able to tell whether it still holds.
+#
+# THE GUARD REMOVES ITS OWN DEAD ENTRIES. An exclusion matching no manifest fails
+# the gate rather than sitting here, so this file cannot decay into a graveyard of
+# paths the repo no longer has. Each `path` covers its own directory and anything
+# beneath it; `reason` must be a sentence, not a placeholder.
+exclusions:
+  - ecosystem: github-actions
+    path: instance-template/.github
+    reason: >-
+      Class `managed` in .template-manifest: the vendored llz-*.yml workflows and
+      composite actions are digest-locked in .template-managed.lock, so a pin bump
+      changes a sha256 and `managed-lock-check` fails until `llz ci managed-fresh
+      --write` regenerates the lock — which Dependabot cannot run, so every such PR
+      would land red. These pins are bumped by hand alongside the lock; see the
+      "Action pins and Dependabot" section of .github/workflows/AGENTS.md. In an
+      adopter's rendered instance the same files are Renovate's business
+      (instance-template/renovate.json ships with them), not Dependabot's.
+
+  - ecosystem: devcontainers
+    path: instance-template
+    reason: >-
+      There is no version here for Dependabot to move. The delivered
+      devcontainer.json pins a FIRST-PARTY image by mutable tag through a copier
+      token — ghcr.io/<@ upstream_org @>/devcontainer:latest — which is both
+      unparseable as JSON until copier renders it and unpinned by design, so an
+      adopter can repoint the org on their fork (it is class `merge`). The image's
+      contents are governed by dockerfiles/Dockerfile, which IS scanned.
+
+  - ecosystem: terraform
+    path: tools/internal/shared/tfroots/roots
+    reason: >-
+      Dependabot cannot parse these directories: they are the TF root templates
+      embedded in the llz binary, and while versions.tf is plain HCL its sibling
+      main.tf carries copier tokens (`source = "git::…/<@ upstream_org @>/…"`) that
+      no HCL parser accepts. The provider constraint they declare is not
+      unwatched — `llz ci provider-lock-guard` holds it against the
+      .terraform.lock.hcl every instance carries, which is the relation that
+      actually breaks adopters, and terraform-modules/* declares the same
+      constraint in a directory Dependabot CAN read.

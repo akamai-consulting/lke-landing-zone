@@ -1538,7 +1538,15 @@ categories:
     #                       extensions/assertions/upgradeplan, so the only line here
     #                       is the import that makes the constructor nameable. A
     #                       verb cannot be wired with fewer.
-    budget: 1968
+    #   1,969 / 129 files  +1 the `dependabotcoverage` import for `llz ci
+    #                       dependabot-coverage`. IRREDUCIBLE, the same shape as the
+    #                       two entries above: the verb's command was folded onto the
+    #                       existing setup-go-sole-site AddCommand call, and the walk,
+    #                       the coverage rules and the reporting all live in
+    #                       extensions/guards/dependabotcoverage. The only line this
+    #                       layer gains is the import that makes the constructor
+    #                       nameable.
+    budget: 1969
     exact: true
     include:
       - "tools/internal/cli/*.go"
