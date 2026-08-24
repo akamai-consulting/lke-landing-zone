@@ -57,7 +57,7 @@ Inherits the `linode` provider from the calling root (configure
 | Name | Version |
 |---|---|
 | Terraform | `>= 1.5.0` |
-| `linode/linode` provider | `~> 3.11` |
+| `linode/linode` provider | `~> 4.3` |
 
 ## Usage
 

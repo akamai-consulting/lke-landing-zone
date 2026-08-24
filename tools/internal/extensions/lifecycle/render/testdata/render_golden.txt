@@ -1103,7 +1103,7 @@ autoscaler_enabled = false
 # akamai-apl.net domain (bootstrap-cluster skips its own apl-core install). ADR 0005.
 apl_enabled = false
 --- terraform-iac-bootstrap/cluster/variables.tf  sha256=897df3df6f1de2e6054f3da606fafd07e50459c6de5b88d31a4de85273acb7c5  bytes=8342
---- terraform-iac-bootstrap/cluster/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
+--- terraform-iac-bootstrap/cluster/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/databases/backend.tf  sha256=05b5bc85fcc4dbf59e7040db9e5b0ecd68673d4da0295b5315702e41894da6a6  bytes=1820
 --- terraform-iac-bootstrap/databases/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
 --- terraform-iac-bootstrap/databases/main.tf  sha256=3c221d6400221896767f6a62649be6f013305cc2826e25e9f3ce724db1a2947d  bytes=1756
@@ -1231,7 +1231,7 @@ databases = {}
 # TF_VAR_linode_token Linode account API token (databases:read_write)
 label_prefix = "goldeninst"
 --- terraform-iac-bootstrap/databases/variables.tf  sha256=48bfcd515e0f7c6acf06308a93e634cdbc056091987e6c6cd5bffddacf6d4c25  bytes=4260
---- terraform-iac-bootstrap/databases/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
+--- terraform-iac-bootstrap/databases/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/object-storage/backend.tf  sha256=35ab77b664436bc69caf9b63cf2218279689ea451acb552b41d03cc09dac903f  bytes=1109
 --- terraform-iac-bootstrap/object-storage/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
 --- terraform-iac-bootstrap/object-storage/main.tf  sha256=be8c7e2043de7ae2fcdea9ea9b2ec57a8b33f7b3b292a197b2e92a869199619e  bytes=1227
@@ -1289,9 +1289,9 @@ obj_cluster = "us-sea-1"
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
 # TF_VAR_linode_token Linode account API token (object-storage:read_write)
 --- terraform-iac-bootstrap/object-storage/variables.tf  sha256=4e19d9244519fe2e3f48e4166c8d7ccb338d71cb9165be218fb5d83e171479c7  bytes=2990
---- terraform-iac-bootstrap/object-storage/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
+--- terraform-iac-bootstrap/object-storage/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/vpc/backend.tf  sha256=5079fd70224c8b0a7a4ba7229ca655b7d779ee5e2d80bed952db0b4d40ab7081  bytes=1151
 --- terraform-iac-bootstrap/vpc/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
 --- terraform-iac-bootstrap/vpc/main.tf  sha256=1e1abaab4ae5dbe4cbfd1b359c6825cd7c7fef661315cff36cf7a7aa540accce  bytes=843
 --- terraform-iac-bootstrap/vpc/variables.tf  sha256=f350631ba1e8e8a49c18e65ebd8dc113b9d6a185f78070ad3d47d73aaa7ac3aa  bytes=320
---- terraform-iac-bootstrap/vpc/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
+--- terraform-iac-bootstrap/vpc/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152

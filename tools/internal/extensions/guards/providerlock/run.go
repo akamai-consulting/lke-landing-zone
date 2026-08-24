@@ -14,7 +14,21 @@ import (
 // Run scans repoRoot and reports. Returns an error when any lock entry violates
 // a constraint.
 func Run(repoRoot string, out, errOut io.Writer) error {
-	results, err := Scan(capability.RepoForGate(Extension(), repoRoot))
+	repo := capability.RepoForGate(Extension(), repoRoot)
+
+	// AGREEMENT FIRST, AND IT SHORT-CIRCUITS. When the declaration sites disagree
+	// the intersection they form may be empty, and then NO lock can satisfy it —
+	// so reporting the lock as the violation (which is what the loop below would
+	// do) points the fix at the wrong file. See agreement.go.
+	constraints, err := AllConstraints(repo)
+	if err != nil {
+		return err
+	}
+	if conflicts := CheckAgreement(constraints); len(conflicts) > 0 {
+		return reportConflicts(conflicts, errOut)
+	}
+
+	results, err := Scan(repo)
 	if err != nil {
 		return err
 	}
@@ -74,4 +88,41 @@ TO FIX, do BOTH halves in this PR:
      `+"`tofu init -upgrade`"+` once.
 `, lockFile)
 	return fmt.Errorf("provider-lock-guard: %d delivered provider pin(s) violate a shipped constraint", len(violations))
+}
+
+// reportConflicts prints the disagreeing declaration sites and the remediation.
+func reportConflicts(conflicts []Conflict, errOut io.Writer) error {
+	for _, c := range conflicts {
+		for _, spec := range c.Specs() {
+			for _, file := range c.Sites[spec] {
+				fmt.Fprintf(errOut, "::error file=%s::%s is constrained %q here, but differently elsewhere "+
+					"in the template\n", file, c.Provider, spec)
+			}
+		}
+	}
+	fmt.Fprintf(errOut, "\n%s %d provider(s) constrained inconsistently across the template:\n",
+		color.Red("✗"), len(conflicts))
+	for _, c := range conflicts {
+		fmt.Fprintf(errOut, "    %s\n", c)
+	}
+	fmt.Fprintf(errOut, `
+WHY THIS BREAKS EVERY TERRAFORM OP. A root's constraint and those of the modules
+it sources are INTERSECTED, not overridden. Two specs that do not overlap leave
+no version to install and `+"`tofu init`"+` fails before it reaches the lock:
+
+    Error: Failed to resolve provider packages
+    Could not resolve provider <name>: no available releases match the given
+    constraints <spec A>, <spec B>
+
+This is the shape a dependency bot produces on its own. Dependabot scans
+`+"`terraform-modules/*`"+` and NOT the generated roots (they carry copier tokens, so
+they are not parseable HCL until rendered — see the `+"`terraform`"+` entry in
+.github/dependabot.yml), so it moves the module half of the constraint and leaves
+the root half behind.
+
+TO FIX: set every site above to the SAME spec. The bot's PR is the module half;
+the roots under tools/internal/shared/tfroots/roots/ are the half it cannot reach.
+Then regenerate the delivered locks beside them, which is the check that runs next.
+`)
+	return fmt.Errorf("provider-lock-guard: %d provider(s) constrained inconsistently across the template", len(conflicts))
 }

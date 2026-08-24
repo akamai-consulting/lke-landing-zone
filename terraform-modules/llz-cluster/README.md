@@ -165,5 +165,5 @@ terraform state rm module.<name>.linode_firewall.this
 | Name | Version |
 |---|---|
 | Terraform | `>= 1.5.0` |
-| `linode/linode` provider | `~> 3.11` |
+| `linode/linode` provider | `~> 4.3` |
 | `hashicorp/time` provider | `~> 0.12` |

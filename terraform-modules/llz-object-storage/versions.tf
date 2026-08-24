@@ -4,7 +4,7 @@ terraform {
   required_providers {
     linode = {
       source  = "linode/linode"
-      version = "~> 3.11"
+      version = "~> 4.3"
     }
     # (the `time` provider was removed with the TF-managed keys and their
     # time_rotating rotation clock — the in-cluster linodeCredRotator owns
