@@ -2,7 +2,6 @@ package terraform
 
 import (
 	"encoding/base64"
-	"regexp"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
@@ -25,21 +24,6 @@ func SelectNodePoolID(pools []map[string]any, label string) (uint64, bool) {
 		}
 	}
 	return 0, false
-}
-
-// stateIDRe matches the `id = "<value>"` attribute line of `terraform state
-// show` output, mirroring the script's `awk -F'"' '/^\s*id\s*=/'`.
-var stateIDRe = regexp.MustCompile(`^\s*id\s*=\s*"([^"]*)"`)
-
-// ParseStateID extracts the `id` attribute from `terraform state show` output,
-// or "" if the resource is absent / has no id line.
-func ParseStateID(stateShowOutput string) string {
-	for _, line := range strings.Split(stateShowOutput, "\n") {
-		if m := stateIDRe.FindStringSubmatch(line); m != nil {
-			return m[1]
-		}
-	}
-	return ""
 }
 
 // StubKubeconfig is the minimal valid kubeconfig the script writes so the
