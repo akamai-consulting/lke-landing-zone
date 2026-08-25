@@ -643,3 +643,55 @@ func splitPrefix(before, after string) (string, string) {
 	}
 	return strings.TrimSuffix(before[:len(before)-i], "-"), strings.TrimSuffix(after[:len(after)-i], "-")
 }
+
+// ── The allowlist ─────────────────────────────────────────────────────────────
+//
+// WHY ONE IS NEEDED AT ALL. "An apply must not destroy live infrastructure" is
+// the right rule for a bucket holding Loki chunks and the wrong rule for a node
+// pool: `linode_lke_node_pool.type` is ForceNew, so changing the node size — an
+// ordinary, deliberate operator action taken through the spec — plans as a
+// replace. A guard that refuses it unconditionally would block a routine resize
+// with no way through, and a guard operators cannot get past is one they turn
+// off.
+//
+// AN ALLOWLIST AND NOT A DENYLIST, and the direction is the whole design. With a
+// denylist ("refuse these types"), a resource added to a module later is
+// unprotected until somebody remembers to list it — the silent failure. With an
+// allowlist, that same new resource is REFUSED on its first destructive plan:
+// loud, on the apply, naming the type, and the fix is either a real bug or one
+// entry added by someone who looked at it.
+//
+// The allowlist is per-lane, set where the lane knows what is routine for it: the
+// cluster apply permits the node pool and the time_sleep helper; object-storage,
+// databases and the shared VPC permit nothing, because nothing they hold is
+// routinely recycled.
+
+// PartitionAllowed splits destructive findings into the ones this lane refuses
+// and the ones its allowlist permits.
+//
+// Pure over the findings, so both halves are reachable from a table test.
+// An empty allowlist refuses everything, which is what every lane except the
+// cluster passes.
+func PartitionAllowed(findings []Finding, allowReplace []string) (refused, allowed []Finding) {
+	ok := make(map[string]bool, len(allowReplace))
+	for _, t := range allowReplace {
+		// TrimSpace only. An empty entry is NOT filtered out here, deliberately:
+		// filtering it would give the "untyped finding" invariant below a second,
+		// redundant guard, and two guards for one property means a mutation to
+		// either is caught by neither. The single check that enforces it lives in
+		// the loop, where the test can land on it.
+		ok[strings.TrimSpace(t)] = true
+	}
+	for _, f := range findings {
+		// A finding with NO TYPE is refused whatever the allowlist says. Type comes
+		// from the plan document; an entry this gate could not type is an entry it
+		// did not understand, and matching "" against an allowlist would let one
+		// through on the strength of a field that was never read.
+		if f.Type != "" && ok[f.Type] {
+			allowed = append(allowed, f)
+			continue
+		}
+		refused = append(refused, f)
+	}
+	return refused, allowed
+}

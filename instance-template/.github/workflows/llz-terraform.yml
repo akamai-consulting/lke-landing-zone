@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: ''
+      confirm_replace:
+        description: "Replace confirmation token: replace:<deployment>:<module>. Empty in steady state. An APPLY refuses a plan that destroys or replaces live infrastructure (`llz ci assert-upgrade-plan`); this is how an operator who has decided the recycle is intended gets through, per module, without editing the pipeline. It names the deployment AND the module so it cannot be set once and quietly wave through a lane it was not meant for."
+        required: false
+        type: string
+        default: ''
       assert_loki:
         description: 'Forwarded to bootstrap-openbao: after converge, assert Loki is S3-backed (`llz ci assert-loki`). Default false; the release-e2e gate sets it true.'
         required: false
@@ -592,14 +597,33 @@ jobs:
           state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
           state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
+      # -out=tfplan.bin, and the apply below consumes it. It used to `tofu plan`
+      # for display and then `tofu apply -var-file=...`, which RE-PLANS: the thing
+      # applied was never the thing shown, and there was no artifact for a check to
+      # read. Both lanes that already guard their apply take this shape.
       - name: Terraform plan — shared VPC
         if: steps.net.outputs.net != ''
         working-directory: terraform-iac-bootstrap/vpc
-        run: tofu plan -var-file="${{ steps.net.outputs.net }}.tfvars"
+        run: tofu plan -var-file="${{ steps.net.outputs.net }}.tfvars" -out=tfplan.bin
+
+      # A SHARED VPC IS THE ONE THING SEVERAL DEPLOYMENTS SIT INSIDE. Replacing it
+      # detaches every cluster attached to it, and `linode_lke_cluster.vpc_id` is
+      # create-time only (ADR: the provider plans a VPC move as a benign
+      # `update in-place`), so the clusters do not come back by re-applying — they
+      # have to be rebuilt. No allowlist: nothing in this root is routinely
+      # recycled.
+      - name: Refuse a plan that would destroy the shared VPC
+        if: >
+          steps.net.outputs.net != '' && env.ACTION == 'apply' &&
+          inputs.confirm_replace != format('replace:{0}:vpc', inputs.region)
+        uses: ./.github/actions/assert-plan-safe
+        with:
+          working-directory: terraform-iac-bootstrap/vpc
+
       - name: Terraform apply — shared VPC
         if: steps.net.outputs.net != '' && env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/vpc
-        run: tofu apply -auto-approve -var-file="${{ steps.net.outputs.net }}.tfvars"
+        run: tofu apply -auto-approve tfplan.bin
 
       # Orientation for a failed build — see ci_build_failure_summary.go. On every
       # apply job, because the apply path had no `if: failure()` step at all: a red
@@ -731,6 +755,32 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         run: |
           tofu show -json tfplan.bin | llz ci assert-upgrade-plan --expect-no-changes
+
+      # NO APPLY MAY RECYCLE THE CLUSTER, and until now nothing said so on this
+      # path. The step above asks the strictest version of the question but only
+      # `if: inputs.assert_no_changes` — which the release-e2e gate sets and an
+      # operator dispatch never does. So the lane that rebuilds production had no
+      # destructive-plan check at all, while object-storage next door had one.
+      #
+      # THE ALLOWLIST IS THE POINT. `linode_lke_node_pool.type` is ForceNew, so a
+      # node-size change — an ordinary action taken through the spec — plans as a
+      # replace; refusing it unconditionally would block a routine resize with no
+      # way through, and a guard operators cannot get past is one they turn off.
+      # time_sleep is a timing helper, not infrastructure. Everything else — the
+      # LKE cluster, the VPC, the subnet, the firewall — is refused, and a resource
+      # type this gate has never met is refused too, which is the direction that
+      # fails safe.
+      #
+      # Reads the same tfplan.bin the plan step displayed, so the check and the
+      # summary above it cannot disagree.
+      - name: Refuse a plan that would recycle the cluster
+        if: >
+          env.ACTION == 'apply' &&
+          inputs.confirm_replace != format('replace:{0}:cluster', inputs.region)
+        uses: ./.github/actions/assert-plan-safe
+        with:
+          working-directory: terraform-iac-bootstrap/cluster
+          allow-replace: linode_lke_node_pool,time_sleep
 
       - name: Terraform apply — cluster
         if: env.ACTION == 'apply'
@@ -1219,12 +1269,17 @@ jobs:
       # could not show them this risk. It still only FAILS on apply: a plan changes
       # nothing, and failing the preview would just teach people to skip it.
       - name: Refuse a plan that would destroy a live bucket
-        working-directory: terraform-iac-bootstrap/object-storage
-        env:
-          # Through `env:`, never `${{ }}` inside the run: — env.ACTION descends from
-          # a dispatch input, and workflow-injection forbids that reaching a script.
-          LLZ_ASSERT_PLAN_REPORT_ONLY: ${{ env.ACTION != 'apply' }}
-        run: tofu show -json tfplan.bin | llz ci assert-upgrade-plan
+        # The confirm_replace escape hatch is read only on the APPLY: a preview an
+        # operator has already decided to override is still the preview they asked
+        # for, and suppressing it would remove the only place the override's
+        # consequences are printed before it takes effect.
+        if: >
+          env.ACTION != 'apply' ||
+          inputs.confirm_replace != format('replace:{0}:object-storage', inputs.region)
+        uses: ./.github/actions/assert-plan-safe
+        with:
+          working-directory: terraform-iac-bootstrap/object-storage
+          report-only: ${{ env.ACTION != 'apply' }}
 
       - name: Terraform apply — object-storage
         if: env.ACTION == 'apply'
@@ -1526,6 +1581,20 @@ jobs:
         run: |
           llz ci tf-plan --out plan.txt --title "Databases plan (${REGION})" --lines 40 \
             -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      # A MANAGED POSTGRES REPLACE IS THE DATABASE GONE. Same shape as the bucket
+      # guard next door and the same reason: Linode's in-place Postgres controls
+      # are narrow, so an attribute the provider treats as ForceNew recycles the
+      # cluster and everything in it. No allowlist — nothing in this root is
+      # routinely recycled. A deployment that declares no databases renders
+      # `databases = {}` and plans nothing, so this is inert there.
+      - name: Refuse a plan that would destroy a database
+        if: >
+          env.ACTION == 'apply' &&
+          inputs.confirm_replace != format('replace:{0}:databases', inputs.region)
+        uses: ./.github/actions/assert-plan-safe
+        with:
+          working-directory: terraform-iac-bootstrap/databases
 
       - name: Terraform apply — databases
         if: env.ACTION == 'apply'

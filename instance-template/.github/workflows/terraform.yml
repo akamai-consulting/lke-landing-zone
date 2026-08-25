@@ -122,6 +122,10 @@ on:
         description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage | destroy:<deployment>:databases'
         required: false
         type: string
+      confirm_replace:
+        description: 'Required only to let an APPLY through that would destroy or replace live infrastructure — a bucket holding Loki/Harbor data, a Managed Postgres cluster, the shared VPC, the LKE cluster itself. Leave EMPTY unless the plan named something and you have decided the recycle is intended: replace:<deployment>:cluster | replace:<deployment>:object-storage | replace:<deployment>:databases | replace:<deployment>:vpc. A node-pool resize does not need it.'
+        required: false
+        type: string
       drain_data_buckets:
         description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images.'
         required: false
@@ -160,6 +164,7 @@ jobs:
       module: ${{ inputs.module }}
       region: ${{ inputs.region }}
       confirm_destroy: ${{ inputs.confirm_destroy }}
+      confirm_replace: ${{ inputs.confirm_replace }}
       drain_data_buckets: ${{ inputs.drain_data_buckets || false }}
       # Default false via the reusable's input; release-e2e's provision dispatch
       # passes assert_loki=true so the E2E Loki assertion runs in the converge job.

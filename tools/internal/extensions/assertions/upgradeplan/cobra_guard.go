@@ -15,6 +15,7 @@ func Cmd() *cobra.Command {
 	var plan string
 	var reportOnly bool
 	var expectNoChanges bool
+	var allowReplace []string
 	c := &cobra.Command{
 		Use:   "assert-upgrade-plan",
 		Short: "fail when a plan taken after an upgrade would destroy or replace a live resource",
@@ -37,10 +38,17 @@ func Cmd() *cobra.Command {
 			"linode_lke_cluster's create-time-only vpc_id is exactly that, and its gate is the\n" +
 			"coupling test in tfroots. --expect-no-changes DOES catch it, from the other side:\n" +
 			"an attribute the API ignores on update re-proposes itself forever, so a plan taken\n" +
-			"after an apply is not empty.",
+			"after an apply is not empty.\n\n" +
+			"--allow-replace names resource TYPES whose destruction is routine for the lane\n" +
+			"running the check — linode_lke_node_pool replaces on any node-size change, which\n" +
+			"is an ordinary operator action. It is an ALLOWLIST: anything not named is\n" +
+			"refused, so a resource type this gate has never met is loud on its first\n" +
+			"destructive plan rather than silent until someone notices it was never listed.\n" +
+			"Permitted destructions are still printed, as ::warning::, so the allowlist\n" +
+			"cannot quietly stop being one.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := Run(plan, expectNoChanges, cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin())
+			err := Run(plan, expectNoChanges, allowReplace, cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin())
 			if err != nil && reportOnly {
 				// REPORTED, NOT SWALLOWED. The finding is printed either way; this
 				// only decides whether it stops the run.
@@ -58,6 +66,8 @@ func Cmd() *cobra.Command {
 	// documented mitigation, and it keeps the step a single fixed command line.
 	c.Flags().BoolVar(&reportOnly, "report-only", cli.EnvBool("LLZ_ASSERT_PLAN_REPORT_ONLY", false),
 		"print the verdict but exit 0 — for the PLAN lane, where the finding is a preview rather than a refusal (env: LLZ_ASSERT_PLAN_REPORT_ONLY)")
+	c.Flags().StringSliceVar(&allowReplace, "allow-replace", nil,
+		"resource `type`s whose destroy/replace this lane treats as routine (repeatable, comma-separated); everything else is refused")
 	c.Flags().BoolVar(&expectNoChanges, "expect-no-changes", false,
 		"also fail on any NON-destructive change — for a plan taken straight after an apply, where an empty plan is the only correct answer")
 	return c
