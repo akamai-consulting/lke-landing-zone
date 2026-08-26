@@ -16,7 +16,14 @@ import (
 // `expectNoChanges` tightens the predicate from "proposes no destruction" to
 // "proposes NOTHING". See the header of noChangesFailure for why that stricter
 // question is worth asking separately.
-func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Reader) error {
+//
+// `allowReplace` names resource TYPES whose destruction is a routine operator
+// action rather than a finding — see PartitionAllowed. It is an allowlist and not
+// a denylist on purpose, and that choice is the fail-closed direction: a resource
+// type this gate has never met is REFUSED by default, so a module that starts
+// recycling something new is loud on the first apply instead of silent until
+// somebody notices the class was never listed.
+func Run(path string, expectNoChanges bool, allowReplace []string, out, errOut io.Writer, stdin io.Reader) error {
 	var raw []byte
 	var err error
 	if path == "-" {
@@ -64,7 +71,18 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 		}
 		fmt.Fprintf(out, "  Verified against the Object Storage API just now, not inferred from the plan.\n")
 	}
-	if len(blocking) == 0 {
+	refused, allowed := PartitionAllowed(blocking, allowReplace)
+
+	// SAY WHAT WAS WAVED THROUGH, every time, and say it on the ERROR stream so it
+	// survives a collapsed log group. An allowlist that stays silent is how a gate
+	// quietly stops being one: the entry that was added for a node-pool resize is
+	// the same entry that lets the next unexpected recycle past, and nobody reads a
+	// flag they cannot see in the output.
+	for _, f := range allowed {
+		fmt.Fprintf(errOut, "::warning::%s would be %sd — PERMITTED because --allow-replace names %s\n",
+			f.Address, f.Kind, f.Type)
+	}
+	if len(refused) == 0 {
 		// len(v.Changed), NOT v.Total: Total counts every resource_changes entry,
 		// and Terraform lists every resource it READ. Gating on it made a settled
 		// cluster look like a busy one — the gate would have been red on every
@@ -74,12 +92,12 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 		}
 		return nil
 	}
-	for _, f := range blocking {
+	for _, f := range refused {
 		fmt.Fprintf(errOut, "::error::%s would be %sd by this upgrade (actions: %v)\n", f.Address, f.Kind, f.Actions)
 	}
 	fmt.Fprintf(errOut, "\n%s this upgrade proposes destroying or replacing %d live resource(s):\n",
-		color.Red("✗"), len(blocking))
-	for _, f := range blocking {
+		color.Red("✗"), len(refused))
+	for _, f := range refused {
 		fmt.Fprintf(errOut, "    %s\n", f)
 	}
 	// THE SPECIFIC REMEDY WINS. The generic advice below is about module changes —
@@ -88,7 +106,7 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 	// both would bury the one instruction that works under four that do not.
 	if remedy := RenameRemedy(v, census, KeyLabels()); remedy != "" {
 		fmt.Fprint(errOut, remedy)
-		return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(blocking))
+		return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(refused))
 	}
 	fmt.Fprintf(errOut, `
 WHAT THIS MEANS. The plan was taken against state an EARLIER release created, so
@@ -105,7 +123,7 @@ WHAT TO DO. Find which attribute forces it — the human-readable plan prints
 give the resource a moved{}/import path, or decide the recycle is intended and
 say so in the release notes, loudly, before the tag is cut.
 `)
-	return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(blocking))
+	return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(refused))
 }
 
 // noChangesFailure reports a plan that proposes changes where none were expected.

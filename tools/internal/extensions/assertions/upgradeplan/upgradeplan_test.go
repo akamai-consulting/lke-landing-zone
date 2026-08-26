@@ -157,7 +157,7 @@ func TestParseAcceptsAPlanWithNoChanges(t *testing.T) {
 
 func TestRunFailsAndExplainsADestructivePlan(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := Run("-", false, &out, &errOut,
+	err := Run("-", false, nil, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"delete","create"`)))
 	if err == nil {
 		t.Fatal("a plan that replaces a live cluster must fail the gate")
@@ -184,7 +184,7 @@ func TestRunFailsAndExplainsADestructivePlan(t *testing.T) {
 // real way to get a green run that proves nothing.
 func TestRunReportsWhatItExamined(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", false, &out, &errOut,
+	if err := Run("-", false, nil, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"update"`))); err != nil {
 		t.Fatalf("Run: %v\n%s", err, errOut.String())
 	}
@@ -197,7 +197,7 @@ func TestRunReportsWhatItExamined(t *testing.T) {
 // the same line as a plan it actually checked.
 func TestRunCallsOutAPlanThatProposesNothing(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", false, &out, &errOut,
+	if err := Run("-", false, nil, &out, &errOut,
 		strings.NewReader(`{"format_version":"1.2","resource_changes":[]}`)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestRunCallsOutAPlanThatProposesNothing(t *testing.T) {
 
 func TestRunSurfacesAnUnreadablePlan(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("/nonexistent/plan.json", false, &out, &errOut, strings.NewReader("")); err == nil {
+	if err := Run("/nonexistent/plan.json", false, nil, &out, &errOut, strings.NewReader("")); err == nil {
 		t.Error("an unreadable plan must be an error, not an empty verdict")
 	}
 }
@@ -220,7 +220,7 @@ func TestRunSurfacesAnUnreadablePlan(t *testing.T) {
 // rest, and it will churn every future apply.
 func TestExpectNoChangesFlagsAPerpetualUpdate(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := Run("-", true, &out, &errOut,
+	err := Run("-", true, nil, &out, &errOut,
 		strings.NewReader(planJSON(t,
 			"module.cluster.linode_lke_cluster.this", `"update"`,
 			"module.cluster.linode_firewall.this", `"no-op"`,
@@ -247,7 +247,7 @@ func TestExpectNoChangesFlagsAPerpetualUpdate(t *testing.T) {
 // An empty plan is the pass, and it must stay a pass under the strict flag.
 func TestExpectNoChangesPassesAnEmptyPlan(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", true, &out, &errOut,
+	if err := Run("-", true, nil, &out, &errOut,
 		strings.NewReader(`{"format_version":"1.2","resource_changes":[]}`)); err != nil {
 		t.Fatalf("an empty plan must pass --expect-no-changes: %v\n%s", err, errOut.String())
 	}
@@ -258,7 +258,7 @@ func TestExpectNoChangesPassesAnEmptyPlan(t *testing.T) {
 // cluster look like a busy one and the gate would be red on every correct run.
 func TestExpectNoChangesIgnoresNoOpAndReadEntries(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", true, &out, &errOut,
+	if err := Run("-", true, nil, &out, &errOut,
 		strings.NewReader(planJSON(t,
 			"module.cluster.linode_lke_cluster.this", `"no-op"`,
 			"data.linode_instances.nodes", `"read"`,
@@ -272,7 +272,7 @@ func TestExpectNoChangesIgnoresNoOpAndReadEntries(t *testing.T) {
 // completely different remedies and the destructive one is strictly more urgent.
 func TestExpectNoChangesDefersToTheDestructiveVerdict(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := Run("-", true, &out, &errOut,
+	err := Run("-", true, nil, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"delete","create"`)))
 	if err == nil {
 		t.Fatal("a destructive plan must still fail")
@@ -289,7 +289,7 @@ func TestExpectNoChangesDefersToTheDestructiveVerdict(t *testing.T) {
 // releases, where creates and updates are exactly what an upgrade is made of.
 func TestUpdatesPassWithoutTheStrictFlag(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if err := Run("-", false, &out, &errOut,
+	if err := Run("-", false, nil, &out, &errOut,
 		strings.NewReader(planJSON(t, "module.cluster.linode_lke_cluster.this", `"update"`))); err != nil {
 		t.Fatalf("an in-place update must pass the default mode: %v", err)
 	}
@@ -825,4 +825,107 @@ func TestTheRecommendationChecksTheKeyLabelsToo(t *testing.T) {
 			t.Errorf("with no key evidence the remedy must say so, not stay silent; got:\n%s", got)
 		}
 	})
+}
+
+// ── The per-lane allowlist ────────────────────────────────────────────────────
+
+// A node-pool resize is an ordinary operator action taken through the spec, and
+// `linode_lke_node_pool.type` is ForceNew — so the cluster lane has to let it
+// through while still refusing everything else in the same plan.
+const poolResizeAndClusterRecyclePlan = `{"format_version":"1.2","resource_changes":[
+ {"address":"linode_lke_node_pool.this","type":"linode_lke_node_pool",
+  "change":{"actions":["delete","create"]}},
+ {"address":"module.cluster.linode_lke_cluster.this","type":"linode_lke_cluster",
+  "change":{"actions":["delete","create"]}}]}`
+
+func TestPartitionAllowedLetsTheNodePoolThroughAndRefusesTheCluster(t *testing.T) {
+	p, err := Parse([]byte(poolResizeAndClusterRecyclePlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	refused, allowed := PartitionAllowed(Evaluate(p).Destructive, []string{"linode_lke_node_pool"})
+	if len(allowed) != 1 || allowed[0].Type != "linode_lke_node_pool" {
+		t.Errorf("allowed = %+v, want just the node pool", allowed)
+	}
+	if len(refused) != 1 || refused[0].Type != "linode_lke_cluster" {
+		t.Fatalf("refused = %+v, want just the LKE cluster", refused)
+	}
+}
+
+// AN EMPTY ALLOWLIST REFUSES EVERYTHING — what object-storage, databases and the
+// shared VPC pass. If this ever inverted, three lanes would silently stop
+// guarding anything.
+func TestPartitionAllowedWithNoAllowlistRefusesEverything(t *testing.T) {
+	p, _ := Parse([]byte(poolResizeAndClusterRecyclePlan))
+	refused, allowed := PartitionAllowed(Evaluate(p).Destructive, nil)
+	if len(allowed) != 0 {
+		t.Errorf("allowed = %+v, want none", allowed)
+	}
+	if len(refused) != 2 {
+		t.Errorf("refused = %d, want both", len(refused))
+	}
+}
+
+// A finding this gate could not TYPE must be refused whatever the allowlist
+// says. Matching "" against the list would wave one through on the strength of a
+// field that was never read.
+func TestPartitionAllowedRefusesAnUntypedFinding(t *testing.T) {
+	refused, allowed := PartitionAllowed(
+		[]Finding{{Address: "unknown.thing", Kind: "destroy"}},
+		[]string{"linode_lke_node_pool", ""})
+	if len(allowed) != 0 || len(refused) != 1 {
+		t.Errorf("refused=%+v allowed=%+v — an untyped finding must be refused", refused, allowed)
+	}
+}
+
+// End to end through Run: the permitted destruction still has to be SAID, and
+// said on the error stream, or the allowlist quietly stops being one.
+func TestRunAnnouncesWhatTheAllowlistPermitted(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := Run("-", false, []string{"linode_lke_node_pool"}, &out, &errOut,
+		strings.NewReader(poolResizeAndClusterRecyclePlan))
+	if err == nil {
+		t.Fatal("the LKE cluster recycle must still fail the check")
+	}
+	if !strings.Contains(errOut.String(), "::warning::linode_lke_node_pool.this would be replaced — PERMITTED") {
+		t.Errorf("the permitted replace must be announced; got:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "1 live resource(s)") {
+		t.Errorf("the count must be of the REFUSED findings, not all of them; got:\n%s", errOut.String())
+	}
+}
+
+// A plan whose only destruction is allowlisted passes — otherwise a node-pool
+// resize could never be applied.
+func TestRunPassesWhenEveryDestructionIsAllowed(t *testing.T) {
+	onlyPool := `{"format_version":"1.2","resource_changes":[
+	 {"address":"linode_lke_node_pool.this","type":"linode_lke_node_pool",
+	  "change":{"actions":["delete","create"]}}]}`
+	var out, errOut bytes.Buffer
+	if err := Run("-", false, []string{"linode_lke_node_pool"}, &out, &errOut,
+		strings.NewReader(onlyPool)); err != nil {
+		t.Fatalf("an allowlisted resize must pass: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "PERMITTED") {
+		t.Errorf("even a passing run must say what it waved through; got:\n%s", errOut.String())
+	}
+}
+
+// THE COMPOSITE ALWAYS PASSES THE FLAG, empty or not, so the command line has one
+// shape — `--allow-replace ""` is what three of the four apply lanes send. It has
+// to mean "allow nothing", not "allow everything"; the inverse would silently
+// disarm the guard on object-storage, databases and the shared VPC at once.
+func TestEmptyAllowReplaceValueAllowsNothing(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := Run("-", false, []string{""}, &out, &errOut,
+		strings.NewReader(poolResizeAndClusterRecyclePlan))
+	if err == nil {
+		t.Fatal(`--allow-replace "" must allow nothing, so both destructive changes stand`)
+	}
+	if !strings.Contains(errOut.String(), "2 live resource(s)") {
+		t.Errorf("both findings must be refused; got:\n%s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "PERMITTED") {
+		t.Errorf("nothing may be permitted by an empty allowlist; got:\n%s", errOut.String())
+	}
 }
