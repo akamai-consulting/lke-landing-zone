@@ -138,6 +138,16 @@ func TestScanInstanceFailsWhenTheShippedRootConstrainsNothing(t *testing.T) {
 
 // The report has to name the remedy — the fix is a command an operator runs in
 // their own repo, and it is not one they would guess.
+//
+// THE ROOT IS NAMED, NOT PLACEHELD. This asserted `terraform-iac-bootstrap/<root>`,
+// which is what the report literally printed: the operator was handed a path with
+// a metavariable still in it and had to map it back onto the violation list above.
+// Naming the directory each violation is actually in is the difference between a
+// paste and a translation, and a `<root>` reaching the terminal again is the
+// regression this arm catches.
+//
+// Whether the command it names WORKS is not decidable from a substring, and is
+// held by TestTheRemedyIsTheCommandThatWorks, which runs it.
 func TestRunInstanceReportNamesTheRemedy(t *testing.T) {
 	dir := instanceTree(t, map[string]string{"cluster": staleInstanceLock})
 	var out, errOut bytes.Buffer
@@ -145,9 +155,12 @@ func TestRunInstanceReportNamesTheRemedy(t *testing.T) {
 	if err == nil {
 		t.Fatal("a stale pin must fail")
 	}
-	for _, want := range []string{"tofu init -upgrade", "terraform-iac-bootstrap/<root>", "3.12.0"} {
+	for _, want := range []string{RegenerateCmd, "terraform-iac-bootstrap/cluster", "3.12.0"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("report must contain %q; got:\n%s", want, errOut.String())
 		}
+	}
+	if strings.Contains(errOut.String(), "<root>") {
+		t.Errorf("the remedy still carries a `<root>` placeholder the operator has to resolve:\n%s", errOut.String())
 	}
 }

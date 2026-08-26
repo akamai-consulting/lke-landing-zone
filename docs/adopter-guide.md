@@ -264,7 +264,11 @@ re-runs on update, so `docs/` refreshes to the new template version too. What
 gets overwritten vs. merged vs. left alone follows `.template-manifest` (managed /
 merge / owned);
 `terraform-iac-bootstrap/*/.terraform.lock.hcl` files are seeded
-once and never re-touched (`_skip_if_exists` in `copier.yml`). This is the clean
+once and never re-touched (`_skip_if_exists` in `copier.yml`) — so a release that
+raises a provider constraint leaves yours behind, and regenerating it is a step
+you own (`llz upgrade` names it; see
+[quickstart §5](quickstart.md#5-day-2--upgrading-to-a-newer-upstream-version)).
+This is the clean
 counterpart to the **versioned-artifact** track (Renovate bumps the
 independently-versioned OCI charts + external action digests — §2): `llz upgrade`
 moves the *scaffold and the first-party LLZ pins* (module `?ref=`, rendered from

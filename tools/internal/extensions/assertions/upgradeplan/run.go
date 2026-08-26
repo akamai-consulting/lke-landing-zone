@@ -32,6 +32,12 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 		return err
 	}
 	v := Evaluate(p)
+	// The census is only consulted when there is something destructive to weigh, so
+	// the ordinary clean plan makes no network call at all.
+	var census BucketCensus
+	if len(v.Destructive) > 0 {
+		census = LookupBuckets()
+	}
 
 	// SAY WHAT WAS EXAMINED, always. "no destructive changes" over 40 resources and
 	// over 0 are the same words and very different claims, and the second is what a
@@ -42,7 +48,23 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 		fmt.Fprintf(out, "  (the plan proposes nothing at all. That is a valid upgrade outcome, but if a change "+
 			"WAS expected, check the state key this plan was taken against.)\n")
 	}
-	if len(v.Destructive) == 0 {
+	// THE EXEMPTION, AND WHY IT IS NOT A RELAXATION. A bucket replace that deletes
+	// an EMPTY bucket destroys nothing, and refusing it made the correct move
+	// unperformable: an operator who pins the prefix that keeps their data-bearing
+	// buckets is then blocked by the empty ones that pin moves the other way. Every
+	// other destructive finding — a cluster, a bucket with objects, a bucket the
+	// census could not see — still blocks. Reported loudly rather than silently
+	// tolerated, because "2 buckets replaced" should never scroll past unread.
+	blocking, harmless := v.partition(census)
+	if len(harmless) > 0 {
+		fmt.Fprintf(out, "%s %d bucket(s) will be REPLACED, and each is empty — the rename loses nothing:\n",
+			color.Yellow("!"), len(harmless))
+		for _, f := range harmless {
+			fmt.Fprintf(out, "    %s: %s -> %s (0 objects)\n", f.Address, f.BeforeLabel, f.AfterLabel)
+		}
+		fmt.Fprintf(out, "  Verified against the Object Storage API just now, not inferred from the plan.\n")
+	}
+	if len(blocking) == 0 {
 		// len(v.Changed), NOT v.Total: Total counts every resource_changes entry,
 		// and Terraform lists every resource it READ. Gating on it made a settled
 		// cluster look like a busy one — the gate would have been red on every
@@ -52,21 +74,21 @@ func Run(path string, expectNoChanges bool, out, errOut io.Writer, stdin io.Read
 		}
 		return nil
 	}
-	for _, f := range v.Destructive {
+	for _, f := range blocking {
 		fmt.Fprintf(errOut, "::error::%s would be %sd by this upgrade (actions: %v)\n", f.Address, f.Kind, f.Actions)
 	}
 	fmt.Fprintf(errOut, "\n%s this upgrade proposes destroying or replacing %d live resource(s):\n",
-		color.Red("✗"), len(v.Destructive))
-	for _, f := range v.Destructive {
+		color.Red("✗"), len(blocking))
+	for _, f := range blocking {
 		fmt.Fprintf(errOut, "    %s\n", f)
 	}
 	// THE SPECIFIC REMEDY WINS. The generic advice below is about module changes —
 	// moved{} blocks, non-forcing spellings, release notes — and none of it applies
 	// to a bucket rename, which has no moved{} and no non-forcing form. Printing
 	// both would bury the one instruction that works under four that do not.
-	if remedy := RenameRemedy(v.Destructive); remedy != "" {
+	if remedy := RenameRemedy(v, census, KeyLabels()); remedy != "" {
 		fmt.Fprint(errOut, remedy)
-		return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(v.Destructive))
+		return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(blocking))
 	}
 	fmt.Fprintf(errOut, `
 WHAT THIS MEANS. The plan was taken against state an EARLIER release created, so
@@ -83,7 +105,7 @@ WHAT TO DO. Find which attribute forces it — the human-readable plan prints
 give the resource a moved{}/import path, or decide the recycle is intended and
 say so in the release notes, loudly, before the tag is cut.
 `)
-	return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(v.Destructive))
+	return fmt.Errorf("assert-upgrade-plan: %d resource(s) would be destroyed or replaced", len(blocking))
 }
 
 // noChangesFailure reports a plan that proposes changes where none were expected.

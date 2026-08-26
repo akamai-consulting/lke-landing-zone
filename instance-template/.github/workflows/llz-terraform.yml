@@ -1211,9 +1211,19 @@ jobs:
       #
       # tofu show -json tfplan.bin, not a re-plan: these are the same bytes the
       # plan step printed, so the check and the summary above it cannot disagree.
+      # ALSO ON A PLAN, REPORT-ONLY, and that half is what makes the apply's refusal
+      # actionable rather than a surprise. Gated on ACTION == 'apply', this check
+      # could only ever be met by RUNNING the destructive apply — after the upgrade
+      # PR had merged — because a plan dispatch skipped it entirely. So the one
+      # dispatch an operator reaches for to preview a risky change was the one that
+      # could not show them this risk. It still only FAILS on apply: a plan changes
+      # nothing, and failing the preview would just teach people to skip it.
       - name: Refuse a plan that would destroy a live bucket
-        if: env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          # Through `env:`, never `${{ }}` inside the run: — env.ACTION descends from
+          # a dispatch input, and workflow-injection forbids that reaching a script.
+          LLZ_ASSERT_PLAN_REPORT_ONLY: ${{ env.ACTION != 'apply' }}
         run: tofu show -json tfplan.bin | llz ci assert-upgrade-plan
 
       - name: Terraform apply — object-storage

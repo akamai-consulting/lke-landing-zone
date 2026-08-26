@@ -47,8 +47,10 @@ package providerlock
 // not a thing a read-repo gate may do.
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 
@@ -144,27 +146,37 @@ func RunInstance(repoRoot string, out, errOut io.Writer) error {
 	for _, v := range violations {
 		fmt.Fprintf(errOut, "    %s\n", v)
 	}
-	fmt.Fprintf(errOut, `
-WHY THIS IS NORMAL RIGHT AFTER AN UPGRADE, AND WHY IT STILL HAS TO BE FIXED.
-%s is `+"`owned`"+` in .template-manifest: it was seeded when this instance was
-scaffolded and `+"`llz upgrade`"+` never touches it again. The constraint it has to
-satisfy travels the other way, inside the ci image. So an upgrade that raises a
-provider constraint leaves this pair mismatched BY DESIGN, on every instance in
-the field, and nothing else in this repo looks at it.
-
-The terraform-init composite does survive it — one `+"`tofu init -upgrade`"+` retry —
-but that re-resolves providers on every run, under a plan nobody reviewed, and
-its warning has been asking for the regenerated lock to be committed.
-
-TO FIX, per root named above:
-
-    cd %s/<root>
-    tofu init -upgrade
-    git add %s && git commit
-
-then re-run this check. If you would rather this instance stop carrying a pin
-at all, delete the lock: with none committed, `+"`tofu init`"+` resolves fresh inside
-the constraint and this gate passes.
-`, lockFile, instanceLockDir, lockFile)
+	fmt.Fprint(errOut, Remedy(violations))
 	return fmt.Errorf("provider-lock-guard: %d committed provider pin(s) violate the constraint this llz ships", len(violations))
+}
+
+// StaleInstancePins reports the violations in the instance checkout at repoRoot,
+// for a caller that wants the verdict without the report.
+//
+// ADVISORY: its only caller is `llz upgrade`, where this is one of several "here
+// is what I could not do for you" notes and none of them may fail a command whose
+// work is already in the operator's tree. So it returns an error to REPORT, never
+// one to propagate.
+//
+// SILENCE IS RESERVED FOR "THERE IS NO TERRAFORM TREE HERE", which is the ordinary
+// case for a checkout that is not an instance. It used to swallow every error on
+// the reasoning that they all meant that — they do not. ScanInstance also
+// hard-errors on a lock it cannot parse and on a shipped root that constrains
+// nothing, and it returns NO partial results, so one unparseable lock in `vpc/`
+// suppressed a real stale pin in `cluster/`. Non-deterministically, since the scan
+// walks a map: the same tree could warn or stay silent between runs, which is the
+// worst way for a warning to be missing.
+func StaleInstancePins(repoRoot string) ([]Violation, error) {
+	results, err := ScanInstance(capability.RepoForGate(Extension(), repoRoot), tfroots.RootVersions())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil // not an instance Terraform tree; nothing to say
+		}
+		return nil, err
+	}
+	var violations []Violation
+	for _, r := range results {
+		violations = append(violations, r.Violations...)
+	}
+	return violations, nil
 }

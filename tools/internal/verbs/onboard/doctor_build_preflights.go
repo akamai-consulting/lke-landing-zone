@@ -169,7 +169,7 @@ func checkSpecPreflights(env string) []error {
 	return errs
 }
 
-func checkCIImagePins(recorded func(string) string) error {
+func checkCIImagePins(tokensCmd string, recorded func(string) string) error {
 	ref := answers.PinnedTemplateRef()
 	if ref == "" {
 		return nil // not a pinned instance — nothing to compare against
@@ -198,7 +198,7 @@ func checkCIImagePins(recorded func(string) string) error {
 	// Same remediation `llz ci assert-image-fresh` prints, verbatim in spirit: an
 	// operator who ignores this meets that one next, and the two must read as one
 	// instruction rather than two problems.
-	fmt.Printf("     re-pin with %s\n", color.Cyan("llz tokens --env <env> --yes"))
+	fmt.Printf("     re-pin with %s\n", color.Cyan(tokensCmd))
 	return fmt.Errorf("%d ci image variable(s) name an older template commit than this instance's pin — "+
 		"the first pipeline run fails `llz ci assert-image-fresh`", len(skew))
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
@@ -196,24 +197,8 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 		}
 	}
 
-	// ── Lever 3: name what the new pin invalidates that this command cannot fix ──
-	// Same class as lever 2, different owner. TF_IMAGE/KUBE_IMAGE are derived FROM
-	// the pin copier just rewrote, so they go stale on every upgrade with no
-	// operator judgment involved — but the value CI reads is a GitHub repo
-	// VARIABLE, and `llz upgrade` is a local command that pushes nothing.
-	// Re-rendering cannot reach it. Left unsaid, the skew surfaces as a failed
-	// `llz ci assert-image-fresh` on the first pipeline run after every upgrade.
-	reportCIImageSkew(newRef)
-
-	// ── Lever 5: what the upgrade has NOT done, which reads like something it did ──
-	// Same family as levers 3 and 4 and the easiest of the three to miss, because
-	// nothing about the tree looks unfinished. The roots are gitignored and
-	// generated from the pin at every terraform op, so an upgrade that changes what
-	// Terraform DOES to a cluster produces no .tf diff; and llz-terraform.yml
-	// neither plans nor applies on push to main. So a merged upgrade can sit
-	// unapplied indefinitely with every check green. `llz drift` cannot see it —
-	// it compares the repo's pin to the template head and never asks a cluster.
-	reportDeploymentsToApply()
+	// ── Levers 3 and 5: what this command cannot do, said out loud ───────────
+	steps := reportWhatTheUpgradeCouldNotDo(newRef)
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
 	// single reviewable summary rather than a scattered surprise at commit time.
@@ -222,7 +207,7 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// then have to re-review.
 	printSummary(oldRef, newRef)
 
-	return finishUpgrade(dryRun, commit, noDoctor, oldRef, newRef)
+	return finishUpgrade(dryRun, commit, noDoctor, oldRef, newRef, steps)
 }
 
 // finishUpgrade is the tail of Run: the advisory readiness check, then the
@@ -233,7 +218,7 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 // REPORTS PROBLEMS still leaves the upgrade successful, and still lets --commit
 // commit. Everything above it in Run shells out to copier and the network, so the
 // only way to exercise this behavior was to stop making it part of that.
-func finishUpgrade(dryRun, commit, noDoctor bool, oldRef, newRef string) error {
+func finishUpgrade(dryRun, commit, noDoctor bool, oldRef, newRef string, steps []string) error {
 	// ── Lever 4: what the new release now REQUIRES that the old one did not ──
 	// Lever 3 covers values the upgrade invalidates; this covers values it makes
 	// NEWLY MANDATORY, which nothing here can compute — the required set lives in
@@ -250,6 +235,14 @@ func finishUpgrade(dryRun, commit, noDoctor bool, oldRef, newRef string) error {
 	if !noDoctor && !dryRun {
 		runPostUpgradeDoctor()
 	}
+
+	// THE CHECKLIST GOES LAST, and that is the whole reason it exists separately
+	// from the reporters that produced it. Each of them prints where it is
+	// relevant — mid-upgrade, next to the thing it is about — and then the copier
+	// churn, the diffstat and a full readiness report scroll past on top. An
+	// operator whose next action is three screens up has been told and not
+	// informed. This is the same content, numbered, on the last screen.
+	printNextSteps(steps)
 
 	// A single labeled commit so the operator reviews ONE diff and history reads
 	// "template vX → vY", not N unrelated file changes. Opt-in (--commit) — we
@@ -380,6 +373,44 @@ var runPostUpgradeDoctor = func() {
 	}
 }
 
+// instanceDeployments names this instance's deployments, for the remedies that
+// would otherwise print `<env>` and make the operator resolve it.
+//
+// A PLACEHOLDER IN A COPY-PASTEABLE COMMAND IS A DEFECT, not a style choice — the
+// provider-lock remedy carried `<root>` for exactly as long as nobody read it as
+// an instruction. Empty when there is no deployment to name, and the callers fall
+// back to `<env>` rather than printing a command with a hole in it.
+func instanceDeployments() []string {
+	tfDir, _, _ := instancelayout.Detect()
+	return upstreamupdates.DeploymentsToApply(filepath.Dir(tfDir))
+}
+
+// oneOrPlaceholder renders the single deployment this instance has, or `<env>`
+// when there is none or several — with two, naming one of them would be a guess
+// about which the operator meant.
+func oneOrPlaceholder(envs []string) string {
+	if len(envs) == 1 {
+		return envs[0]
+	}
+	return "<env>"
+}
+
+// printNextSteps closes the upgrade with what the operator still has to do, in
+// the order they have to do it.
+//
+// SILENT WHEN THERE IS NOTHING, because an upgrade that needs no follow-up is the
+// common case and a checklist that always prints teaches people to skip it.
+func printNextSteps(steps []string) {
+	if len(steps) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\n%s before this upgrade reaches a cluster:\n", color.Bold("NEXT STEPS"))
+	for i, s := range steps {
+		fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, s)
+	}
+	fmt.Fprintln(os.Stderr, color.Dim("  Each is explained in full above."))
+}
+
 // reportCIImageSkew warns when the tree's ci image variables still name the
 // commit the PREVIOUS pin resolved to, and prints both routes back.
 //
@@ -393,11 +424,11 @@ var runPostUpgradeDoctor = func() {
 // The `gh variable set` pair is worded to match `llz ci assert-image-fresh`'s
 // remediation verbatim, because an operator who ignores this will meet that one
 // next and the two must read as the same instruction.
-var reportCIImageSkew = func(ref string) {
+var reportCIImageSkew = func(ref string) string {
 	local := cli.ReadEnvFile(".llz/vars.env")
 	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
 	if len(skew) == 0 {
-		return
+		return ""
 	}
 	repo := "<owner>/<instance>"
 	if a, _ := answers.Read("."); a != nil && strings.Contains(a.InstanceRepo, "/") {
@@ -408,12 +439,204 @@ var reportCIImageSkew = func(ref string) {
 	for _, s := range skew {
 		fmt.Fprintf(os.Stderr, "    %s\n      have %s\n      want %s\n", color.Bold(s.Name), color.Dim(s.Have), color.Cyan(s.Want))
 	}
+	envs := instanceDeployments()
 	fmt.Fprintf(os.Stderr, "  CI reads these as %s repo variables, which this command does not push. Re-pin with either:\n", repo)
-	fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz tokens --env <env> --yes"))
+	if len(envs) == 0 {
+		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz tokens --env <env> --yes"))
+	}
+	for _, e := range envs {
+		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz tokens --env "+e+" --yes"))
+	}
 	for _, s := range skew {
 		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan(fmt.Sprintf("gh variable set %s --repo %s --body %s", s.Name, repo, s.Want)))
 	}
 	fmt.Fprintln(os.Stderr, color.Dim("  Until then the first pipeline run fails `llz ci assert-image-fresh`."))
+	return "Re-pin the CI image variables: " + color.Cyan("llz tokens --env "+oneOrPlaceholder(envs)+" --yes")
+}
+
+// reportWhatTheUpgradeCouldNotDo prints every "you still have to do this
+// yourself" note, in one place.
+//
+// GATHERED INTO A FUNCTION SO THE WIRING CAN BE PINNED. Each reporter had its own
+// test and none of them asserted it was REACHED — delete the call from Run and the
+// suite stayed green, which is the same shape as the reporters' own subject:
+// something silently not happening. TestEveryUpgradeReporterIsReached holds the
+// set, so a fourth added later has to be wired in to pass.
+//
+// Nothing here may fail the upgrade. Its work is already in the operator's tree by
+// the time these run, and a note that aborts the command it annotates would take
+// the tree with it.
+func reportWhatTheUpgradeCouldNotDo(newRef string) []string {
+	// Lever 3: what the new pin invalidates that this command cannot fix. Same
+	// class as lever 2, different owner. TF_IMAGE/KUBE_IMAGE are derived FROM the
+	// pin copier just rewrote, so they go stale on every upgrade with no operator
+	// judgment involved — but the value CI reads is a GitHub repo VARIABLE, and
+	// `llz upgrade` is a local command that pushes nothing. Re-rendering cannot
+	// reach it. Left unsaid, the skew surfaces as a failed `llz ci
+	// assert-image-fresh` on the first pipeline run after every upgrade.
+	steps := appendStep(nil, reportCIImageSkew(newRef))
+
+	// The provider lock is the same lever with a different owner again, and the one
+	// that had no reporter at all. `.terraform.lock.hcl` is `owned` in
+	// .template-manifest, so copier will not touch it; the constraint it has to
+	// satisfy ships in the ci image and just moved. A release that raises one
+	// therefore leaves every instance in the field mismatched, and the first thing
+	// that says so is a red `llz ci provider-lock-guard` on the upgrade PR the
+	// operator has already opened. Saying it here costs one scan of the working
+	// tree and moves the finding to the moment it becomes true.
+	steps = appendStep(steps, reportProviderLockSkew())
+
+	// The bucket prefix is the same family again, and the one that costs the most
+	// to learn late: it is invisible until an APPLY plans a rename, which is
+	// twenty minutes into a run, after the PR has already merged.
+	steps = appendStep(steps, reportUnpinnedObjLabelPrefix())
+
+	// Lever 5: what the upgrade has NOT done, which reads like something it did.
+	// The easiest of the three to miss, because nothing about the tree looks
+	// unfinished. The roots are gitignored and generated from the pin at every
+	// terraform op, so an upgrade that changes what Terraform DOES to a cluster
+	// produces no .tf diff; and llz-terraform.yml neither plans nor applies on push
+	// to main. So a merged upgrade can sit unapplied indefinitely with every check
+	// green. `llz drift` cannot see it — it compares the repo's pin to the template
+	// head and never asks a cluster.
+	steps = appendStep(steps, reportDeploymentsToApply())
+	return steps
+}
+
+// appendStep collects a reporter's one-line next step, dropping the empty string
+// a reporter with nothing to say returns.
+func appendStep(steps []string, step string) []string {
+	if step == "" {
+		return steps
+	}
+	return append(steps, step)
+}
+
+// reportProviderLockSkew warns when the pins this instance committed can no
+// longer satisfy the constraints the llz that just ran ships.
+//
+// THE SAME SCAN `llz ci provider-lock-guard --instance` RUNS, on the same tree, at
+// the moment the skew is created rather than on the pull request that inherits
+// it — the #405 lens that reportCIImageSkew above is built on. It prints the same
+// remedy from the same function, so the operator who acts here and the operator
+// who acts on the red check are given one instruction, not two that agree today.
+//
+// ADVISORY, LIKE ITS NEIGHBOURS. The lock is `owned`: which providers an instance
+// pins is the instance's decision, and one legitimate answer to this warning is to
+// delete the lock and stop pinning. Failing the upgrade over it would also fail a
+// command whose work is already in the tree.
+//
+// Silent when there is nothing to say, and that includes every non-instance
+// checkout — StaleInstancePins cannot read a Terraform tree that is not there and
+// returns nothing, which is the correct output for `llz upgrade` run somewhere it
+// has no locks to judge.
+//
+// Package var for the same reason its neighbours are: the real one reads the
+// working tree.
+var reportProviderLockSkew = func() string {
+	stale, err := providerlock.StaleInstancePins(".")
+	if err != nil {
+		// SAID, NOT SWALLOWED. The scan returns no partial results, so one lock it
+		// cannot read hides every other root's verdict — and the operator would
+		// otherwise read the silence as "my pins are fine".
+		fmt.Fprintf(os.Stderr, "\n%s could not check this instance's provider pins: %v\n", color.Yellow("!"), err)
+		fmt.Fprintln(os.Stderr, color.Dim("  `llz ci provider-lock-guard --instance` reports the same thing, and fails the upgrade PR."))
+		return ""
+	}
+	if len(stale) == 0 {
+		return ""
+	}
+	fmt.Fprintf(os.Stderr, "\n%s the new pin moved a provider constraint past what this instance's %s files allow:\n",
+		color.Yellow("!"), providerlock.LockFile)
+	for _, v := range stale {
+		fmt.Fprintf(os.Stderr, "    %s\n", v)
+	}
+	fmt.Fprintf(os.Stderr, "  `llz upgrade` does not touch these — they are `owned` in .template-manifest. Regenerate them:\n")
+	fmt.Fprint(os.Stderr, providerlock.RegenerateSteps(stale))
+	fmt.Fprintln(os.Stderr, color.Dim("  Until then `llz ci provider-lock-guard` fails on the upgrade PR, and every\n"+
+		"  terraform run re-resolves providers under a plan nobody reviewed."))
+	return "Regenerate and commit the provider locks (this one blocks the PR)"
+}
+
+// reportUnpinnedObjLabelPrefix warns when this instance leaves its Object Storage
+// bucket prefix to the default.
+//
+// WHY IT MATTERS ONLY WHEN UNSET. `spec.instance.objLabelPrefix` defaults to the
+// INSTANCE NAME. Bucket labels are create-time only, so for an instance whose
+// buckets were provisioned under a different prefix — every instance created
+// before that field existed, when the module hardcoded `platform` — the default is
+// a RENAME, and Terraform's only way to honour a rename is to delete the bucket
+// and create an empty one. That is where Loki's chunks and the Harbor registry
+// live.
+//
+// SAID HERE BECAUSE OF WHEN THE ALTERNATIVE SAYS IT. Nothing else notices until an
+// apply plans the rename, and by then the upgrade PR has merged and the operator
+// is twenty minutes into a run that is about to be refused. This costs one read of
+// a file already on disk.
+//
+// IT DOES NOT GUESS A VALUE, and that restraint is the point. Naming a prefix
+// would mean deciding which of the account's buckets belong to this instance from
+// their labels alone, and the wrong guess sends someone to pin a prefix that
+// renames the buckets holding their data — the precise failure this whole area has
+// been fixed for twice. `llz ci assert-upgrade-plan` answers it exactly, from a
+// real plan plus the live object counts, and that is what this points at.
+//
+// Package var for the same reason its neighbours are: the real one reads the tree.
+var reportUnpinnedObjLabelPrefix = func() string {
+	tfDir, _, _ := instancelayout.Detect()
+	root := filepath.Dir(tfDir)
+	lz, err := clusterspec.LoadInstance(root)
+	if err != nil || lz == nil {
+		return "" // no spec to read; a legacy instance renders no tfvars from one either
+	}
+	if strings.TrimSpace(lz.Spec.Instance.ObjLabelPrefix) != "" {
+		return "" // pinned deliberately; nothing to warn about
+	}
+	env := onboard.DefaultDoctorEnv()
+	fmt.Fprintf(os.Stderr, "\n%s this instance does not pin %s, so its Object Storage buckets are labelled %s.\n",
+		color.Yellow("!"), color.Bold("spec.instance.objLabelPrefix"), color.Bold(lz.ObjLabelPrefix()+"-*"))
+	fmt.Fprintf(os.Stderr, "  If your buckets were created under a DIFFERENT prefix — instances predating that field used\n"+
+		"  `platform` — the next apply will plan to REPLACE them, and a bucket label is create-time only,\n"+
+		"  so that means deleting the one holding your Loki chunks and Harbor registry.\n")
+	fmt.Fprintf(os.Stderr, "  Check it BEFORE you merge, from a real plan and the live object counts:\n\n")
+	for _, line := range objPrefixCheck(env) {
+		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan(line))
+	}
+	fmt.Fprintln(os.Stderr, color.Dim("\n  It exits 0 if nothing is at risk, and names the prefix to pin if something is.\n"+
+		"  Step by step: docs/runbooks/bucket-prefix-rename.md"))
+	return "Check whether your bucket prefix would rename live buckets (" + color.Cyan("docs/runbooks/bucket-prefix-rename.md") + ")"
+}
+
+// objPrefixCheck is the local plan-and-assert an operator runs to find out whether
+// their next apply would rename a bucket.
+//
+// THREE REAL COMMANDS, NOT ONE CONVENIENT ONE. The first cut of this warning said
+// `llz build <env> --dry-run`, which cannot answer the question: `llz build`
+// DISPATCHES the pipeline with action=apply, and --dry-run is llz's global
+// "print the command and change nothing" — so it prints a dispatch, runs no plan,
+// and tells the operator nothing. A warning whose remedy does not work is worse
+// than no warning, and this is the fifth time that shape has appeared in this
+// change.
+//
+// EVERY OpenTofu LINE GOES THROUGH `llz tofu`, INCLUDING `show`. The first cut of
+// this list ended with a bare `tofu show -json tfplan.bin`, which fails: the PLAN
+// FILE IS ENCRYPTED TOO (encryption.tf configures `plan` as well as `state`), so
+// reading it needs $TF_ENCRYPTION exactly as writing it did. It failed with the
+// same "Invalid expression" this release exists to stop people meeting.
+//
+// It works in the WORKFLOW because the composite action exports TF_ENCRYPTION for
+// the whole job — which is precisely why copying a line out of CI into an
+// operator's terminal is not a safe way to write a remedy.
+//
+// `assert-upgrade-plan` is the same binary on the same bytes the pipeline runs, so
+// a clean answer here is the answer CI will give.
+func objPrefixCheck(env string) []string {
+	return []string{
+		"cd terraform-iac-bootstrap/object-storage",
+		"llz tofu --region " + env + " -- init -upgrade",
+		"llz tofu -- plan -var-file=" + env + ".tfvars -out=tfplan.bin",
+		"llz tofu -- show -json tfplan.bin | llz ci assert-upgrade-plan",
+	}
 }
 
 // reportDeploymentsToApply names the deployments the operator still has to
@@ -429,11 +652,11 @@ var reportCIImageSkew = func(ref string) {
 //
 // Package var for the same reason its neighbours are: the real one reads the
 // spec off disk.
-var reportDeploymentsToApply = func() {
+var reportDeploymentsToApply = func() string {
 	tfDir, _, _ := instancelayout.Detect()
 	envs := upstreamupdates.DeploymentsToApply(filepath.Dir(tfDir))
 	if len(envs) == 0 {
-		return
+		return ""
 	}
 	fmt.Fprintf(os.Stderr, "\n%s the upgrade is in your working tree; it has not reached any cluster.\n",
 		color.Yellow("!"))
@@ -442,6 +665,7 @@ var reportDeploymentsToApply = func() {
 	for _, e := range envs {
 		fmt.Fprintf(os.Stderr, "    %s\n", color.Cyan("llz build "+e+" --yes"))
 	}
+	return "After the PR merges, apply each deployment: " + color.Cyan("llz build "+oneOrPlaceholder(envs)+" --yes")
 }
 
 // commit stages the whole tree and records the upgrade as one labeled

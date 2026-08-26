@@ -69,6 +69,18 @@ type Local struct {
 	Present []string
 	// Missing names the source keys that were absent.
 	Missing []Missing
+	// Overrode names the ambient variables replaced by this instance's own value.
+	// Reported, never silent: replacing something the operator exported is exactly
+	// the kind of thing they must be told about, even when it is right.
+	Overrode []Override
+}
+
+// Override is one ambient variable replaced by this instance's own credential.
+type Override struct {
+	// Name is the generic variable that was already set (e.g. AWS_ACCESS_KEY_ID).
+	Name string
+	// From names the instance value that replaced it (e.g. TF_STATE_ACCESS_KEY).
+	From string
 }
 
 // derived maps each variable the Terraform stack reads to the `.llz` key carrying
@@ -142,11 +154,42 @@ func Hydrate(startDir string) (Local, error) {
 	}
 
 	for _, d := range derived {
-		if os.Getenv(d.Name) != "" {
-			l.Present = append(l.Present, d.Name)
+		v := lookup(d.From)
+		// A MAPPED NAME YIELDS TO THIS INSTANCE'S OWN CREDENTIAL, and that is the one
+		// place the never-overwrite rule is wrong.
+		//
+		// AWS_ACCESS_KEY_ID is a GENERIC, AMBIENT name. Anyone with an AWS account has
+		// it exported, and its presence says nothing about which credential belongs to
+		// THIS instance's Linode Object Storage state bucket. Leaving it alone handed
+		// the operator's AWS key to Linode and produced
+		//
+		//	Error: Failed to get existing workspaces: ... api error InvalidAccessKeyId:
+		//	The AWS Access Key Id you provided does not exist in our records
+		//
+		// with nothing connecting it to the conflict — on a machine that merely has
+		// AWS credentials, which is most of them. Every documented `llz tofu` flow
+		// fails there, including the provider-lock remedy this release added.
+		//
+		// The LLZ-SPELLED name still wins: `lookup` prefers an exported
+		// TF_STATE_ACCESS_KEY over the cache, so an operator who deliberately pointed
+		// this instance somewhere else keeps that. What is overridden is only the
+		// ambient generic name, only when the instance actually has its own value for
+		// it, and only where the two spellings DIFFER — TF_STATE_BUCKET, which the
+		// operator sets under its own name, is untouched.
+		//
+		// A NO-OP IN CI by construction, not by a mode flag: the workflow sets
+		// AWS_ACCESS_KEY_ID from TF_STATE_ACCESS_KEY, so the two agree and there is
+		// nothing to override — and no `.llz` cache exists there for `lookup` to read.
+		if existing := os.Getenv(d.Name); existing != "" {
+			if d.Name == d.From || v == "" || v == existing {
+				l.Present = append(l.Present, d.Name)
+				continue
+			}
+			d.Value = v
+			l.Vars = append(l.Vars, d)
+			l.Overrode = append(l.Overrode, Override{Name: d.Name, From: d.From})
 			continue
 		}
-		v := lookup(d.From)
 		if v == "" {
 			l.Missing = append(l.Missing, Missing{Key: d.From, Provides: d.Name})
 			continue
@@ -188,13 +231,27 @@ func instanceRoot(dir string) string {
 // itself, tfbin from the chokepoint — and separate copies drift: "resolved 2
 // variables" against "resolved 2 Terraform variables", depending on which code
 // path happened to run.
-func ResolvedNote(n int) string {
+func ResolvedNote(n int) string { return resolvedNote(n, false) }
+
+// ResolvedNoteFor is ResolvedNote for a resolution that REPLACED something.
+//
+// The parenthetical is not decoration: "anything already exported was left alone"
+// is the promise this command makes, and printing it on a run that overrode an
+// ambient AWS key would be false in the one place the operator most needs it
+// true. The lines naming each override follow it, and a blanket claim above them
+// reads as the tool contradicting itself.
+func ResolvedNoteFor(l Local) string { return resolvedNote(len(l.Vars), len(l.Overrode) > 0) }
+
+func resolvedNote(n int, overrode bool) string {
 	noun := "variables"
 	if n == 1 {
 		noun = "variable"
 	}
-	return fmt.Sprintf("resolved %d Terraform %s from %s (anything already exported was left alone)",
-		n, noun, SecretsFile)
+	tail := " (anything already exported was left alone)"
+	if overrode {
+		tail = " (see below for the ambient values this instance's own took precedence over)"
+	}
+	return fmt.Sprintf("resolved %d Terraform %s from %s%s", n, noun, SecretsFile, tail)
 }
 
 // Environ renders the additions as KEY=value, for appending to os.Environ().
@@ -232,15 +289,17 @@ func (l Local) Exports() string {
 // merely pass it along go through here, so they cannot read a stale os.Getenv
 // for something the cache supplied.
 func (l Local) Value(name string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
+	// VARS FIRST, because Environ() APPENDS them to os.Environ() and the last
+	// assignment is the one the child process sees. Reading the environment first
+	// was equivalent while hydration could only add; now that a mapped name can
+	// override an ambient one, it would report a value the command is not going to
+	// use — and its caller derives an `init` backend config from it.
 	for _, v := range l.Vars {
 		if v.Name == name {
 			return v.Value
 		}
 	}
-	return ""
+	return os.Getenv(name)
 }
 
 // Has reports whether name will be set for the hydrated command — either

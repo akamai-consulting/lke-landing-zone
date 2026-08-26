@@ -384,6 +384,17 @@ func PrintNextSteps(env string) {
 
 // DoctorE2E reports e2e readiness of the env files + live repo (the wizard's
 // plan, runnable standalone). Wired as `llz doctor` (see cmdDoctor).
+// tokensCommand is the provisioning command this report tells operators to run.
+//
+// ONE CONSTRUCTION, TWO PRINTERS, because they were two and they disagreed: the
+// missing-items line resolved the deployment while the ci-image line four lines
+// above it printed `llz tokens --env <env> --yes`, placeholder intact. Adjacent
+// in the same report, so the tool contradicted itself on screen — and the
+// placeholder one is the instruction that leads the post-upgrade checklist.
+func tokensCommand(env string, admin bool) string {
+	return "llz tokens" + adminFlag(admin) + " --env " + env + " --yes"
+}
+
 func DoctorE2E(repo, env string, admin bool) error {
 	instanceRepo, err := answers.ResolveInstanceRepo(repo, admin)
 	if err != nil {
@@ -412,12 +423,12 @@ func DoctorE2E(repo, env string, admin bool) error {
 	// `llz ci assert-image-fresh` — the first step of the apply's first job —
 	// additionally requires them to name THIS instance's pin. Same merged lookup
 	// `llz tokens` re-pins from, so doctor sees what CI will see.
-	pinErr := checkCIImagePins(func(k string) string {
+	pinErr := checkCIImagePins(tokensCommand(env, admin), func(k string) string {
 		return firstNonEmpty(vars[k], instSt.Value(k))
 	})
 	if len(missing) > 0 {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
-		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
+		fmt.Println("  run `" + tokensCommand(env, admin) + "` to provision them.")
 	}
 	if err := InvalidCredentialsError(invalid, instanceRepo); err != nil {
 		return err

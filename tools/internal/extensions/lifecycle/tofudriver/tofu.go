@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exitcode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfbin"
@@ -191,6 +192,9 @@ func plan(m mode, o TofuOpts, local tfenc.Local, args []string) (effect, error) 
 			describe:    "write the Terraform environment to a private 0600 file and print the command that sources and deletes it",
 		}, nil
 	default:
+		if err := refuseUnrenderedRoot(local, args); err != nil {
+			return effect{}, err
+		}
 		if needsEncryption(args) && !local.Has(tfenc.EnvVar) {
 			return effect{}, missingEncryptionErr(local,
 				fmt.Sprintf("`tofu %s` refuses to run without it", subcommand(args)))
@@ -418,8 +422,37 @@ func needsEncryption(args []string) bool {
 	switch subcommand(args) {
 	case "", "version", "fmt", "validate", "help":
 		return false
+	case "init":
+		// `-backend=false` SKIPS BACKEND INITIALISATION, which is the only thing the
+		// encryption block is consulted for — so this init reads encryption.tf and
+		// never evaluates it. Measured against OpenTofu 1.12.6 against all four
+		// shipped roots: it exits 0 with no TF_ENCRYPTION at all.
+		//
+		// This is not a nicety. Regenerating a provider lock is exactly that command,
+		// it is what provider-lock-guard tells a blocked operator to run, and the
+		// argument for it is that it needs no passphrase and no credentials. Demanding
+		// one here refused the one operator the scoping exists to help — someone who
+		// has never run `llz tokens` and only wants to fix a lock.
+		return !hasBackendFalse(args)
 	}
 	return true
+}
+
+// hasBackendFalse reports whether args disable backend initialisation.
+//
+// The `=` form only, which is the one OpenTofu accepts for this flag: a
+// space-separated `-backend false` is rejected outright (verified against 1.12.6),
+// so matching it would be dead code that reads as thoroughness. Anything this does
+// not recognise falls through to REQUIRING the passphrase, which is the safe
+// direction — a missing passphrase is a clear refusal, where a missing one that
+// was needed is OpenTofu's "Invalid expression" again.
+func hasBackendFalse(args []string) bool {
+	for _, a := range args {
+		if a == "-backend=false" || a == "--backend=false" {
+			return true
+		}
+	}
+	return false
 }
 
 // subcommand returns the OpenTofu verb in args, "" if there is none.
@@ -446,6 +479,109 @@ func subcommand(args []string) string {
 		}
 	}
 	return ""
+}
+
+// refuseUnrenderedRoot stops a command aimed at a Terraform root whose `*.tf`
+// have not been materialised yet.
+//
+// ── THE FAILURE IT REPLACES IS A SUCCESS ──────────────────────────────────────
+//
+// An instance commits ZERO Terraform: the roots' `*.tf` come from the tfroots
+// package embedded in this binary and are written by `llz render`, gitignored
+// (see terraform-iac-bootstrap/.gitignore). So a fresh clone has four empty root
+// directories, and the command an operator is most likely to run there first is
+// the one the provider-lock remedy tells them to run.
+//
+// In an empty directory `tofu init` does not fail. It prints
+//
+//	OpenTofu initialized in an empty directory!
+//
+// and EXITS 0, having resolved no provider and written no lock. The operator
+// commits nothing, meets the same red check again, and has no reason to suspect
+// the command they ran. An exit code of 0 over an empty directory is the worst
+// available outcome, and it is the default one.
+//
+// ── WHY IT REFUSES RATHER THAN RENDERING ──────────────────────────────────────
+//
+// `llz tofu` is a passthrough: it adds no verbs, rewrites no arguments and
+// interprets no output. Rendering here would make it the one command in this file
+// with a side effect on the tree, and would do it silently, at a moment the
+// operator was asking for something else. Naming the command that fixes it keeps
+// the render an explicit act.
+//
+// ── SCOPE, WHICH IS DELIBERATELY NARROW ───────────────────────────────────────
+//
+// Only inside a KNOWN ROOT, because only there is "no .tf" unambiguous — anywhere
+// else an empty directory may be exactly what the operator meant, and a
+// passthrough that second-guesses that is worse than the trap. Only for verbs that
+// read the configuration; `version`, `fmt` and `help` are legitimate anywhere.
+// Never with `-chdir`, which moves the directory OpenTofu operates in away from
+// the one inspected here — the same refusal-to-guess withBackendConfig makes, for
+// the same reason.
+func refuseUnrenderedRoot(local tfenc.Local, args []string) error {
+	switch subcommand(args) {
+	case "", "version", "fmt", "help":
+		return nil
+	}
+	if hasChdir(args) {
+		return nil
+	}
+	module := currentModule()
+	if !knownRoots[module] {
+		return nil
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		// Unreadable is not unrendered. The verb is about to fail on its own with a
+		// better diagnostic than a guess made here.
+		return nil
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tf") {
+			return nil
+		}
+	}
+	why := fmt.Sprintf("%s/ has no Terraform in it yet, so `tofu %s` would run against an empty directory.\n"+
+		"  An instance commits ZERO `.tf` — the roots are generated from this binary by `llz render` and are gitignored.\n"+
+		"  This is worth refusing rather than passing through: `tofu init` in an empty directory prints\n"+
+		"  \"OpenTofu initialized in an empty directory!\" and EXITS 0, having resolved no provider and written no lock.\n",
+		module, subcommand(args))
+	// NAMING `llz render` ONLY WHEN IT WOULD WORK. It needs a LandingZone spec and
+	// exits 1 without one ("no LandingZone spec … found"), so a spec-less checkout
+	// sent there meets a second failure — which is this command's own subject: a
+	// remedy that names something that cannot run. Whether the combination is
+	// reachable is not the point; deciding it from the tree costs one file check,
+	// and reasoning that it is unreachable costs a wrong answer the day it is not.
+	if !clusterspec.InstancePresent(local.Root) {
+		return fmt.Errorf("%s  ...and this checkout has no %s, so `llz render` cannot generate them either —\n"+
+			"  it needs a spec and refuses without one. The roots cannot be produced here: restore the\n"+
+			"  `.tf` this instance was working from, or adopt a spec — see docs/landing-zone-spec.md",
+			why, clusterspec.LandingZoneFile)
+	}
+	// `cd` INCLUDED, BECAUSE THIS REFUSAL ONLY EVER FIRES FROM INSIDE A ROOT and
+	// `llz render` cannot run from there: instancelayout.Detect() is relative to the
+	// working directory with no upward walk, so from terraform-iac-bootstrap/cluster
+	// it looks for a spec in that subdirectory, finds none, and exits 1 with "no
+	// LandingZone spec (landingzone.yaml) found". A bare `llz render` here is the
+	// third command in this release to be printed as a remedy and fail where it was
+	// printed; the instance root is already in hand, so there is no reason to hand
+	// over a fragment the operator has to fix.
+	return fmt.Errorf("%s  Render them first:  %s", why, color.Cyan("(cd "+renderDir(local.Root)+" && llz render)"))
+}
+
+// renderDir is the path to hand the operator for the `cd`, preferring a relative
+// one because the absolute path to someone's checkout is noise in a message they
+// are reading in their own terminal.
+func renderDir(root string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return root
+	}
+	rel, err := filepath.Rel(cwd, root)
+	if err != nil || rel == "" {
+		return root
+	}
+	return rel
 }
 
 // hasChdir reports whether args carry OpenTofu's -chdir, which moves the
@@ -551,8 +687,17 @@ func missingEncryptionErr(local tfenc.Local, because string) error {
 // credentials — and a partly-populated cache is a normal state to debug in.
 // OpenTofu's own error is the authority; this makes it legible when it arrives.
 func reportResolution(w io.Writer, local tfenc.Local) {
-	if n := len(local.Vars); n > 0 {
-		fmt.Fprintln(w, color.Dim("llz: "+tfenc.ResolvedNote(n)))
+	if len(local.Vars) > 0 {
+		fmt.Fprintln(w, color.Dim("llz: "+tfenc.ResolvedNoteFor(local)))
+	}
+	// NEVER DIM. Replacing a credential the operator exported is right here — an
+	// ambient AWS key is not this instance's object-storage key — and it is still
+	// the single most surprising thing this command does. If the run then fails on
+	// something credential-shaped, this line is what makes it explicable.
+	for _, o := range local.Overrode {
+		fmt.Fprintln(w, color.Yellow("llz:"), fmt.Sprintf(
+			"used this instance's %s for %s, which was already set to something else in your environment.",
+			o.From, o.Name))
 	}
 	if len(local.Missing) == 0 {
 		return

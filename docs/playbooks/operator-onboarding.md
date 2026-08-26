@@ -171,6 +171,11 @@ Everything after `--` is passed through untouched, and anything you have already
 exported wins and is left alone — so this is a no-op in CI and never overrides a
 value you set deliberately.
 
+**On a fresh clone, run `llz render` first.** An instance commits zero `.tf` — the
+roots are generated from the `llz` binary and gitignored — and `llz tofu` refuses
+rather than passing an empty directory through, because `tofu init` there prints
+*"OpenTofu initialized in an empty directory!"*, **exits 0**, and resolves nothing.
+
 **Mutating verbs need `--yes`**, the same gate as `llz build` / `llz reap` /
 `llz credentials`; reads (`plan`, `init`, `output`, `state list`, `fmt`) do not.
 A few flags move a read into the first group — `init -migrate-state`,
@@ -344,7 +349,17 @@ Just so you don't burn time looking:
 - **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
 - **Change a `*.terraform.lock.hcl` provider version casually** — nothing bumps these for you. Your instance ships no Dependabot
   config, and the lock file is yours (`owned` in `.template-manifest`), so `llz upgrade` never touches it either. A provider move
-  is a deliberate `tofu init -upgrade` in its own PR, with the resulting plan read before merge.
+  is deliberate, lives in its own PR, and has its plan read before merge. It is **not** always optional, though: a release that
+  raises a provider constraint leaves your lock behind by design, and `llz ci provider-lock-guard --instance` fails the upgrade
+  PR until you commit the regenerated one (`llz upgrade` warns you at the moment it happens). The command is
+
+  ```bash
+  (cd terraform-iac-bootstrap/<root> && llz tofu -- init -backend=false -upgrade -input=false)
+  ```
+
+  — `-backend=false` because every root carries `encryption.tf`, so an init that configures the backend needs `$TF_ENCRYPTION`
+  and regenerating a lock has no business reading state; `llz tofu` because a bare `tofu` in an unrendered root exits 0 having
+  written nothing. See [§3b](#3b-running-opentofu-by-hand--llz-tofu).
 
 ---
 

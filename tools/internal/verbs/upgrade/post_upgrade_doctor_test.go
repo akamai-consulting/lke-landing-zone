@@ -88,7 +88,7 @@ func writeSpec(t *testing.T, dir, env string) {
 func TestPostUpgradeDoctorIsAdvisory(t *testing.T) {
 	doctor, commits := stubUpgradeTail(t)
 
-	err := finishUpgrade(false, true /*commit*/, false /*noDoctor*/, "v1", "v2")
+	err := finishUpgrade(false, true /*commit*/, false /*noDoctor*/, "v1", "v2", nil)
 
 	if err != nil {
 		t.Errorf("a readiness check that reported problems failed the upgrade (%v) — "+
@@ -116,7 +116,7 @@ func TestPostUpgradeDoctorIsSkippable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doctor, _ := stubUpgradeTail(t)
-			if err := finishUpgrade(tc.dryRun, false, tc.noDoctor, "v1", "v2"); err != nil {
+			if err := finishUpgrade(tc.dryRun, false, tc.noDoctor, "v1", "v2", nil); err != nil {
 				t.Fatalf("unexpected: %v", err)
 			}
 			if *doctor != 0 {
@@ -130,7 +130,7 @@ func TestPostUpgradeDoctorIsSkippable(t *testing.T) {
 // commit someone's working tree.
 func TestUpgradeDoesNotCommitWithoutTheFlag(t *testing.T) {
 	_, commits := stubUpgradeTail(t)
-	if err := finishUpgrade(false, false /*commit*/, true, "v1", "v2"); err != nil {
+	if err := finishUpgrade(false, false /*commit*/, true, "v1", "v2", nil); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if *commits != 0 {
