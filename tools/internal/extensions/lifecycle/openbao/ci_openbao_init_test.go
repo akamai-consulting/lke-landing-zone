@@ -104,13 +104,8 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 }
 
-// THE REGRESSION TEST FOR THE DISCLOSURE. This used to be
-// TestRunCIBaoInitSummaryBeforeGHFailure, which asserted the raw init payload
-// WAS in the summary — the durability argument was sound and the channel was
-// not. ghsecret.Mask redacts logs; a job summary is rendered from a file that
-// masking never touches, so Actions-read on the instance repo could read all
-// five shares (threshold 3) and the root token. Both paths are checked here so
-// neither can regress alone.
+// THE REGRESSION TEST FOR THE DISCLOSURE. Both paths are checked, so neither can
+// regress alone.
 func TestRunCIBaoInitNeverWritesKeyMaterialToSummary(t *testing.T) {
 	for _, tc := range []struct{ name, escrow string }{
 		{"fallback", ""},
@@ -135,9 +130,7 @@ func TestRunCIBaoInitNeverWritesKeyMaterialToSummary(t *testing.T) {
 }
 
 // A gh-secret write failure is still fatal — shares 1-3 ARE the quorum, so the
-// bootstrap must not report success having failed to persist them. (The old test
-// of this name checked the summary held the payload first; that guarantee moved
-// to the ciphertext block on the escrow path.)
+// bootstrap must not report success having failed to persist them.
 func TestRunCIBaoInitQuorumWriteFailureIsFatal(t *testing.T) {
 	initHarness(t, func(string) error { return errors.New("403 secrets: write denied") })
 	if err := RunInit(false, "primary", ""); err == nil {

@@ -83,38 +83,11 @@ func RunInit(dryRun bool, region, escrowPubKeyB64 string) error {
 		ghsecret.Mask(k)
 	}
 
-	// THE JOB SUMMARY IS NOT A PRIVATE CHANNEL, and this step used to treat it as
-	// one: it wrote the raw `operator init` payload — the root token and ALL FIVE
-	// recovery shares — into a fenced block, on the reasoning that the shares are
-	// minted once and capturing them must not be gated on gh/network success.
-	// The durability reasoning was right; the channel was wrong. ghsecret.Mask
-	// redacts LOGS, and a job summary is rendered from a file that masking never
-	// touches, so anyone with Actions **read** on the instance repo could read a
-	// 3-of-5 threshold's worth of shares — five of five, in fact — and the root
-	// token beside them, and reconstitute full admin. Actions-read is a much wider
-	// grant than environment-secret write, which is the boundary every other copy
-	// of these values sits behind.
-	//
-	// So nothing derived from the init payload is written in the clear on either
-	// path below. What replaces it depends on whether an escrow key was supplied:
-	//
-	//   escrow    all five shares, RSA-OAEP/SHA-256-encrypted to the operator's
-	//             key — ciphertext in the summary (durable, and useless to a log
-	//             reader) plus a $RUNNER_TEMP file for artifact upload.
-	//   fallback  no key material anywhere; shares 4 and 5 are persisted as
-	//             infra-<region> environment secrets so they still exist.
-	//
-	// WHY LOSING A SHARE IS SURVIVABLE, and why the fallback is not a durability
-	// regression dressed up: the quorum is 3-of-5 and shares 1-3 are persisted on
-	// both paths, hard-failing if they cannot be. Shares 4 and 5 are redundancy
-	// for a lost 1-3, never the difference between break-glass working and not.
-	// That is what lets the fallback warn on a failed 4/5 write instead of wedging
-	// a bootstrap over a loss no retry can repair.
-	//
-	// The shares are encrypted ONE PER BLOCK rather than as a single JSON payload:
-	// RSA-OAEP/SHA-256 on a 2048-bit key carries 190 bytes, and five base64 shares
-	// do not fit. Per-share blocks keep the primitive identical to break-glass's
-	// instead of introducing a hybrid envelope for one call site.
+	// NOTHING DERIVED FROM THE INIT PAYLOAD GOES TO THE JOB SUMMARY IN THE CLEAR.
+	// ghsecret.Mask above redacts the LOG stream; a job summary is a Markdown file
+	// masking never touches, and Actions READ is a far wider grant than the
+	// environment-secret write every other copy of these values sits behind.
+	// `llz ci summary-secret-guard` holds the line — its header carries the rest.
 	if escrow != nil {
 		if err := deliverEscrowedShares(region, escrow, res.RecoveryKeysB64); err != nil {
 			return err
@@ -170,15 +143,16 @@ func RunInit(dryRun bool, region, escrowPubKeyB64 string) error {
 
 // deliverEscrowedShares encrypts each recovery share to the operator's key and
 // delivers ONLY ciphertext: one base64 block per line in
-// $RUNNER_TEMP/openbao-recovery-keys.b64 (for artifact upload) and the same
-// blocks inline in the job summary.
+// $RUNNER_TEMP/openbao-recovery-keys.b64, and the same blocks inline in the job
+// summary.
 //
-// INLINE IN THE SUMMARY TOO, deliberately. The artifact is uploaded by a separate
-// workflow step that a caller can omit, mis-wire, or lose to a cancelled run,
-// and these shares do not come round again. Ciphertext costs nothing to
-// duplicate: it is unreadable without the operator's offline private key, which
-// is the whole reason this path exists.
+// BOTH, deliberately. The artifact is a separate workflow step a caller can omit
+// or lose to a cancelled run, and the shares do not come round again. Ciphertext
+// costs nothing to duplicate.
 func deliverEscrowedShares(region string, escrow *rsa.PublicKey, shares []string) error {
+	// ONE BLOCK PER SHARE, not one JSON payload: OAEP/SHA-256 on a 2048-bit key
+	// carries 190 bytes and five base64 shares do not fit. Per-share blocks also
+	// keep the primitive identical to break-glass's, with no hybrid envelope.
 	blocks := make([]string, 0, len(shares))
 	for i, share := range shares {
 		ct, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, escrow, []byte(share), nil)
@@ -233,17 +207,12 @@ func deliverEscrowedShares(region string, escrow *rsa.PublicKey, shares []string
 // escrow key was supplied, so values that are minted exactly once still exist
 // somewhere.
 //
-// IT DOES NOT WIDEN THE BLAST RADIUS. The threshold is 3 and shares 1-3 are
-// already in this environment, so anyone who can read it already holds a
-// complete quorum; adding 4 and 5 changes nothing about what a compromise of it
-// yields. (That co-location is a real finding — see docs/secrets.md — but it is
-// the escrow path above, not this one, that closes it.)
+// IT DOES NOT WIDEN THE BLAST RADIUS: the threshold is 3 and shares 1-3 are
+// already here, so anyone who can read this environment already holds a quorum.
 //
-// WARNS RATHER THAN FAILS, and that asymmetry with shares 1-3 is deliberate. A
-// failed 1-3 write is fatal because it costs the quorum. Shares 4 and 5 are
-// redundancy: losing them leaves break-glass fully working, and by the time this
-// runs the shares are already minted, so failing the bootstrap would wedge it
-// over a loss that re-running cannot repair.
+// WARNS RATHER THAN FAILS, unlike the 1-3 writes above. Those are the quorum;
+// these are redundancy, and by the time this runs the shares are minted — so
+// failing would wedge a bootstrap over a loss re-running cannot repair.
 func persistFallbackShares(ghEnv string, shares []string) {
 	for i, key := range shares {
 		name := fmt.Sprintf("OPENBAO_RECOVERY_KEY_%d", i+4)

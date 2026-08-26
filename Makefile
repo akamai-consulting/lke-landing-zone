@@ -597,18 +597,11 @@ plaintext-guard:
 	$(call LLZ_CI,gates --only plaintext-guard,)
 
 # summary-secret-guard: `llz ci summary-secret-guard` — the gate on SECRET
-# MATERIAL REACHING $GITHUB_STEP_SUMMARY. `llz ci bao-init` masked the OpenBao
-# root token and all five recovery shares, then wrote the raw `bao operator init`
-# payload — those same six values — into a fenced block in the job summary. The
-# mask is what made the append look reviewed: ghsecret.Mask redacts the LOG
-# stream, while a job summary is a Markdown file GitHub renders untouched, and
-# Actions READ (far wider than environment-secret write) is enough to open it.
-# Anyone with it could reconstitute a 3-of-5 quorum and full root.
-#
-# So: in any FILE that calls ghsecret.Mask, every argument to a step-summary
-# append must be a string literal, or be registered in summaryComputedAllowed
-# with a reason naming what the expression evaluates to. Unregistered hits fail;
-# so do registry entries whose call site is gone.
+# MATERIAL REACHING $GITHUB_STEP_SUMMARY. In any FILE that calls ghsecret.Mask,
+# every argument to a step-summary append must be a string literal or registered
+# in summaryComputedAllowed with a reason. Unregistered hits fail; so do entries
+# whose call site is gone. bao-init printed the root token and a full recovery
+# quorum this way — masking covers logs, not the summary file. Scar: guard.go.
 #
 # LLZ_FORCE_SOURCE because the guard reads the working tree it lives in — the
 # prebuilt image binary is built from the merge-base and does not have this verb

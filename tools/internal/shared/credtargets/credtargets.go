@@ -196,20 +196,18 @@ var GHSecretTargets = []SecretTarget{
 	{"OPENBAO_RECOVERY_KEY_1", credpaths.CredClassStatic, CredExpectPresent},
 	{"OPENBAO_RECOVERY_KEY_2", credpaths.CredClassStatic, CredExpectPresent},
 	{"OPENBAO_RECOVERY_KEY_3", credpaths.CredClassStatic, CredExpectPresent},
-	// Shares 4 and 5 exist in GitHub only on the FALLBACK path — a first bootstrap
-	// dispatched without an escrow public key, where persisting them is the only
-	// way values minted exactly once continue to exist. Supply a key and they live
-	// solely as ciphertext the operator holds, which is the better posture and the
-	// one we want an instance to be able to choose.
+	// Shares 4 and 5 reach GitHub only on the FALLBACK path — a first bootstrap
+	// dispatched without an escrow public key. With one, they exist solely as
+	// ciphertext the operator holds.
 	//
-	// OPTIONAL, not present, and the distinction is the whole point: both states
-	// are correct, so `present` would red every instance that escrowed properly —
-	// the false-page shape credExpectOptional exists to avoid — and omitting them
-	// would leave the fallback instance's copies unmeasured, which is ADR 0009's
-	// original omission repeated one credential over.
+	// OPTIONAL, and the distinction is the whole point: both states are correct,
+	// so `present` would red every instance that escrowed properly — the
+	// false-page shape credExpectOptional exists to avoid — while omitting them
+	// leaves the fallback instance's copies unmeasured, which is ADR 0009's
+	// omission repeated one credential over.
 	//
 	// `static` because nothing rotates them: re-sharding is `bao operator rekey`,
-	// which mints an entirely new set rather than lowering these ones' age.
+	// which mints a new set rather than lowering these ones' age.
 	{"OPENBAO_RECOVERY_KEY_4", credpaths.CredClassStatic, CredExpectOptional},
 	{"OPENBAO_RECOVERY_KEY_5", credpaths.CredClassStatic, CredExpectOptional},
 	// Expected ABSENT — see credExpectAbsent. `on-demand` because there IS a

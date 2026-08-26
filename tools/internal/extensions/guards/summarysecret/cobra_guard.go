@@ -12,18 +12,12 @@ func Cmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "summary-secret-guard",
 		Short: "fail when a function that masks secrets writes a computed value to the job summary",
-		Long: "Parses the Go tree and, for every function that calls `ghsecret.Mask`, requires\n" +
+		Long: "Parses the Go tree and, for every FILE that calls `ghsecret.Mask`, requires\n" +
 			"that each argument to a $GITHUB_STEP_SUMMARY append be a string literal —\n" +
-			"unless the call site is registered with a reason.\n" +
+			"unless the call site is registered in summaryComputedAllowed with a reason.\n" +
 			"\n" +
-			"`ghsecret.Mask` redacts the LOG stream. A job summary is a Markdown file\n" +
-			"GitHub renders exactly as written, and Actions READ — a far wider grant than\n" +
-			"environment-secret write — is enough to open it. `llz ci bao-init` masked the\n" +
-			"OpenBao root token and all five recovery shares and then wrote the raw init\n" +
-			"payload into a fenced block; the mask three lines above is what made the\n" +
-			"append look safe. The Mask call is the author's own marker that the function\n" +
-			"holds material that must not be printed, so this scopes the strict rule to\n" +
-			"exactly those functions.",
+			"Masking redacts the LOG stream; a job summary is a Markdown file GitHub\n" +
+			"renders exactly as written, and Actions READ is enough to open it.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return Run(root)

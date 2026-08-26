@@ -4,43 +4,27 @@ package summarysecret
 // SECRET MATERIAL REACHING $GITHUB_STEP_SUMMARY.
 //
 // THE SCAR. `llz ci bao-init` masked the OpenBao root token and all five
-// recovery shares, and then wrote the raw `bao operator init` payload — those
-// same six values — into a fenced block in the job summary. The masking was not
-// a mistake anyone had to overlook: it is three lines above the append, and it
-// is what made the append look safe. `ghsecret.Mask` emits `::add-mask::`, which
-// redacts the LOG stream. A job summary is a Markdown file GitHub renders
-// exactly as written, and Actions **read** — a far wider grant than
-// environment-secret write — is enough to open it. Anyone with it could
-// reconstitute a 3-of-5 quorum and full root.
+// recovery shares, then wrote the raw `bao operator init` payload — those same
+// six values — into a fenced block in the job summary. The mask three lines
+// above is what made the append look reviewed. It is not the same channel:
+// ghsecret.Mask redacts the LOG stream, while a job summary is a Markdown file
+// GitHub renders exactly as written, and Actions READ is enough to open it.
 //
 // THE RULE. In any FILE that calls ghsecret.Mask, every argument to a
-// $GITHUB_STEP_SUMMARY append must be a string LITERAL. A file that has admitted
-// it is handling secret material may state constants into the summary and
-// nothing else.
+// $GITHUB_STEP_SUMMARY append must be a string LITERAL, or be registered below.
 //
-// THE UNIT IS THE FILE, AND THAT IS THIS GUARD'S OWN SCAR. It was written
-// function-scoped — "a function that masks may not compute into the summary" —
-// which reads tighter and was wrong. Running it against the very fix it shipped
-// with found nothing in ci_openbao_init.go, because that fix had moved the
-// summary appends into deliverEscrowedShares/appendInitSummary while the Mask
-// calls stayed in RunInit. Extracting a helper is the most ordinary refactor
-// there is, and it silently emptied the guard's corpus for the file it exists to
-// watch. Chasing the call graph instead would need a type-checked load to
-// resolve indirect calls, and would still lose the value the moment it crossed a
-// package. File scope cannot be evaded by moving code within the file, which is
-// the motion that actually happens.
+// THE UNIT IS THE FILE, not the function, because extracting a helper would
+// otherwise evade it — moving an append one function away from the Mask call is
+// an ordinary refactor, and it would empty this guard's corpus for the file it
+// exists to watch. Chasing the call graph instead needs a type-checked load and
+// still loses the value across a package boundary.
 //
-// WHY THAT RULE AND NOT "no secrets in the summary". The honest version of the
-// broad rule needs dataflow analysis, and a guard that tries to decide whether
-// an arbitrary expression is secret will be wrong in both directions — it will
-// wave through the next `strings.TrimSpace(initOut)` because the identifier is
-// innocuous, and it will red every `fmt.Sprintf("region %s", region)` in the
-// tree. The Mask call is a MARKER THE AUTHOR PLANTED: it says, in the code, "I
-// am handling something that must not be printed." Scoping the strict rule to
-// exactly those functions is what makes it both cheap and precise. Measured on
-// the tree it was written against: 86 summary appends across 45 files, of which
-// four FILES also mask — so the strict rule costs a registry of six call sites
-// rather than eighty-six, and a registry of eighty-six is one nobody reads.
+// WHY NOT "no secrets in the summary": that needs dataflow analysis, and a guard
+// guessing whether an expression is secret is wrong in both directions. The Mask
+// call is a marker the author planted — "this code holds something that must not
+// be printed" — so scoping the strict rule to those files is what makes it cheap.
+// Measured here: 86 summary appends across 45 files, four of which also mask, so
+// the registry is six call sites rather than eighty-six.
 //
 // WHAT IT DOES NOT DO. It cannot see a secret that reaches the summary from a
 // function which never masks — a value read straight from os.Getenv and printed,
@@ -102,9 +86,8 @@ var summaryComputedAllowed = map[string]summaryRule{
 	},
 	"tools/internal/extensions/lifecycle/openbao/ci_openbao_init.go:deliverEscrowedShares": {
 		reason: "the RSA-OAEP/SHA-256 ciphertext of the 5 recovery shares, one block each, plus the " +
-			"region name. This is the lane that REPLACED the plaintext payload this guard exists to " +
-			"prevent; the ciphertext is inline in the summary on purpose, because the artifact upload " +
-			"is a separate step a caller can omit and the shares are minted exactly once",
+			"region name. Inline in the summary on purpose: the artifact upload is a separate step a " +
+			"caller can omit, and the shares are minted exactly once",
 	},
 	"tools/internal/extensions/lifecycle/openbao/ci_openbao_init.go:appendInitSummary": {
 		reason: "the region name, interpolated into the operator's next-steps banner (which " +
