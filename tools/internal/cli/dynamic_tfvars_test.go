@@ -61,9 +61,9 @@ func gitTracked(t *testing.T, dir string) []string {
 	return files
 }
 
-// render.UntrackRenderedTfvars drops tracked per-env tfvars from the index (the one-time
+// render.UntrackRenderedArtifacts drops tracked per-env tfvars from the index (the one-time
 // migration) while leaving terraform.tfvars.example tracked; idempotent.
-func TestUntrackRenderedTfvars(t *testing.T) {
+func TestUntrackRenderedArtifacts(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "") // force the local (non-CI) path
 	dir := t.TempDir()
 	tracked := []string{
@@ -80,7 +80,7 @@ func TestUntrackRenderedTfvars(t *testing.T) {
 	gitInitRepo(t, dir, tracked...)
 	chdir(t, dir)
 
-	render.UntrackRenderedTfvars("") // relPrefix "" = a real instance repo
+	render.UntrackRenderedArtifacts("") // relPrefix "" = a real instance repo
 
 	got := gitTracked(t, dir)
 	want := []string{
@@ -92,13 +92,13 @@ func TestUntrackRenderedTfvars(t *testing.T) {
 	}
 
 	// Idempotent: a second call is a clean no-op.
-	render.UntrackRenderedTfvars("")
+	render.UntrackRenderedArtifacts("")
 	if got2 := gitTracked(t, dir); strings.Join(got2, ",") != strings.Join(want, ",") {
 		t.Errorf("second untrack changed the index: %v", got2)
 	}
 }
 
-func TestUntrackRenderedTfvars_NoOpInCIAndTemplate(t *testing.T) {
+func TestUntrackRenderedArtifacts_NoOpInCIAndTemplate(t *testing.T) {
 	dir := t.TempDir()
 	p := "terraform-iac-bootstrap/cluster/lab.tfvars"
 	writeFile(t, filepath.Join(dir, p), "x = 1\n")
@@ -107,14 +107,14 @@ func TestUntrackRenderedTfvars_NoOpInCIAndTemplate(t *testing.T) {
 
 	// CI: index must stay pristine (the migration is a local, committed action).
 	t.Setenv("GITHUB_ACTIONS", "true")
-	render.UntrackRenderedTfvars("")
+	render.UntrackRenderedArtifacts("")
 	if got := gitTracked(t, dir); len(got) != 1 || got[0] != p {
 		t.Errorf("CI path should be a no-op; tracked: %v", got)
 	}
 
 	// In-template dev layout (relPrefix != "") is also a no-op.
 	t.Setenv("GITHUB_ACTIONS", "")
-	render.UntrackRenderedTfvars("some/prefix")
+	render.UntrackRenderedArtifacts("some/prefix")
 	if got := gitTracked(t, dir); len(got) != 1 || got[0] != p {
 		t.Errorf("template-layout path should be a no-op; tracked: %v", got)
 	}

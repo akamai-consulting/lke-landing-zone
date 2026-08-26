@@ -38,3 +38,21 @@ delete   .template-version
 # marks digest-locked". The old name described a directory the lock no longer
 # tracks. `llz upgrade` renders the new file; delete the orphaned old one.
 delete   .template-workflows.lock
+
+# The provider lockfiles are now generated build artifacts like the tfvars above:
+# they are embedded beside the `required_providers` constraint they satisfy
+# (tools/internal/shared/tfroots/roots/<root>/) and `llz render` writes them into
+# each root before every terraform op. Untrack the copy this instance was
+# scaffolded with — `untrack`, not `delete`, so the file stays on disk and the
+# root is never momentarily lockless between this step and the next render.
+#
+# THIS IS THE STEP THAT HEALS A STALE PIN. An instance scaffolded before a
+# provider major keeps a lock that cannot satisfy the current constraint, and
+# `llz upgrade` had no way to replace it — the file was `owned`. Dropping it from
+# the index hands the decision back to the llz that ships the constraint.
+#
+# A legacy (pre-spec) instance never runs `llz render`, so it will not receive a
+# replacement: its roots' providers resolve fresh within the constraints its own
+# committed *.tf declare. That is the state `tofu init` handles by design, and the
+# same one an operator chooses by deleting a lock they no longer want to carry.
+untrack  terraform-iac-bootstrap/*/.terraform.lock.hcl

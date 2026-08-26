@@ -935,6 +935,7 @@ spec:
       - SkipDryRunOnMissingResource=true
       # cluster-foundation (wave -20) owns the namespaces; don't create/own them here.
       - CreateNamespace=false
+--- terraform-iac-bootstrap/cluster/.terraform.lock.hcl  sha256=6e55bbd38dcc792090940850d2781f4fcd41033fe6228c42d3d60d64e894131b  bytes=3981
 --- terraform-iac-bootstrap/cluster/backend.tf  sha256=0191a0cd0bee22010424b3417114ea887d80e89229937b3360cf75750fa5fd63  bytes=1640
 --- terraform-iac-bootstrap/cluster/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/cluster/main.tf  sha256=5ab9c939e1d7a86ad5565664fd79325dd59b5d48afc96cfef81bf41e27812e0f  bytes=4589
@@ -1232,6 +1233,7 @@ databases = {}
 label_prefix = "goldeninst"
 --- terraform-iac-bootstrap/databases/variables.tf  sha256=48bfcd515e0f7c6acf06308a93e634cdbc056091987e6c6cd5bffddacf6d4c25  bytes=4260
 --- terraform-iac-bootstrap/databases/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
+--- terraform-iac-bootstrap/object-storage/.terraform.lock.hcl  sha256=c417eb777cd7b08a32ee2b6f8a0fc8c3a3e16ef26a7b7d4394e2f5eccb2c9d35  bytes=1910
 --- terraform-iac-bootstrap/object-storage/backend.tf  sha256=35ab77b664436bc69caf9b63cf2218279689ea451acb552b41d03cc09dac903f  bytes=1109
 --- terraform-iac-bootstrap/object-storage/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/object-storage/main.tf  sha256=be8c7e2043de7ae2fcdea9ea9b2ec57a8b33f7b3b292a197b2e92a869199619e  bytes=1227

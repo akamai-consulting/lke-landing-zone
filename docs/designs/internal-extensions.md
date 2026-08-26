@@ -2752,7 +2752,7 @@ on **who renders the bytes at upgrade time** — not on who wrote them first:
 |---|---|---|
 | copier, token-free, template owns them outright | `managed` | the vendored `llz-*.yml` reusable bodies, `apl-values/_shared/apl-overlay/**` |
 | copier, carrying fork-local tokens or an operator-tunable trigger surface | `merge` | the workflow caller stubs — `terraform.yml`, **`promote.yml`** |
-| anything that is not copier | `owned` | `apl-values/*/**` (from `llz render`), `.terraform.lock.hcl` (from `terraform init`), `kubernetes-custom/**` (from the operator) |
+| anything that is not copier | `owned` | `apl-values/*/**` (from `llz render`), `kubernetes-custom/**` (from the operator) |
 
 `own-paths` **is** the `owned` class. So the grant does not mean "this binding writes files"; it means
 "copier must not render these bytes, because something else does." Authorship is irrelevant — llz

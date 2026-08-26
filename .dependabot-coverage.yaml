@@ -43,6 +43,6 @@ exclusions:
       main.tf carries copier tokens (`source = "git::…/<@ upstream_org @>/…"`) that
       no HCL parser accepts. The provider constraint they declare is not
       unwatched — `llz ci provider-lock-guard` holds it against the
-      .terraform.lock.hcl every instance carries, which is the relation that
-      actually breaks adopters, and terraform-modules/* declares the same
+      .terraform.lock.hcl in the SAME directory, which is the pin `llz render`
+      writes into every instance, and terraform-modules/* declares the same
       constraint in a directory Dependabot CAN read.

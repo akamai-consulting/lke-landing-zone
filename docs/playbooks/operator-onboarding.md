@@ -347,19 +347,11 @@ Just so you don't burn time looking:
 
 - **Delete OpenBao recovery keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
 - **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
-- **Change a `*.terraform.lock.hcl` provider version casually** — nothing bumps these for you. Your instance ships no Dependabot
-  config, and the lock file is yours (`owned` in `.template-manifest`), so `llz upgrade` never touches it either. A provider move
-  is deliberate, lives in its own PR, and has its plan read before merge. It is **not** always optional, though: a release that
-  raises a provider constraint leaves your lock behind by design, and `llz ci provider-lock-guard --instance` fails the upgrade
-  PR until you commit the regenerated one (`llz upgrade` warns you at the moment it happens). The command is
-
-  ```bash
-  (cd terraform-iac-bootstrap/<root> && llz tofu -- init -backend=false -upgrade -input=false)
-  ```
-
-  — `-backend=false` because every root carries `encryption.tf`, so an init that configures the backend needs `$TF_ENCRYPTION`
-  and regenerating a lock has no business reading state; `llz tofu` because a bare `tofu` in an unrendered root exits 0 having
-  written nothing. See [§3b](#3b-running-opentofu-by-hand--llz-tofu).
+- **Change a provider version casually** — and you no longer have a `.terraform.lock.hcl` to change. The pin and the
+  `required_providers` constraint it satisfies are embedded together inside `llz`, and `llz render` writes both into each
+  root before every Terraform op, so a provider move is a template release rather than a PR in this repo. It used to be
+  yours (`owned` in `.template-manifest`), which meant a release that raised a constraint left your lock behind by design
+  and hard-blocked every Terraform op until someone regenerated it by hand.
 
 ---
 
