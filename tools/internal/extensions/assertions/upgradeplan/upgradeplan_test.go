@@ -322,7 +322,7 @@ func TestRenameRemedyNamesThePrefixToPin(t *testing.T) {
 	if len(v.Destructive) != 2 {
 		t.Fatalf("destructive = %d, want 2", len(v.Destructive))
 	}
-	got := RenameRemedy(v.Destructive)
+	got := RenameRemedy(v, nil, nil)
 	if got == "" {
 		t.Fatal("a bucket rename must produce a remedy")
 	}
@@ -353,7 +353,7 @@ func TestRenameRemedySilentOnANonRename(t *testing.T) {
 		"no findings": nil,
 	}
 	for name, findings := range cases {
-		if got := RenameRemedy(findings); got != "" {
+		if got := RenameRemedy(Verdict{Destructive: findings}, nil, nil); got != "" {
 			t.Errorf("%s: want no remedy, got:\n%s", name, got)
 		}
 	}
@@ -363,10 +363,10 @@ func TestRenameRemedySilentOnANonRename(t *testing.T) {
 // claimed — but the renames are still reported. Guessing one of them would send
 // an operator to pin a value that fixes half their buckets.
 func TestRenameRemedyWithoutAgreementClaimsNoPrefix(t *testing.T) {
-	got := RenameRemedy([]Finding{
+	got := RenameRemedy(Verdict{Destructive: []Finding{
 		{Address: "a", Kind: "replace", Type: objBucketType, BeforeLabel: "platform-loki-chunks-prod", AfterLabel: "gsap-apl-loki-chunks-prod"},
 		{Address: "b", Kind: "replace", Type: objBucketType, BeforeLabel: "other-harbor-registry-prod", AfterLabel: "different-harbor-registry-prod"},
-	})
+	}}, nil, nil)
 	if got == "" {
 		t.Fatal("the renames must still be reported")
 	}
@@ -391,4 +391,438 @@ func TestSplitPrefix(t *testing.T) {
 				c.before, c.after, gotOld, gotNew, c.wantOld, c.wantNew)
 		}
 	}
+}
+
+// halfMigratedPlan is gsap-apl's real prod object-storage plan, reduced to the
+// four buckets and the two attributes this gate reads.
+//
+// The shape is the one that matters and it is not hypothetical: two buckets still
+// under the OLD prefix are being renamed, and two are ALREADY under the new one
+// and appear as `no-op` — which is how Terraform reports a resource it read and
+// will not touch, carrying the same label in before and after.
+const halfMigratedPlan = `{"format_version":"1.2","resource_changes":[
+ {"address":"module.object_storage.linode_object_storage_bucket.harbor_registry",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"platform-harbor-registry-prod"},
+            "after":{"label":"gsap-apl-harbor-registry-prod"}}},
+ {"address":"module.object_storage.linode_object_storage_bucket.loki_chunks",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"platform-loki-chunks-prod"},
+            "after":{"label":"gsap-apl-loki-chunks-prod"}}},
+ {"address":"module.object_storage.linode_object_storage_bucket.loki_admin",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["no-op"],
+            "before":{"label":"gsap-apl-loki-admin-prod"},
+            "after":{"label":"gsap-apl-loki-admin-prod"}}},
+ {"address":"module.object_storage.linode_object_storage_bucket.loki_ruler",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["no-op"],
+            "before":{"label":"gsap-apl-loki-ruler-prod"},
+            "after":{"label":"gsap-apl-loki-ruler-prod"}}}]}`
+
+// TestHalfMigratedInstanceIsNotGivenAPrefixToPin is the gate on the remedy being
+// SAFE rather than merely present.
+//
+// TestRenameRemedyNamesThePrefixToPin proves the advice appears. This proves it is
+// withheld where following it would destroy something — the failure mode a remedy
+// has that a diagnostic does not, and the one nothing here could see: every
+// existing case reasons only about the buckets being renamed, and the evidence
+// that disqualifies the claim is in the buckets that are NOT.
+//
+// Following the old advice on this plan produces `2 to add, 0 to change, 2 to
+// destroy` a second time, on loki_admin and loki_ruler.
+func TestHalfMigratedInstanceIsNotGivenAPrefixToPin(t *testing.T) {
+	p, err := Parse([]byte(halfMigratedPlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	v := Evaluate(p)
+	if len(v.Destructive) != 2 {
+		t.Fatalf("destructive = %d, want the 2 renamed buckets", len(v.Destructive))
+	}
+	// Fail closed on the evidence itself: if the settled buckets stop being
+	// collected, the check below cannot fire and would pass by examining nothing.
+	if len(v.SettledBuckets) != 2 {
+		t.Fatalf("settled buckets = %v, want the 2 the plan leaves alone — without them "+
+			"the prefix claim is unguarded", v.SettledBuckets)
+	}
+
+	got := RenameRemedy(v, nil, nil)
+	if got == "" {
+		t.Fatal("the renames must still be reported — the operator still has to act")
+	}
+	// THE ASSERTION. `objLabelPrefix: platform` fits the two renames perfectly and
+	// is exactly what this used to print.
+	if strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("remedy told the operator to pin `platform`, which renames the two buckets "+
+			"already on `gsap-apl` and proposes destroying them instead; got:\n%s", got)
+	}
+	// Naming the stranded buckets is what makes the refusal actionable rather than
+	// just a withheld answer.
+	for _, want := range []string{"gsap-apl-loki-admin-prod", "gsap-apl-loki-ruler-prod", "half-migrated"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("remedy must name %q so the operator can see why no prefix works; got:\n%s", want, got)
+		}
+	}
+	// The renames themselves are still the finding.
+	if !strings.Contains(got, "platform-loki-chunks-prod -> gsap-apl-loki-chunks-prod") {
+		t.Errorf("remedy must still show the renames it diagnosed; got:\n%s", got)
+	}
+}
+
+// ── The settled-bucket arms ──────────────────────────────────────────────────
+//
+// EVERY ONE OF THESE GOES THROUGH Parse + Evaluate rather than building a Verdict
+// literal, and that is the point rather than a style choice. The first cut of
+// these tests handed RenameRemedy a hand-written SettledBuckets, which meant they
+// asserted the DECISION and could not see what Evaluate actually collects — and a
+// collection bug (creates counted as settled) sat under a green suite that
+// included a test written specifically to catch a suppressed-correct-remedy.
+
+// renamePlan renders a plan JSON: renames from -> to, plus extra verbatim entries.
+func renamePlan(from, to string, extra ...string) string {
+	entries := []string{`
+ {"address":"m.linode_object_storage_bucket.loki_chunks",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"` + from + `-loki-chunks-prod"},
+            "after":{"label":"` + to + `-loki-chunks-prod"}}}`}
+	entries = append(entries, extra...)
+	return `{"format_version":"1.2","resource_changes":[` + strings.Join(entries, ",") + `]}`
+}
+
+func remedyFor(t *testing.T, planJSON string) string {
+	t.Helper()
+	p, err := Parse([]byte(planJSON))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return RenameRemedy(Evaluate(p), nil, nil)
+}
+
+// The check keys on WOULD-THIS-BE-RENAMED, not on "is anything settled". A
+// settled bucket already sitting under the prefix being recommended is untouched
+// by that pin, so it is not evidence against it — and treating it as evidence
+// would withhold a correct remedy from any instance that carries an extra bucket.
+func TestSettledBucketsAlreadyUnderTheRecommendedPrefixDoNotSuppressIt(t *testing.T) {
+	got := remedyFor(t, renamePlan("platform", "acme", `
+ {"address":"m.linode_object_storage_bucket.loki_ruler",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["no-op"],
+            "before":{"label":"platform-loki-ruler-prod"},
+            "after":{"label":"platform-loki-ruler-prod"}}}`))
+	if !strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("a settled bucket already under the recommended prefix is left alone by that pin "+
+			"and must not suppress the remedy; got:\n%s", got)
+	}
+}
+
+// A bucket being CREATED is not evidence of a half-migration: it does not exist
+// yet, so pinning the old prefix simply creates it there. Counting it as settled
+// suppressed a correct remedy for any release that ADDS a bucket — and printed
+// that the plan "leaves alone" a bucket it was creating.
+func TestACreatedBucketIsNotEvidenceOfAHalfMigration(t *testing.T) {
+	got := remedyFor(t, renamePlan("platform", "acme", `
+ {"address":"m.linode_object_storage_bucket.loki_ruler",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["create"],
+            "before":null,
+            "after":{"label":"acme-loki-ruler-prod"}}}`))
+	if !strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("a bucket this plan CREATES suppressed a correct remedy; got:\n%s", got)
+	}
+	if strings.Contains(got, "acme-loki-ruler-prod") {
+		t.Errorf("a bucket being created was reported as one the plan leaves alone; got:\n%s", got)
+	}
+}
+
+// The separator is load-bearing. Without it, prefix "acme" would read
+// "acme2-loki-chunks-prod" as already migrated, and the remedy would be offered on
+// evidence that does not exist.
+func TestSettledBucketsAreMatchedOnAWholePrefixComponent(t *testing.T) {
+	got := remedyFor(t, renamePlan("acme", "beta", `
+ {"address":"m.linode_object_storage_bucket.loki_ruler",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["no-op"],
+            "before":{"label":"acme2-loki-ruler-prod"},
+            "after":{"label":"acme2-loki-ruler-prod"}}}`))
+	if strings.Contains(got, "objLabelPrefix: acme") {
+		t.Errorf("`acme2-...` is not under `acme`, so pinning `acme` would rename it — "+
+			"the remedy must be withheld; got:\n%s", got)
+	}
+}
+
+// TestDisagreementIsStickyAcrossThreeOrMoreRenames is the arm
+// TestRenameRemedyWithoutAgreementClaimsNoPrefix could not reach.
+//
+// That one uses TWO findings, and with two the disagreement is always detected on
+// the last iteration, so nothing runs after the reset. Clearing was/now put the
+// loop back into its "nothing seen yet" state, so with THREE renames whose odd one
+// out is not last, the third re-seeded from itself and the disagreement was
+// forgotten — printing a confident prefix plus "the plan goes empty and no bucket
+// is touched" for a plan where pinning it destroys the non-conforming bucket.
+//
+// An off-by-one in a loop that produces DESTRUCTIVE ADVICE, invisible at the
+// smallest input size that exercises the branch.
+func TestDisagreementIsStickyAcrossThreeOrMoreRenames(t *testing.T) {
+	rename := func(addr, before, after string) string {
+		return `
+ {"address":"m.linode_object_storage_bucket.` + addr + `",
+  "type":"linode_object_storage_bucket",
+  "change":{"actions":["delete","create"],
+            "before":{"label":"` + before + `"},
+            "after":{"label":"` + after + `"}}}`
+	}
+	// The odd one out is in the MIDDLE, so a later agreeing rename follows it.
+	plan := `{"format_version":"1.2","resource_changes":[` + strings.Join([]string{
+		rename("loki_chunks", "platform-loki-chunks-prod", "gsap-loki-chunks-prod"),
+		rename("harbor_registry", "other-harbor-registry-prod", "different-harbor-registry-prod"),
+		rename("loki_ruler", "platform-loki-ruler-prod", "gsap-loki-ruler-prod"),
+	}, ",") + `]}`
+
+	got := remedyFor(t, plan)
+	if got == "" {
+		t.Fatal("the renames must still be reported")
+	}
+	if strings.Contains(got, "objLabelPrefix:") {
+		t.Errorf("a rename disagreed, so no prefix may be claimed — pinning one would destroy the "+
+			"bucket that does not conform; got:\n%s", got)
+	}
+	// All three are still the finding, whatever the remedy decides.
+	for _, want := range []string{"loki_chunks", "harbor_registry", "loki_ruler"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("remedy must still report %s; got:\n%s", want, got)
+		}
+	}
+}
+
+// TestAPlanWithNoAgreedPrefixStillGetsAnInstruction.
+//
+// run.go returns as soon as RenameRemedy is non-empty, so the generic
+// "WHAT THIS MEANS / WHAT TO DO" block never prints once a bucket rename is in
+// the plan. That was fine while every rename plan got specific advice — and it
+// stopped being fine when disagreement became sticky, which made "no prefix
+// agreed" reachable for any plan whose renames do not all move the same way. The
+// operator got the rename list and no instruction of any kind: the worst output a
+// blocking gate can produce, because it names a problem and no next step.
+func TestAPlanWithNoAgreedPrefixStillGetsAnInstruction(t *testing.T) {
+	got := RenameRemedy(Verdict{Destructive: []Finding{
+		{Address: "a", Kind: "replace", Type: objBucketType, BeforeLabel: "platform-loki-chunks-prod", AfterLabel: "gsap-loki-chunks-prod"},
+		{Address: "b", Kind: "replace", Type: objBucketType, BeforeLabel: "other-harbor-registry-prod", AfterLabel: "different-harbor-registry-prod"},
+	}}, nil, nil)
+	if strings.Contains(got, "objLabelPrefix:") {
+		t.Fatal("precondition: these renames disagree, so no prefix may be claimed")
+	}
+	if !strings.Contains(got, "WHAT TO DO") {
+		t.Errorf("a plan this gate BLOCKS must always end with a next step; got:\n%s", got)
+	}
+	// The destroy path is where the confirmation for removing a bucket lives, and
+	// an operator told only "decide per bucket" will reach for the apply again.
+	if !strings.Contains(got, "destroy path") {
+		t.Errorf("the instruction must name where a deliberate bucket removal belongs; got:\n%s", got)
+	}
+}
+
+// Whatever RenameRemedy decides, it must never end without one — it is the only
+// thing printed for a rename plan, and run.go returns straight after it.
+func TestEveryRenameRemedyEndsWithAnInstruction(t *testing.T) {
+	bucket := func(before, after string) Finding {
+		return Finding{Address: "m." + before, Kind: "replace", Type: objBucketType, BeforeLabel: before, AfterLabel: after}
+	}
+	cases := map[string]Verdict{
+		"agreed prefix": {Destructive: []Finding{bucket("platform-loki-chunks-prod", "acme-loki-chunks-prod")}},
+		"disagreeing prefixes": {Destructive: []Finding{
+			bucket("platform-loki-chunks-prod", "acme-loki-chunks-prod"),
+			bucket("other-harbor-registry-prod", "different-harbor-registry-prod"),
+		}},
+		"half-migrated": {
+			Destructive:    []Finding{bucket("platform-loki-chunks-prod", "acme-loki-chunks-prod")},
+			SettledBuckets: []string{"acme-loki-ruler-prod"},
+		},
+	}
+	for name, v := range cases {
+		got := RenameRemedy(v, nil, nil)
+		if got == "" {
+			t.Errorf("%s: produced no remedy at all", name)
+			continue
+		}
+		if !strings.Contains(got, "WHAT TO DO") {
+			t.Errorf("%s: remedy ends without an instruction; got:\n%s", name, got)
+		}
+	}
+}
+
+// ── The census ───────────────────────────────────────────────────────────────
+
+// TestAnEmptyBucketReplaceIsExemptAndADataBucketIsNot is the gate on the
+// exemption that makes a prefix migration performable at all.
+//
+// Refusing every bucket replace is safe and also makes the CORRECT move
+// impossible: an operator who pins the prefix that keeps their data-bearing
+// buckets is then blocked by the empty ones that pin moves the other way. The
+// exemption has to be exactly as wide as the evidence — a bucket the census says
+// is empty — and no wider.
+func TestAnEmptyBucketReplaceIsExemptAndADataBucketIsNot(t *testing.T) {
+	bucket := func(before, after string) Finding {
+		return Finding{Address: "m." + before, Kind: "replace", Type: objBucketType,
+			BeforeLabel: before, AfterLabel: after, Actions: []string{"delete", "create"}}
+	}
+	v := Verdict{Destructive: []Finding{
+		bucket("acme-loki-ruler-prod", "platform-loki-ruler-prod"),   // empty
+		bucket("acme-loki-chunks-prod", "platform-loki-chunks-prod"), // 63k objects
+	}}
+	census := BucketCensus{"acme-loki-ruler-prod": 0, "acme-loki-chunks-prod": 63345}
+
+	blocking, harmless := v.partition(census)
+	if len(harmless) != 1 || harmless[0].BeforeLabel != "acme-loki-ruler-prod" {
+		t.Errorf("the empty bucket must be exempt, got harmless=%v", harmless)
+	}
+	if len(blocking) != 1 || blocking[0].BeforeLabel != "acme-loki-chunks-prod" {
+		t.Errorf("a bucket holding 63,345 objects must still block, got blocking=%v", blocking)
+	}
+}
+
+// The exemption is granted on EVIDENCE, so its absence must never grant it. Every
+// way the lookup can come back short lands here: no token, a failed request, an
+// account whose buckets this token cannot see.
+func TestAnUnknownBucketIsTreatedAsHoldingData(t *testing.T) {
+	v := Verdict{Destructive: []Finding{{
+		Address: "m.x", Kind: "replace", Type: objBucketType,
+		BeforeLabel: "acme-loki-ruler-prod", AfterLabel: "platform-loki-ruler-prod",
+	}}}
+	for name, census := range map[string]BucketCensus{
+		"nil census (no token, or the request failed)": nil,
+		"empty census (account has no buckets)":        {},
+		"census that knows other buckets only":         {"someone-elses-bucket": 0},
+	} {
+		blocking, harmless := v.partition(census)
+		if len(harmless) != 0 || len(blocking) != 1 {
+			t.Errorf("%s: an unverified bucket must block — the strict answer is the safe one; "+
+				"blocking=%v harmless=%v", name, blocking, harmless)
+		}
+	}
+}
+
+// The exemption is for a REPLACE, which recreates the bucket. A bare destroy
+// removes it and puts nothing back, so emptiness is not the only question and this
+// gate is not the place to answer the rest.
+func TestABareDestroyIsNeverExemptEvenWhenEmpty(t *testing.T) {
+	v := Verdict{Destructive: []Finding{{
+		Address: "m.x", Kind: "destroy", Type: objBucketType, BeforeLabel: "acme-loki-ruler-prod",
+	}}}
+	blocking, harmless := v.partition(BucketCensus{"acme-loki-ruler-prod": 0})
+	if len(harmless) != 0 || len(blocking) != 1 {
+		t.Errorf("a bucket being destroyed outright must block whatever it holds; blocking=%v harmless=%v",
+			blocking, harmless)
+	}
+}
+
+// A non-bucket resource has no census entry and must never be exempt — the
+// worst version of this class is a linode_lke_cluster replace.
+func TestANonBucketIsNeverExempt(t *testing.T) {
+	v := Verdict{Destructive: []Finding{{
+		Address: "module.cluster.linode_lke_cluster.this", Kind: "replace",
+		Type: "linode_lke_cluster", BeforeLabel: "acme-prod", AfterLabel: "platform-prod",
+	}}}
+	blocking, harmless := v.partition(BucketCensus{"acme-prod": 0})
+	if len(harmless) != 0 || len(blocking) != 1 {
+		t.Errorf("only Object Storage buckets may be exempt; blocking=%v harmless=%v", blocking, harmless)
+	}
+}
+
+// TestTheRemedyRecommendsThePrefixWhoseRenamesAreEmpty is the half that turns a
+// blocked apply into a followable instruction.
+//
+// This is gsap-apl's real prod shape and its real object counts: two buckets under
+// `platform` holding 63,345 and 46 objects, two under `gsap-apl` holding nothing.
+// Pinning `platform` moves only the empty pair, so it is not a judgement call —
+// it is the only move that loses nothing, and the census is what makes that
+// sayable.
+func TestTheRemedyRecommendsThePrefixWhoseRenamesAreEmpty(t *testing.T) {
+	p, err := Parse([]byte(halfMigratedPlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	census := BucketCensus{
+		"platform-loki-chunks-prod":     63345,
+		"platform-harbor-registry-prod": 46,
+		"gsap-apl-loki-admin-prod":      0,
+		"gsap-apl-loki-ruler-prod":      0,
+	}
+	got := RenameRemedy(Evaluate(p), census, nil)
+
+	if !strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("with counts in hand there is one safe prefix and it must be named; got:\n%s", got)
+	}
+	// The evidence, not just the verdict: an operator about to move production
+	// buckets should see what each holds.
+	for _, want := range []string{"63345 objects", "46 objects", "EMPTY"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the recommendation must show %q as its evidence; got:\n%s", want, got)
+		}
+	}
+}
+
+// Without the census the recommendation must NOT appear — the same plan, and the
+// honest answer is the one this printed before counts were available.
+func TestWithoutACensusTheRemedyStillRefusesToPickAPrefix(t *testing.T) {
+	p, err := Parse([]byte(halfMigratedPlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := RenameRemedy(Evaluate(p), nil, nil)
+	if strings.Contains(got, "objLabelPrefix: platform") {
+		t.Errorf("with no evidence about what the buckets hold, no prefix may be recommended; got:\n%s", got)
+	}
+	if !strings.Contains(got, "WHAT TO DO") {
+		t.Errorf("it must still end with an instruction; got:\n%s", got)
+	}
+}
+
+// TestTheRecommendationChecksTheKeyLabelsToo.
+//
+// The prefix names the Object Storage KEY labels as well as the bucket labels, and
+// `llz reap` plus the credential-rotation table match key labels exactly. A
+// recommendation checked against the buckets alone can therefore be right about
+// the data and wrong about rotation — moving one problem into another that nobody
+// is watching for. This used to be a caveat telling the operator to go and look;
+// the same call that counts the objects lists the keys.
+func TestTheRecommendationChecksTheKeyLabelsToo(t *testing.T) {
+	p, err := Parse([]byte(halfMigratedPlan))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	v := Evaluate(p)
+	census := BucketCensus{
+		"platform-loki-chunks-prod": 63345, "platform-harbor-registry-prod": 46,
+		"gsap-apl-loki-admin-prod": 0, "gsap-apl-loki-ruler-prod": 0,
+	}
+
+	t.Run("says so when the keys already agree with the recommended prefix", func(t *testing.T) {
+		// gsap-apl's real key labels.
+		got := RenameRemedy(v, census, []string{"platform-loki-prod", "platform-harbor-registry-prod", "platform-obj-prod"})
+		if !strings.Contains(got, "already\nagree") {
+			t.Errorf("agreement is evidence FOR the recommendation and must be shown; got:\n%s", got)
+		}
+		if !strings.Contains(got, "platform-loki-prod") {
+			t.Errorf("the agreeing key labels must be named; got:\n%s", got)
+		}
+	})
+
+	t.Run("warns when NO key is under the prefix it is recommending", func(t *testing.T) {
+		got := RenameRemedy(v, census, []string{"gsap-apl-loki-prod", "gsap-apl-obj-prod"})
+		if !strings.Contains(got, "HEADS UP") {
+			t.Errorf("recommending a prefix no key uses moves the problem into rotation, and must "+
+				"be flagged; got:\n%s", got)
+		}
+	})
+
+	t.Run("says it could not check rather than implying agreement", func(t *testing.T) {
+		got := RenameRemedy(v, census, nil)
+		if !strings.Contains(got, "could not list them") {
+			t.Errorf("with no key evidence the remedy must say so, not stay silent; got:\n%s", got)
+		}
+	})
 }

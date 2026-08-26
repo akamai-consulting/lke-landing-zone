@@ -2,11 +2,18 @@ package upgradeplan
 
 // cobra_guard.go — the CLI surface for Run.
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+)
 
 // Cmd is `llz ci assert-upgrade-plan`.
 func Cmd() *cobra.Command {
 	var plan string
+	var reportOnly bool
 	var expectNoChanges bool
 	c := &cobra.Command{
 		Use:   "assert-upgrade-plan",
@@ -33,10 +40,24 @@ func Cmd() *cobra.Command {
 			"after an apply is not empty.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return Run(plan, expectNoChanges, cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin())
+			err := Run(plan, expectNoChanges, cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin())
+			if err != nil && reportOnly {
+				// REPORTED, NOT SWALLOWED. The finding is printed either way; this
+				// only decides whether it stops the run.
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n(--report-only: %v — this is a PLAN, so nothing was "+
+					"changed and nothing is blocked. The same check FAILS on the apply.)\n", err)
+				return nil
+			}
+			return err
 		},
 	}
 	c.Flags().StringVar(&plan, "plan", "-", "`tofu show -json` output to read (\"-\" for stdin)")
+	// DEFAULTED FROM THE ENVIRONMENT so the workflow can select it WITHOUT
+	// interpolating `${{ }}` into a run: script — which is what workflow-injection
+	// forbids, and rightly: env.ACTION descends from a dispatch input. `env:` is the
+	// documented mitigation, and it keeps the step a single fixed command line.
+	c.Flags().BoolVar(&reportOnly, "report-only", cli.EnvBool("LLZ_ASSERT_PLAN_REPORT_ONLY", false),
+		"print the verdict but exit 0 — for the PLAN lane, where the finding is a preview rather than a refusal (env: LLZ_ASSERT_PLAN_REPORT_ONLY)")
 	c.Flags().BoolVar(&expectNoChanges, "expect-no-changes", false,
 		"also fail on any NON-destructive change — for a plan taken straight after an apply, where an empty plan is the only correct answer")
 	return c

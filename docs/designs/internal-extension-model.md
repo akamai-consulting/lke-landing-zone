@@ -436,7 +436,7 @@ own grants. Measured against the live registry, per extension:
 | `read-repo` | **54 / 74** |
 | `cluster-read` | 23 |
 | `cloud-mutate` | 17 |
-| `cloud-read` | 17 |
+| `cloud-read` | 18 |
 | `cluster-write` | 16 |
 | `secret-custody` | 12 |
 | `secret-read` | 9 |

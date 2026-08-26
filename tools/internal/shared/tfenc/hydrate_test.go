@@ -75,20 +75,31 @@ func TestHydrateOutsideAnInstanceIsSilentAndEmpty(t *testing.T) {
 // running it unconditionally at the tfbin chokepoint would be unsafe in CI — the
 // workflow's own credentials would be replaced by whatever a `.llz` cache on the
 // runner happened to hold.
+//
+// THE ONE EXCEPTION IS NARROWER THAN IT LOOKS, and it is held by
+// TestAnAmbientAWSKeyYieldsToTheInstancesOwn: a variable whose cache key is
+// spelled DIFFERENTLY (TF_STATE_ACCESS_KEY → AWS_ACCESS_KEY_ID) yields to this
+// instance's own value, because the generic name is ambient — every machine with
+// an AWS account has it — and its presence is not a statement about this
+// instance's Linode state bucket. This test keeps the rule for the two shapes
+// where it still holds absolutely: a variable the caller set under the name the
+// cache uses for it, and TF_ENCRYPTION, which is BUILT rather than mapped and
+// which statepassphrase pins to one key on purpose.
 func TestHydrateNeverOverwritesTheEnvironment(t *testing.T) {
 	clearEnv(t)
 	root := instanceWith(t, map[string]string{
 		PassphraseEnv:         goodPassphrase,
 		"TF_STATE_ACCESS_KEY": "from-cache",
+		"TF_STATE_BUCKET":     "from-cache",
 	})
 	t.Setenv(EnvVar, "already-configured")
-	t.Setenv("AWS_ACCESS_KEY_ID", "already-configured")
+	t.Setenv("TF_STATE_BUCKET", "already-configured")
 
 	l, err := Hydrate(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{EnvVar, "AWS_ACCESS_KEY_ID"} {
+	for _, name := range []string{EnvVar, "TF_STATE_BUCKET"} {
 		if _, ok := varNamed(l, name); ok {
 			t.Errorf("%s was already set in the environment and Hydrate proposed to replace it", name)
 		}
@@ -220,5 +231,112 @@ func TestExportsQuoteMultilineAndEmbeddedQuotes(t *testing.T) {
 	}
 	if !strings.Contains(got, `'\''quoted'\''`) {
 		t.Errorf("an embedded single quote must be escaped as '\\'', got:\n%s", got)
+	}
+}
+
+// TestAnAmbientAWSKeyYieldsToTheInstancesOwn is the gate on the one exception to
+// "never overwrite", and it exists because the rule without it broke every
+// documented `llz tofu` flow on any machine that has AWS credentials.
+//
+// AWS_ACCESS_KEY_ID is generic and ambient — anyone with an AWS account exports
+// it, and its presence says nothing about which credential belongs to THIS
+// instance's Linode Object Storage state bucket. Leaving it alone handed the
+// operator's AWS key to Linode and produced `InvalidAccessKeyId`, with nothing
+// naming the conflict. Found by running the release's own printed remedy on a
+// real workstation.
+func TestAnAmbientAWSKeyYieldsToTheInstancesOwn(t *testing.T) {
+	clearEnv(t)
+	root := instanceWith(t, map[string]string{
+		PassphraseEnv:         "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY",
+		"TF_STATE_ACCESS_KEY": "instance-key",
+		"TF_STATE_SECRET_KEY": "instance-secret",
+		"TF_STATE_BUCKET":     "instance-bucket",
+	})
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIA-SOMEONES-REAL-AWS")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("TF_STATE_BUCKET", "")
+
+	l, err := Hydrate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Value("AWS_ACCESS_KEY_ID"); got != "instance-key" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q, want this instance's own key — an ambient AWS credential "+
+			"is for a different cloud and cannot reach a Linode state bucket", got)
+	}
+	// SAID OUT LOUD. Replacing something the operator exported is right here and
+	// still the most surprising thing this does; a silent override is how a later
+	// credential error becomes inexplicable.
+	if len(l.Overrode) != 1 || l.Overrode[0].Name != "AWS_ACCESS_KEY_ID" || l.Overrode[0].From != "TF_STATE_ACCESS_KEY" {
+		t.Errorf("the override must be reported by name, got %v", l.Overrode)
+	}
+	if strings.Contains(ResolvedNoteFor(l), "left alone") {
+		t.Errorf("the note still promises nothing was overwritten on a run that overwrote something:\n%s",
+			ResolvedNoteFor(l))
+	}
+}
+
+// The LLZ-spelled name still wins outright: an operator who deliberately pointed
+// this instance at another backend keeps that, because they said so under the name
+// that means it.
+func TestAnExplicitLLZSpelledValueIsNeverOverridden(t *testing.T) {
+	clearEnv(t)
+	root := instanceWith(t, map[string]string{
+		PassphraseEnv:         "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY",
+		"TF_STATE_ACCESS_KEY": "cached-key",
+	})
+	t.Setenv("TF_STATE_ACCESS_KEY", "deliberate-key")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+
+	l, err := Hydrate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Value("AWS_ACCESS_KEY_ID"); got != "deliberate-key" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q, want the exported TF_STATE_ACCESS_KEY", got)
+	}
+}
+
+// A name the operator sets under its OWN spelling is left alone, override or not —
+// TF_STATE_BUCKET maps to itself, so there is no ambient/instance ambiguity to
+// resolve and the original rule stands.
+func TestASelfNamedVariableIsStillNeverOverwritten(t *testing.T) {
+	clearEnv(t)
+	root := instanceWith(t, map[string]string{
+		PassphraseEnv:     "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY",
+		"TF_STATE_BUCKET": "cached-bucket",
+	})
+	t.Setenv("TF_STATE_BUCKET", "operators-bucket")
+
+	l, err := Hydrate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Value("TF_STATE_BUCKET"); got != "operators-bucket" {
+		t.Errorf("TF_STATE_BUCKET = %q, want the operator's — they set it under its own name", got)
+	}
+	if len(l.Overrode) != 0 {
+		t.Errorf("nothing was overridden, got %v", l.Overrode)
+	}
+}
+
+// The CI property this whole design rests on, restated against the new rule: the
+// workflow sets AWS_ACCESS_KEY_ID *from* TF_STATE_ACCESS_KEY, so the two agree and
+// there is nothing to override. (There is also no `.llz` cache in CI, which makes
+// it a no-op twice over.)
+func TestMatchingValuesAreNotReportedAsAnOverride(t *testing.T) {
+	clearEnv(t)
+	root := instanceWith(t, map[string]string{
+		PassphraseEnv:         "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY",
+		"TF_STATE_ACCESS_KEY": "same-key",
+	})
+	t.Setenv("AWS_ACCESS_KEY_ID", "same-key")
+
+	l, err := Hydrate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Overrode) != 0 {
+		t.Errorf("the values agree; there is nothing to override or report, got %v", l.Overrode)
 	}
 }
