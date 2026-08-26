@@ -27,6 +27,19 @@
 # "Invalid expression ... A single static variable reference is required" —
 # which is why terraform-init preflights the secret and says so plainly.)
 #
+# RUNNING TOFU BY HAND? Do NOT assemble TF_ENCRYPTION yourself. `llz tofu`
+# builds it from the passphrase already cached in .llz/secrets.env, adds the
+# object-storage backend credentials, and passes everything after `--` straight
+# through — it is the same document CI gets, from the same secret:
+#
+#   llz tofu --region <env> -- init -upgrade
+#   llz --yes tofu -- apply -refresh-only -auto-approve -var-file=<env>.tfvars
+#
+# For a plain `tofu`, have your shell take the environment instead:
+# `eval "$(llz tofu --export)"`, or add `eval "$(llz tofu --shell-init)"` to your
+# rc once. The dev container does the latter for you. See
+# docs/playbooks/operator-onboarding.md.
+#
 # ── MIGRATION: this is PHASE 1 of 2 ──────────────────────────────────────────
 #
 # `enforced` and the `unencrypted` fallback are MUTUALLY EXCLUSIVE — OpenTofu

@@ -6,17 +6,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfenc"
 )
 
-// passphraseWith builds a one-rune passphrase carrying r. A blank rune would trip
-// the "passphrase is not set" guard before the character-class check ever runs, so
-// those are sandwiched between two legal runes — the rejection then has to come
-// from the class check, which is what is under test.
+// passphraseWith builds a passphrase carrying r, padded to pbkdf2's length floor.
+//
+// THE PADDING IS LOAD-BEARING TWICE OVER. A blank rune alone would trip the
+// "passphrase is not set" guard, and a one-rune passphrase now trips the LENGTH
+// guard — either way the rejection would come from somewhere other than the
+// character-class check this test is about, and a widened class would pass
+// unnoticed. The length guard is new here: it existed only in the composite
+// action until the two emitters were consolidated into internal/shared/tfenc, so
+// this fixture was passing on values that failed in CI.
 func passphraseWith(r rune) string {
-	if strings.TrimSpace(string(r)) == "" {
-		return "A" + string(r) + "A"
-	}
-	return string(r)
+	return strings.Repeat("A", tfenc.MinPassphraseLen) + string(r)
 }
 
 // classCase is one rune and whether the character class must accept it.

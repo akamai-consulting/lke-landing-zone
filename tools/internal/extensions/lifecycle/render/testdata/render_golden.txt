@@ -936,7 +936,7 @@ spec:
       # cluster-foundation (wave -20) owns the namespaces; don't create/own them here.
       - CreateNamespace=false
 --- terraform-iac-bootstrap/cluster/backend.tf  sha256=0191a0cd0bee22010424b3417114ea887d80e89229937b3360cf75750fa5fd63  bytes=1640
---- terraform-iac-bootstrap/cluster/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
+--- terraform-iac-bootstrap/cluster/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/cluster/main.tf  sha256=5ab9c939e1d7a86ad5565664fd79325dd59b5d48afc96cfef81bf41e27812e0f  bytes=4589
 --- terraform-iac-bootstrap/cluster/outputs.tf  sha256=df6e280f94f06f02b1d4129a2d6b4628769e648110b71dc543711c8d96dab2e6  bytes=2200
 === terraform-iac-bootstrap/cluster/prod.tfvars
@@ -1105,7 +1105,7 @@ apl_enabled = false
 --- terraform-iac-bootstrap/cluster/variables.tf  sha256=897df3df6f1de2e6054f3da606fafd07e50459c6de5b88d31a4de85273acb7c5  bytes=8342
 --- terraform-iac-bootstrap/cluster/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/databases/backend.tf  sha256=05b5bc85fcc4dbf59e7040db9e5b0ecd68673d4da0295b5315702e41894da6a6  bytes=1820
---- terraform-iac-bootstrap/databases/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
+--- terraform-iac-bootstrap/databases/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/databases/main.tf  sha256=3c221d6400221896767f6a62649be6f013305cc2826e25e9f3ce724db1a2947d  bytes=1756
 --- terraform-iac-bootstrap/databases/outputs.tf  sha256=a9625b431a3b84582b930e85d265f122a4d95f78b04c93c78aac79ce01ba1e06  bytes=2112
 === terraform-iac-bootstrap/databases/prod.tfvars
@@ -1233,7 +1233,7 @@ label_prefix = "goldeninst"
 --- terraform-iac-bootstrap/databases/variables.tf  sha256=48bfcd515e0f7c6acf06308a93e634cdbc056091987e6c6cd5bffddacf6d4c25  bytes=4260
 --- terraform-iac-bootstrap/databases/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/object-storage/backend.tf  sha256=35ab77b664436bc69caf9b63cf2218279689ea451acb552b41d03cc09dac903f  bytes=1109
---- terraform-iac-bootstrap/object-storage/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
+--- terraform-iac-bootstrap/object-storage/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/object-storage/main.tf  sha256=be8c7e2043de7ae2fcdea9ea9b2ec57a8b33f7b3b292a197b2e92a869199619e  bytes=1227
 --- terraform-iac-bootstrap/object-storage/outputs.tf  sha256=07c623f2e5569620325216f85e630bd63b918c9f3d9d033506b29ce98bd99579  bytes=1278
 === terraform-iac-bootstrap/object-storage/prod.tfvars
@@ -1291,7 +1291,7 @@ obj_cluster = "us-sea-1"
 --- terraform-iac-bootstrap/object-storage/variables.tf  sha256=4e19d9244519fe2e3f48e4166c8d7ccb338d71cb9165be218fb5d83e171479c7  bytes=2990
 --- terraform-iac-bootstrap/object-storage/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152
 --- terraform-iac-bootstrap/vpc/backend.tf  sha256=5079fd70224c8b0a7a4ba7229ca655b7d779ee5e2d80bed952db0b4d40ab7081  bytes=1151
---- terraform-iac-bootstrap/vpc/encryption.tf  sha256=8373b7b3e232d0e93a985d12d36e6855bea62a3a872d64efa447cb257df90e8c  bytes=3563
+--- terraform-iac-bootstrap/vpc/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/vpc/main.tf  sha256=1e1abaab4ae5dbe4cbfd1b359c6825cd7c7fef661315cff36cf7a7aa540accce  bytes=843
 --- terraform-iac-bootstrap/vpc/variables.tf  sha256=f350631ba1e8e8a49c18e65ebd8dc113b9d6a185f78070ad3d47d73aaa7ac3aa  bytes=320
 --- terraform-iac-bootstrap/vpc/versions.tf  sha256=c22ba08367e37dfccb58d8daa60ef59687071f9cb9f564d512e4469a818b184f  bytes=152

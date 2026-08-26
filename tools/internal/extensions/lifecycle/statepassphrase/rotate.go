@@ -40,6 +40,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfenc"
 )
 
 // statePassphraseRoots are the Terraform roots whose state is encrypted. Kept
@@ -120,42 +121,16 @@ func lastLines(s string, n int) string {
 // the fallback and pass for a root still on the OLD key, so this is what makes
 // "verified" mean "the old passphrase can now be deleted".
 //
-// The passphrase is interpolated into an HCL string, so it is validated to the
-// same base64 alphabet the terraform-init action enforces: a quote or backslash
-// could close the string and append arbitrary encryption configuration (e.g.
-// swapping in method.unencrypted). The key name becomes an HCL identifier.
+// A NAMED WRAPPER RATHER THAN AN INLINE tfenc.Build, because "no fallback" is the
+// load-bearing property and a bare Config literal at the call site states it only
+// by what it omits. The emission and the injection guards moved to
+// internal/shared/tfenc, where the composite action's shell body is diffed
+// against them; this function is now just the argument for the shape.
 func buildNewKeyOnlyEncryption(passphrase, keyName string) (string, error) {
 	if strings.TrimSpace(passphrase) == "" {
-		return "", fmt.Errorf("TF_STATE_ENCRYPTION_PASSPHRASE is not set — the verify pass needs the new passphrase to prove each root decrypts WITHOUT the fallback")
+		return "", fmt.Errorf("%s is not set — the verify pass needs the new passphrase to prove each root decrypts WITHOUT the fallback", tfenc.PassphraseEnv)
 	}
-	if keyName == "" {
-		keyName = "llz"
-	}
-	if strings.ContainsFunc(passphrase, func(r rune) bool {
-		return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
-			r == '+' || r == '/' || r == '=' || r == '_' || r == '-')
-	}) {
-		return "", fmt.Errorf("TF_STATE_ENCRYPTION_PASSPHRASE must contain only [A-Za-z0-9+/=_-] — it is interpolated into an HCL string where a quote or backslash could inject encryption configuration")
-	}
-	if strings.ContainsFunc(keyName, func(r rune) bool {
-		return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
-	}) {
-		return "", fmt.Errorf("TF_STATE_ENCRYPTION_KEY_NAME %q must be an HCL identifier: [A-Za-z0-9_] only", keyName)
-	}
-	return fmt.Sprintf(`key_provider "pbkdf2" %[1]q {
-  passphrase = %[2]q
-}
-method "aes_gcm" %[1]q {
-  keys = key_provider.pbkdf2.%[1]s
-}
-method "unencrypted" "migrate" {}
-state {
-  method = method.aes_gcm.%[1]s
-}
-plan {
-  method = method.aes_gcm.%[1]s
-}
-`, keyName, passphrase), nil
+	return tfenc.Build(tfenc.Config{Passphrase: passphrase, KeyName: keyName})
 }
 
 func RunRotate(apply bool, rootsDir string) error {

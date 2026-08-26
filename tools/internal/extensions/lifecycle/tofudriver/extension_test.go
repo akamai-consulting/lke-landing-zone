@@ -60,6 +60,18 @@ func TestEachVerbDeclaresWhatItDoes(t *testing.T) {
 				t.Errorf("destroy state = %s, want destroyed — it is not a step toward having "+
 					"infrastructure, it is the step that ends it", b.State)
 			}
+		case "tofu":
+			// The passthrough cannot know which verb it will run, so the ONLY safe
+			// declaration is the widest one. A future edit that narrows this to
+			// cloud-read to reflect "people mostly init and plan with it" is the
+			// failure this case exists to catch: the operator types the verb.
+			if !mutates {
+				t.Error("tofu dropped its mutating grant — `llz tofu -- apply` is a legal " +
+					"invocation, and the passthrough does not get to choose otherwise")
+			}
+			if b.Kind != extension.Transition || b.State != extension.Provisioned {
+				t.Errorf("tofu: binding = %s, want transition:provisioned", b)
+			}
 		default:
 			t.Errorf("unexpected binding %q", b.Name)
 		}

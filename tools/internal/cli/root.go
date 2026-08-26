@@ -59,11 +59,13 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cliopts"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/copier"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envdef"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exitcode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/instancelayout"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/lint"
@@ -147,11 +149,11 @@ type globalOpts = cliopts.Opts
 // and cannot be observed by a test. cmd/llz does the exiting, and it is the only
 // thing left there.
 func Main() int {
-	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, color.Red("llz:"), err)
-		return 1
-	}
-	return 0
+	// Reporting lives in internal/shared/exitcode because a PASSTHROUGH command
+	// must exit with its child's status, not with a flattened 1 — and when the
+	// child has already printed its own diagnostics, adding `llz: exit status 2`
+	// buries them. See that package's header.
+	return exitcode.Report(os.Stderr, newRootCmd().Execute())
 }
 
 // driftCmd is `llz drift`. It is handed clideps.Sustain(), one of the deps
@@ -196,7 +198,7 @@ func newRootCmd() *cobra.Command {
 		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), environments.SpecCmd(), environments.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), onboard.SecretsCmd(), onboard.TokensCmd(), render.RenderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), lint.HooksCmd(), lint.PrecommitCmd(),
-		teardown.ReapCmd(), openbaoext.OpenbaoCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
+		teardown.ReapCmd(), openbaoext.OpenbaoCmd(), tofudriver.TofuCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
 
@@ -215,7 +217,7 @@ func newRootCmd() *cobra.Command {
 		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
 		"build": "build", "up": "build", "status": "build",
 		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
-		"verify": "day2", "reap": "day2", "reconcile": "day2", "self-update": "day2",
+		"verify": "day2", "reap": "day2", "reconcile": "day2", "self-update": "day2", "tofu": "day2",
 	}
 	for _, c := range root.Commands() {
 		if g, ok := groupOf[c.Name()]; ok {

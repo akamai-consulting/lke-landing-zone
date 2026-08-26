@@ -79,15 +79,18 @@ Then refresh Terraform state so downstream CI gets the new kubeconfig:
 
 ```bash
 cd terraform-iac-bootstrap/cluster
-tofu apply -refresh-only -auto-approve -var-file="<env>.tfvars"
+llz tofu --region <env> -- init
+llz --yes tofu -- apply -refresh-only -auto-approve -var-file="<env>.tfvars"
 ```
 
-> **`TF_ENCRYPTION` must be in the environment for both steps.** Every root carries
-> `encryption.tf`, so a hand-run `tofu`/`llz ci tf-output` without it fails with
-> OpenTofu's own unhelpful *"Invalid expression … A single static variable reference
-> is required"*. In CI the `tf-encryption-env` composite action exports it from
-> `TF_STATE_ENCRYPTION_PASSPHRASE`; by hand, export it yourself before running
-> either command. See [ADR 0007 (state encryption)](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0007-terraform-state-encryption.md).
+> **Run both steps through `llz tofu`.** Every root carries `encryption.tf`, so a
+> bare `tofu` fails with OpenTofu's own unhelpful *"Invalid expression … A single
+> static variable reference is required"* — the state-encryption tripwire, not a
+> broken checkout. `llz tofu` builds `TF_ENCRYPTION` from the
+> `TF_STATE_ENCRYPTION_PASSPHRASE` in `.llz/secrets.env`, the same value the
+> `tf-encryption-env` composite action gives CI, and passes everything after `--`
+> through untouched. `llz ci tf-output` resolves it for itself. See
+> [ADR 0007 (state encryption)](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0007-terraform-state-encryption.md).
 
 Do **not** `kubectl delete` the `lke-admin-token` Secret.
 

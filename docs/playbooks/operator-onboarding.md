@@ -86,10 +86,8 @@ file the template never touches); `llz precommit` runs it after the built-in gat
 
 ### 3. Kubernetes access (per cluster)
 
-Kubeconfigs are stored in Terraform state per cluster. **Do not drive Terraform by
-hand for this** — every root carries `encryption.tf`, so a `terraform init`/`output`
-without `TF_ENCRYPTION` fails with OpenTofu's own unhelpful message (*"Invalid
-expression … A single static variable reference is required"*). Two supported ways:
+Kubeconfigs are stored in Terraform state per cluster. Reach for one of the two
+purpose-built commands rather than driving Terraform yourself:
 
 ```bash
 export LINODE_API_TOKEN=…        # both paths need it; A also needs the TF state creds
@@ -134,6 +132,107 @@ Verify:
 
 - [ ] `kubectl get nodes` returns nodes on each cluster (skip envs that aren't deployed yet — the fetch reports `available=false`).
 - [ ] `kubectl -n llz-openbao get pods` shows the 3-replica OpenBao StatefulSet.
+
+### 3b. Running OpenTofu by hand — `llz tofu`
+
+Sooner or later a runbook asks you to run OpenTofu directly (`apply -refresh-only`
+after an lke-admin rotation, `state pull` during a rotation window, a `plan` you
+want to read before dispatching a build). A bare `tofu` will not work, and the way
+it fails is worth understanding once:
+
+```
+Error: Invalid expression
+  on encryption.tf line 56, in terraform:
+A single static variable reference is required: only attribute access and
+indexing with constant keys …
+```
+
+That is **the tripwire doing its job, not a broken checkout.** Every root carries
+`encryption.tf`, which holds only the enforcement posture — the key provider and
+methods arrive from `$TF_ENCRYPTION`. Without it OpenTofu refuses to run rather
+than silently writing **plaintext state**, which would put kubeconfigs and every
+database admin password in the state bucket in the clear
+([ADR 0007](../adr/0007-terraform-state-encryption.md)). The message is OpenTofu's
+own and names neither the passphrase nor the variable.
+
+Do not assemble that document by hand. `llz tofu` resolves it — along with the
+object-storage backend credentials and the Linode token — from the
+`.llz/secrets.env` your `llz tokens` run already wrote:
+
+```bash
+cd terraform-iac-bootstrap/cluster
+
+llz tofu --region <env> -- init -upgrade      # --region also fills in the backend config
+llz tofu -- plan -var-file=<env>.tfvars
+llz --yes tofu -- apply -refresh-only -auto-approve -var-file=<env>.tfvars
+```
+
+Everything after `--` is passed through untouched, and anything you have already
+exported wins and is left alone — so this is a no-op in CI and never overrides a
+value you set deliberately.
+
+**Mutating verbs need `--yes`**, the same gate as `llz build` / `llz reap` /
+`llz credentials`; reads (`plan`, `init`, `output`, `state list`, `fmt`) do not.
+A few flags move a read into the first group — `init -migrate-state`,
+`-reconfigure` and `-force-copy` rewrite or re-point remote state, so they are
+gated even though a plain `init` is not.
+
+> The `llz ci tf-*` verbs (`tf-apply`, `tf-destroy`, `tf-import`) do **not** gate
+> on `--yes`. They are CI plumbing, and their confirmation lives in the calling
+> workflow — `tf-destroy` sits behind `assert-destroy-confirm`, for instance. Run
+> one by hand and you bypass the gate above, so prefer `llz tofu` for anything
+> you are driving yourself.
+`--dry-run` prints the exact OpenTofu command and the variables it would set, by
+name, and runs nothing:
+
+```bash
+llz --dry-run tofu -- apply -var-file=<env>.tfvars
+```
+
+**Prefer a plain `tofu`?** A command cannot export into the shell that launched
+it, so nothing `llz` runs can fix a shell that is already open. Put this in
+`~/.bashrc` / `~/.zshrc` once — it defines a `tofu` function that routes through
+`llz tofu`:
+
+```bash
+command -v llz >/dev/null 2>&1 && eval "$(llz tofu --shell-init)"
+```
+
+The dev container does this for you on create, so `tofu` just works there.
+Outside an instance checkout it changes nothing, and it falls through to the real
+binary if `llz` is ever missing.
+
+**This is also the safest option**, which is worth a sentence because the
+alternative looks equivalent and is not. The `tofu` function passes the
+credentials to the **child process only** — they never enter your interactive
+shell, so they are not inherited by everything else you run and not readable out
+of `/proc/<pid>/environ`.
+
+`llz tofu --export` exists for the remaining case — a script running several
+commands against one environment:
+
+```bash
+eval "$(llz tofu --export)"     # this shell, this session
+tofu init -upgrade
+```
+
+It writes the values to a private `0600` file and puts **only** a
+source-and-delete command on stdout, so the passphrase never lands in scrollback,
+a `script(1)` capture, a CI log or a `set -x` trace. The file is removed the
+moment your shell has read it, and any file an interrupted run left behind is
+swept by the next `llz tofu`. **Evaluate it straight away** — capturing the
+snippet and running it minutes later can find the file already swept, which is
+deliberate: the alternative is a passphrase sitting on disk for longer. It refuses to run on a terminal: with no `eval`
+around it, the handoff would leave a passphrase in a temp file and nothing on
+screen would say so.
+
+> **The passphrase is unrecoverable if lost.** A wrong one is a hard decryption
+> failure, not a fallback to plaintext. Escrow `TF_STATE_ENCRYPTION_PASSPHRASE`
+> offline with the same discipline as `OPENBAO_SEAL_KEY`.
+
+Verify:
+
+- [ ] `llz tofu -- version` runs from `terraform-iac-bootstrap/cluster` without an encryption error.
 
 ### 4. OpenBao access
 

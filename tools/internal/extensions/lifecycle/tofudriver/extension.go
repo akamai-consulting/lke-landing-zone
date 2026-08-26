@@ -83,6 +83,17 @@ func Extension() extension.Extension {
 				State:  extension.Destroyed,
 				Grants: []extension.Grant{extension.CloudMutate},
 			},
+			{
+				// THE WIDEST GRANT IT COULD EXERCISE, because the passthrough does not
+				// choose a verb — the operator types it after `--`, so `llz tofu --
+				// apply` is reachable and nothing here can narrow it. At `provisioned`
+				// rather than `destroyed` because `destroy` is a thing you can type,
+				// not what the verb is for; `tf-destroy` above is the declared path.
+				Kind:   extension.Transition,
+				Name:   "tofu",
+				State:  extension.Provisioned,
+				Grants: []extension.Grant{extension.CloudMutate},
+			},
 		},
 	}
 }

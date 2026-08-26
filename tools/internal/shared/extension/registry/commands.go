@@ -257,6 +257,7 @@ var commands = []Command{
 	{"tofudriver", tofudriver.PlanCmd},
 	{"tofudriver", tofudriver.TFApplyCmd},
 	{"tofudriver", tofudriver.TFImportCmd},
+	{"tofudriver", tofudriver.TofuCmd},
 	{"tokeninv", tokeninv.RotationPlanCmd},
 	{"tokeninv", tokeninv.TokenInventoryCmd},
 	{"tokeninv", tokeninv.ValidateTokensCmd},
