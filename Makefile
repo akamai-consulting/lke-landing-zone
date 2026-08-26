@@ -109,6 +109,7 @@ COVERAGE_MINS := \
 	internal/shared/kubectlprobe=77 \
 	internal/shared/tfbin=90 \
 	internal/shared/tfenc=85 \
+	internal/shared/exitcode=90 \
 	internal/shared/preflight=100 \
 	internal/extensions/lifecycle/reconcilelanes=79 \
 	internal/shared/s3sig=100 \

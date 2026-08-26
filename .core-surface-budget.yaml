@@ -1564,7 +1564,25 @@ categories:
     #                       extensions/guards/summarysecret — including the scar
     #                       comment that would otherwise have sat here. The only
     #                       line this layer gains is the import.
-    budget: 1953
+    #   1,951 / 129 files  -2 net: +1 the `tofudriver` import for `llz tofu`, the
+    #                       hand-run OpenTofu passthrough, and -3 for Main's error
+    #                       reporting moving to internal/shared/exitcode.
+    #                       The import is IRREDUCIBLE and the same shape as the +1
+    #                       entries above: the constructor folded onto an existing
+    #                       root AddCommand call and the group map gained an entry on
+    #                       a line that already existed, so the import is the only new
+    #                       line. The command itself, the environment resolution
+    #                       (internal/shared/tfenc) and the chokepoint that applies it
+    #                       (internal/shared/tfbin) all live outside this layer.
+    #                       The paydown is the interesting half. Main's five lines
+    #                       decided two things at once — the message AND the status —
+    #                       and flattened every failure to exit 1, which silently
+    #                       broke `llz tofu -- plan -detailed-exitcode` (2 means
+    #                       CHANGES, not failure). Splitting them needed a type this
+    #                       layer cannot hold, so the decision moved to the package
+    #                       that owns it and this layer kept the one line that calls
+    #                       it. Net, the layer lands BELOW where it started (1,953).
+    budget: 1951
     exact: true
     include:
       - "tools/internal/cli/*.go"

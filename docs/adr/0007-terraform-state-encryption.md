@@ -87,6 +87,80 @@ the value is interpolated into an HCL string, so a quote or backslash could clos
 the string and **inject encryption configuration** (e.g. substitute
 `method.unencrypted`).
 
+### The split's cost, and how it is paid
+
+The same property that makes the tripwire work makes it fire on the OPERATOR.
+Runbooks legitimately ask for a hand-run `tofu` — `apply -refresh-only` after an
+lke-admin rotation, `state pull` during a key rollover — and every one of them
+landed on that unhelpful message. The documented remedy was to hand-assemble a
+twelve-line HCL document with a live passphrase in it, once per terminal, which
+put the secret in shell history and made the sharpest edge in the local flow a
+copy-and-paste ritual.
+
+The material was never actually missing: `llz tokens` writes
+`TF_STATE_ENCRYPTION_PASSPHRASE` to `.llz/secrets.env` (mode `0600`, gitignored)
+at onboarding. Nothing connected the cache to an invocation. `llz tofu` does:
+
+- **`llz tofu -- <args>`** builds `TF_ENCRYPTION` from the cache, adds the
+  object-storage backend credentials and the Linode token, and execs OpenTofu.
+- **`llz tofu --shell-init`** prints an rc snippet defining a `tofu` function that
+  routes through the above; the dev container installs it on create. This is the
+  shape to prefer: the credentials reach the CHILD process only and never enter
+  the interactive shell.
+- **`llz tofu --export`** hands the same environment to a shell, for a script
+  running several commands against one environment. The values go to a private
+  `0600` file and stdout carries only `. <path>; rm -f <path>` — so nothing a
+  recorder sees (scrollback, `script(1)`, a CI log, `set -x`) contains the
+  passphrase. It refuses a terminal, because with no `eval` around it the handoff
+  would leave an unconsumed passphrase on disk; every `llz tofu` invocation also
+  sweeps files older than a minute, so a mistyped `eval` is cleaned up by the next
+  use rather than by the operator remembering.
+
+  Printing the exports to stdout was the original design, and it disclosed a live
+  instance's passphrase into a session transcript during this feature's own
+  development — a pipe is the *intended* destination, so the terminal guard was
+  never going to fire. The file handoff protects the **transport**; it does not
+  change the fact that after the `eval` the value is in the shell's environment,
+  which is the reason `--shell-init` is the recommendation. A FIFO would keep the
+  bytes off disk entirely and does not work here: `eval "$(…)"` drains stdout to
+  completion first, so `llz` has exited before the shell sources anything.
+- **Every Terraform shell-out `llz` makes** resolves the same way, at the
+  `internal/shared/tfbin` chokepoint — so `llz ci tf-output` and
+  `llz ci fetch-kubeconfig-state` work in a local checkout too.
+
+**Hydration never REPLACES.** A variable already present in the process
+environment is left alone, and outside an instance checkout nothing is
+contributed at all.
+
+It is worth being precise about what that does *not* say, because the imprecise
+version ("it can only add, so the worst case is that it changes nothing") was
+written here first and is wrong. Introducing a variable that was absent is a real
+change, and the mapping makes it reachable: the cache stores `LINODE_API_TOKEN`
+while the provider reads `LINODE_TOKEN`, so a process holding the former and
+deliberately not the latter would acquire a cloud credential it did not have.
+The absence of a credential can itself be a control.
+
+In CI it is nonetheless a no-op, but by two checkable facts rather than by
+construction: there is no `.llz` cache on a runner, and the workflow steps that
+export `LINODE_API_TOKEN` (`drain-obj-buckets`, `temp-objkey create`, the
+credential probes) shell out to no Terraform command. Both are worth re-checking
+when a workflow gains a Terraform step.
+
+**A child process cannot export into its parent shell**, which is why there are
+two shapes rather than one command that "just fixes the environment". Nothing
+`llz` runs can make a LATER bare `tofu`, in an already-running terminal, see the
+variable.
+
+### One document, two emitters
+
+The HCL is now emitted by `internal/shared/tfenc`, and the composite action still
+emits it in shell for CI. They must agree byte for byte — state written under one
+is unreadable by the other — so `tfenc_test.go` executes the **shipped action's
+real shell body** and diffs the result, for the happy path, the rotation window,
+and every rejected input. A separate gate runs a real `tofu init` against the
+**shipped `encryption.tf`**, asserting both arms: it fails without the document
+and succeeds with it.
+
 ### Two-phase rollout, because `enforced` and `fallback` are exclusive
 
 OpenTofu rejects the combination outright — *"Unable to use unencrypted method

@@ -65,9 +65,10 @@ var resolveTFBin = func() string {
 func Bin() string { return resolveTFBin() }
 
 // Command builds an exec.Cmd for the resolved binary. Every llz shell-out to
-// Terraform/OpenTofu goes through here.
+// Terraform/OpenTofu goes through here, which is also why the instance's own
+// credentials are attached here rather than at each call site — see hydrate.go.
 func Command(args ...string) *exec.Cmd {
-	return exec.Command(Bin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
+	return hydrate(exec.Command(Bin(), args...)) // #nosec G204 -- binary is resolved from a fixed allowlist above
 }
 
 // CommandContext is Command with a deadline, for the call sites that bound a
@@ -76,5 +77,5 @@ func Command(args ...string) *exec.Cmd {
 // is exactly how `tf-import` and `tf-apply` were left behind by the OpenTofu
 // migration and only surfaced when a real apply ran in CI.
 func CommandContext(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, Bin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
+	return hydrate(exec.CommandContext(ctx, Bin(), args...)) // #nosec G204 -- binary is resolved from a fixed allowlist above
 }
