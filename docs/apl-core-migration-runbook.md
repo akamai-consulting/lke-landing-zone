@@ -67,17 +67,23 @@ The cutover happens **per cluster**, not all at once. The promotion path is
 The lab cluster is disposable. Use it to shake out anything that's still
 hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
-1. **Bump node count** in the cluster tfvars for your lab `<env>`
-   (`instance-template/terraform-iac-bootstrap/cluster/<env>.tfvars`) to 3 — apl-core
-   minimum is 3 × 8GB/4vCPU.
+1. **Bump node count to 3** — apl-core's minimum is 3 × 8GB/4vCPU. Edit it in the
+   SPEC (`environments/<env>.yaml`), not in the tfvars: everything under
+   `terraform-iac-bootstrap/` is a gitignored build artifact that `llz render`
+   rewrites from the spec before every Terraform op, so an edit there survives
+   only until the next run.
 
-2. **Apply cluster + object-storage Terraform**:
+2. **Apply cluster + object-storage Terraform**, from your instance root:
    ```bash
-   cd instance-template/terraform-iac-bootstrap/cluster
-   terraform apply -var-file=<env>.tfvars
+   llz render <env>
+   cd terraform-iac-bootstrap/cluster
+   llz tofu --region <env> -- apply -var-file=<env>.tfvars
    cd ../object-storage
-   terraform apply -var-file=<env>.tfvars
+   llz tofu --region <env> -- apply -var-file=<env>.tfvars
    ```
+   `llz tofu` rather than a bare `tofu`: the roots encrypt state at rest, so an
+   init that configures the backend needs `$TF_ENCRYPTION`, and llz resolves that
+   environment for you.
    (Historical: earlier releases copied `LOKI_S3_*` outputs into the
    `infra-<env>` GitHub environment secrets.
 
