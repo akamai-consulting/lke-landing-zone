@@ -517,6 +517,20 @@ func TestInvocationTokens(t *testing.T) {
 		{"an owner/name pair of placeholders is two tokens",
 			" new <owner>/<name> --push",
 			[]string{"new", "<owner>/<name>", "--push"}},
+		{
+			// THE COMMAND-SUBSTITUTION CASE. `eval "$(llz tofu --export)"` is a
+			// documented one-liner, and `)` used to be grouped with the operators
+			// that are "ordinary characters mid-token" — so it was absorbed into
+			// `--export`, and the `"` right after it opened a quote that ran to the
+			// end of the line. The guard then reported a flag named `--export)` plus
+			// whatever trailing comment the line carried: a finding that reads like a
+			// doc typo while actually being the scanner going blind.
+			"a command substitution ends at its closing paren, not at end of line",
+			` tofu --export)"          # this shell only`,
+			[]string{"tofu", "--export"}},
+		{"a paren inside quotes is ordinary text, not a terminator",
+			` env set <env> note="a (parenthetical) note" --yes`,
+			[]string{"env", "set", "<env>", "note=a (parenthetical) note", "--yes"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := invocationTokens(tc.rest)

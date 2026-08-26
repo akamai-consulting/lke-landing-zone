@@ -428,7 +428,7 @@ func invocationTokens(rest string) []string {
 			// redirects (which appear nowhere here), so the scan stopped at the
 			// placeholder and skipped every flag after it on ~92 invocations.
 			cur.WriteRune(c)
-		case '|', '#', ';', '&', '>', ')':
+		case '|', '#', ';', '&', '>':
 			// Shell operators ONLY at a token boundary. Mid-token they are
 			// ordinary characters — notably the `>` that CLOSES a placeholder.
 			if cur.Len() > 0 {
@@ -437,6 +437,21 @@ func invocationTokens(rest string) []string {
 			}
 			flush()
 			return out // a real operator: `> file`, `| jq`, `# comment`
+		case ')':
+			// UNLIKE THE OTHERS, `)` ends the invocation even mid-token: unquoted,
+			// it closes a `$(…)` substitution, and the command inside stopped one
+			// character earlier. It was grouped with the operators above and so was
+			// absorbed into whatever token it touched — which made the documented
+			// one-liner `eval "$(llz tofu --export)"` report a flag literally named
+			// `--export)` plus the rest of the line, because the `"` that follows
+			// then opened a quote that ran to the end. Every `$(llz …)` in the
+			// corpus had the same hole; nothing caught it because the finding looks
+			// like a doc typo rather than a blind spot in the scanner.
+			//
+			// No placeholder closes with `)` (that is `>`, handled above), and a
+			// `)` inside quotes never reaches here — the quote branch consumes it.
+			flush()
+			return out
 		case '\\':
 			flush() // a stray continuation marker; tokens continue on the folded line
 		default:
