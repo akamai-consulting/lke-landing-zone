@@ -118,33 +118,37 @@ func TestReportProviderLockSkew(t *testing.T) {
 // nothing to be told. That is the same failure shape the reporters exist to
 // catch, so it is worth a gate of its own.
 //
-// The set is asserted, not just the count: a fourth reporter added later has to be
-// wired in here to pass, and a call quietly dropped names itself in the failure.
+// The set is asserted, not just the count: a reporter added later has to be wired in
+// here to pass, and a call quietly dropped names itself in the failure.
 func TestEveryUpgradeReporterIsReached(t *testing.T) {
 	reached := map[string]bool{}
-	restore := func(image func(string) string, lock, prefix, deploys func() string) {
+	restore := func(image func(string) string, lock, prefix, promo, deploys func() string) {
 		reportCIImageSkew, reportProviderLockSkew = image, lock
-		reportUnpinnedObjLabelPrefix, reportDeploymentsToApply = prefix, deploys
+		reportUnpinnedObjLabelPrefix, reportUnrunnablePromotionPipeline = prefix, promo
+		reportDeploymentsToApply = deploys
 	}
-	defer restore(reportCIImageSkew, reportProviderLockSkew, reportUnpinnedObjLabelPrefix, reportDeploymentsToApply)
+	defer restore(reportCIImageSkew, reportProviderLockSkew, reportUnpinnedObjLabelPrefix,
+		reportUnrunnablePromotionPipeline, reportDeploymentsToApply)
 
 	var gotRef string
 	reportCIImageSkew = func(ref string) string { reached["ci-image-skew"] = true; gotRef = ref; return "step: image" }
 	reportProviderLockSkew = func() string { reached["provider-lock-skew"] = true; return "step: lock" }
 	reportUnpinnedObjLabelPrefix = func() string { reached["obj-label-prefix"] = true; return "" }
+	reportUnrunnablePromotionPipeline = func() string { reached["promotion-pipeline"] = true; return "step: pipeline" }
 	reportDeploymentsToApply = func() string { reached["deployments-to-apply"] = true; return "step: apply" }
 
 	steps := reportWhatTheUpgradeCouldNotDo("v9.9.9")
 	// THE CHECKLIST IS BUILT FROM WHAT EACH REPORTER RETURNED, and a reporter with
 	// nothing to say contributes nothing — otherwise the last screen of an upgrade
 	// lists steps that do not apply, which is how a checklist stops being read.
-	want := []string{"step: image", "step: lock", "step: apply"}
+	want := []string{"step: image", "step: lock", "step: pipeline", "step: apply"}
 	if strings.Join(steps, "|") != strings.Join(want, "|") {
 		t.Errorf("next steps = %v, want %v — the reporter that returned \"\" must contribute "+
 			"nothing, and the order must be the order the operator has to act in", steps, want)
 	}
 
-	for _, want := range []string{"ci-image-skew", "provider-lock-skew", "obj-label-prefix", "deployments-to-apply"} {
+	for _, want := range []string{"ci-image-skew", "provider-lock-skew", "obj-label-prefix",
+		"promotion-pipeline", "deployments-to-apply"} {
 		if !reached[want] {
 			t.Errorf("%s was never reached — an operator would simply stop being told", want)
 		}

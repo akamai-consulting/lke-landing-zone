@@ -23,6 +23,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
@@ -491,6 +492,14 @@ func reportWhatTheUpgradeCouldNotDo(newRef string) []string {
 	// twenty minutes into a run, after the PR has already merged.
 	steps = appendStep(steps, reportUnpinnedObjLabelPrefix())
 
+	// promote.yml is `owned`, so copier leaves it alone — but what renders it moved
+	// with the pin, and a release that changes the generator leaves every instance
+	// in the field carrying a pipeline its own `--check` rejects. Nothing produces a
+	// diff to notice: the file is unchanged, which is the problem. Doctor below says
+	// so and its error is discarded by design, so without this the finding never
+	// reaches the checklist an operator actually reads.
+	steps = appendStep(steps, reportUnrunnablePromotionPipeline())
+
 	// Lever 5: what the upgrade has NOT done, which reads like something it did.
 	// The easiest of the three to miss, because nothing about the tree looks
 	// unfinished. The roots are gitignored and generated from the pin at every
@@ -637,6 +646,85 @@ func objPrefixCheck(env string) []string {
 		"llz tofu -- plan -var-file=" + env + ".tfvars -out=tfplan.bin",
 		"llz tofu -- show -json tfplan.bin | llz ci assert-upgrade-plan",
 	}
+}
+
+// reportUnrunnablePromotionPipeline warns when promote.yml can no longer run —
+// most often because THIS UPGRADE is what stopped it running.
+//
+// WHY IT BELONGS IN THIS FAMILY. promote.yml is `owned` in .template-manifest, so
+// copier will not touch it; what renders it is the GENERATOR inside the llz that
+// just moved. v0.0.45 rendered the empty placeholder for a one-deployment
+// instance and v0.0.47 renders a real single stage from the identical spec, so an
+// upgrade across that boundary leaves a promote.yml that is stale by definition
+// and produces no diff of its own to notice. Same shape as reportCIImageSkew and
+// reportProviderLockSkew: a value derived from the pin, left behind by a command
+// that cannot reach it.
+//
+// SAID HERE BECAUSE OF WHERE THE ALTERNATIVE SAYS IT. `llz doctor` already fails
+// on this (doctor_build_preflights.go, PR #511) and runs a few lines below —
+// but finishUpgrade discards doctor's error by design, so a fatal ✗ arrives as a
+// yellow advisory with the copier churn, the diffstat and a full readiness report
+// scrolling past on top. That is the exact gap printNextSteps exists to close, and
+// the checklist carried the other four reporters and not this one. Found on
+// akamai/gsap-apl's v0.0.45 → v0.0.47 upgrade: doctor said it, NEXT STEPS did not,
+// and the stale pipeline was caught by hand.
+//
+// THE VERDICT IS RunnableErr, NOT p.Changed, and the difference is not
+// hypothetical. Reporting only regenerable drift would list the WEAKER problem and
+// stay silent on the stronger one — a promote.yml naming a deployment that does not
+// exist dispatches stages that each die inside `llz render`, and it is not always
+// regenerable. Both fail `llz env pipeline --check` on the PR the operator is about
+// to open, so both belong on the checklist.
+//
+// ADVISORY, LIKE ITS NEIGHBOURS: the upgrade's work is already in the tree.
+// NOT --require-pipeline, for the reason doctor gives — "no pipeline yet" is the
+// state every fresh instance is in and is not something an upgrade broke.
+//
+// Package var for the same reason its neighbours are: the real one reads the tree.
+var reportUnrunnablePromotionPipeline = func() string {
+	tfDir, _, relPrefix := instancelayout.Detect()
+	plan, err := promote.PlanWorkflow(promote.DefaultDeps(), tfDir, relPrefix)
+	if err != nil {
+		// SAID, NOT SWALLOWED — the neighbouring lock reporter's rule. A spec or a
+		// promote.yml this cannot read yields no verdict at all, and silence here
+		// reads as "my pipeline is fine" for the one file that is about to be
+		// dispatched.
+		fmt.Fprintf(os.Stderr, "\n%s could not check this instance's promotion pipeline: %v\n", color.Yellow("!"), err)
+		fmt.Fprintln(os.Stderr, color.Dim("  `llz env pipeline --check` reports the same thing, and fails the upgrade PR."))
+		return ""
+	}
+	rerr := plan.RunnableErr(false)
+	if rerr == nil {
+		return ""
+	}
+	// THE HEADLINE HAS TO MATCH THE CAUSE. "This release generates a different
+	// promote.yml" is true of drift and false of a stage naming a deployment that
+	// does not exist — the release generated nothing there, and a sentence that
+	// blames the upgrade for the operator's edit sends them looking for a
+	// regression that is not in the diff.
+	if plan.Changed {
+		fmt.Fprintf(os.Stderr, "\n%s this release generates a different %s than the one this instance carries:\n",
+			color.Yellow("!"), color.Bold("promote.yml"))
+	} else {
+		fmt.Fprintf(os.Stderr, "\n%s this instance's %s cannot run as written:\n",
+			color.Yellow("!"), color.Bold("promote.yml"))
+	}
+	// The message is multi-line by design — it names each bad stage, the
+	// deployments that DO exist, and which remedy applies — so it is indented
+	// whole rather than flattened, exactly as doctor prints it.
+	for _, l := range strings.Split(rerr.Error(), "\n") {
+		fmt.Fprintf(os.Stderr, "    %s\n", l)
+	}
+	fmt.Fprintln(os.Stderr, color.Dim("  Until then `llz env pipeline --check` fails on the upgrade PR, and promote.yml's\n"+
+		"  own dispatch preflight refuses the run."))
+	// THE STEP NAMES THE COMMAND THAT ACTUALLY FIXES THIS TREE. Regenerable drift
+	// is one command; a pipeline llz cannot regenerate from is the operator's edit,
+	// and pointing that operator at a generator that will not write is the
+	// remedy-that-does-not-work shape objPrefixCheck above was rewritten for.
+	if plan.Changed {
+		return "Run " + color.Cyan("llz env pipeline") + " and commit promote.yml (this one blocks the PR)"
+	}
+	return "Fix promote.yml's stages by hand — see the detail above (this one blocks the PR)"
 }
 
 // reportDeploymentsToApply names the deployments the operator still has to
