@@ -242,3 +242,43 @@ func TestPodIsWarmingUpMatchesTheServiceClassifier(t *testing.T) {
 		t.Error("a CrashLoopBackOff sibling was masked by a warming-up container")
 	}
 }
+
+// TestPodBlockedReason_PartitionsWaitingReasons pins PodBlockedReason as the
+// exact complement of startingWaitReasons: every startup reason is NOT blocked,
+// and every "Kubernetes tried and cannot proceed" reason IS. The two share one
+// set, so a reason added to one and not the other changes the meaning of both.
+func TestPodBlockedReason_PartitionsWaitingReasons(t *testing.T) {
+	waiting := func(reason string) PodStatus {
+		return PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{
+			{Name: "openbao", State: ContainerState{Waiting: &StateDetail{Reason: reason}}}}}
+	}
+	for reason := range startingWaitReasons {
+		if got := PodBlockedReason(waiting(reason)); got != "" {
+			t.Errorf("PodBlockedReason(%s) = %q, want \"\" — it is a startup reason", reason, got)
+		}
+	}
+	for _, reason := range []string{
+		"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
+		"CreateContainerConfigError", "CreateContainerError", "InvalidImageName",
+	} {
+		if got := PodBlockedReason(waiting(reason)); got != "openbao:"+reason {
+			t.Errorf("PodBlockedReason(%s) = %q, want %q", reason, got, "openbao:"+reason)
+		}
+	}
+}
+
+// TestPodBlockedReason_IgnoresReadiness is the property that lets `wait-pods` use
+// this on OpenBao pods that CANNOT be Ready before `bao operator init` runs.
+func TestPodBlockedReason_IgnoresReadiness(t *testing.T) {
+	running := PodStatus{Phase: "Running", ContainerStatuses: []ContainerStatus{
+		{Name: "openbao", Ready: false, State: ContainerState{Running: &struct{}{}}}}}
+	if got := PodBlockedReason(running); got != "" {
+		t.Errorf("PodBlockedReason(running, ready=false) = %q, want \"\" — not-Ready is not wedged", got)
+	}
+	// An init container that has given up is still the pod's verdict.
+	initBlocked := PodStatus{Phase: "Pending", InitContainerStatuses: []ContainerStatus{
+		{Name: "init", State: ContainerState{Waiting: &StateDetail{Reason: "ImagePullBackOff"}}}}}
+	if got := PodBlockedReason(initBlocked); got != "init:ImagePullBackOff" {
+		t.Errorf("PodBlockedReason(init blocked) = %q, want init:ImagePullBackOff", got)
+	}
+}
