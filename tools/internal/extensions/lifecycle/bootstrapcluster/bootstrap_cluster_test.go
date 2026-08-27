@@ -938,3 +938,328 @@ func TestEncryptStockStorageClasses_RejectsBadClusterID(t *testing.T) {
 		t.Errorf("nothing may be deleted when the id is unusable, got %v", *deleted)
 	}
 }
+
+// ── LLZ's OWN block-storage-retain class: immutable-parameter drift ───────────
+
+// oldKeysBlockStorageRetainJSON is a block-storage-retain class as an LLZ older
+// than the CSI key correction created it: `/encryption: enabled` and
+// `/volume-tags`, the two keys the Linode driver silently ignores. Every live
+// cluster bootstrapped before that fix carries exactly this.
+const oldKeysBlockStorageRetainJSON = `{
+  "apiVersion":"storage.k8s.io/v1","kind":"StorageClass",
+  "metadata":{"name":"block-storage-retain",
+    "annotations":{"storageclass.kubernetes.io/is-default-class":"true"}},
+  "provisioner":"linodebs.csi.linode.com",
+  "reclaimPolicy":"Retain","volumeBindingMode":"Immediate","allowVolumeExpansion":true,
+  "parameters":{"linodebs.csi.linode.com/encryption":"enabled",
+                "linodebs.csi.linode.com/volume-tags":"block-storage,platform-support-services,lke637888"}
+}`
+
+// kubectlSCNotFound is what kubectl actually prints when the class is simply
+// absent — the greenfield case. The seam is cigate.RunCombined (stdout+stderr
+// merged), so this body is ALL the code gets to tell "there is no class here"
+// apart from "I could not ask".
+const kubectlSCNotFound = `Error from server (NotFound): storageclasses.storage.k8s.io "block-storage-retain" not found`
+
+// kubectlSCForbidden is a get that failed for a reason that is NOT absence. It
+// must never be read as greenfield: falling through to the plain apply on this
+// is what re-arms the immutable-parameters wedge.
+const kubectlSCForbidden = `Error from server (Forbidden): storageclasses.storage.k8s.io "block-storage-retain" is forbidden: User "system:serviceaccount:default:llz" cannot get resource "storageclasses"`
+
+// foreignBlockStorageRetainJSON is a `block-storage-retain` that is NOT ours — an
+// adopted cluster's own class that happens to share the name. LLZ must refuse it,
+// not recycle it.
+const foreignBlockStorageRetainJSON = `{
+  "apiVersion":"storage.k8s.io/v1","kind":"StorageClass",
+  "metadata":{"name":"block-storage-retain"},
+  "provisioner":"ebs.csi.aws.com",
+  "reclaimPolicy":"Retain","volumeBindingMode":"Immediate",
+  "parameters":{"type":"gp3","encrypted":"true"}
+}`
+
+// managedSCFake drives the get/delete/apply seam applyManagedBlockStorageClass
+// uses. Every field is an answer kubectl gives back through cigate.RunCombined.
+type managedSCFake struct {
+	// live is the class the apiserver returns as JSON. Empty means the get fails
+	// the way kubectl fails on an ABSENT class, unless getErr overrides it.
+	live string
+	// getErr, when set, is the combined body of a get that failed for some other
+	// reason — not the same thing as absent.
+	getErr      string
+	deleteFails bool
+	applyFails  bool
+}
+
+// deps records every mutating operation IN ORDER, so a test can assert that the
+// delete preceded the recreate rather than merely that both happened.
+func (f managedSCFake) deps() (bootstrapDeps, *[]string, *[]string) {
+	var ops, applied []string
+	d := bootstrapDeps{
+		kubectl: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			switch {
+			case strings.HasPrefix(line, "get storageclass "):
+				switch {
+				case f.getErr != "":
+					return f.getErr, false
+				case f.live == "":
+					return kubectlSCNotFound, false
+				}
+				return f.live, true
+			case strings.HasPrefix(line, "delete storageclass "):
+				ops = append(ops, "delete")
+				if f.deleteFails {
+					return "apiserver refused the delete", false
+				}
+				return "", true
+			}
+			return "", true
+		},
+		apply: func(y, _ string, _ bool) (string, bool) {
+			ops = append(ops, "apply")
+			applied = append(applied, y)
+			return "apiserver said no", !f.applyFails
+		},
+		now: time.Now, sleep: func(time.Duration) {},
+	}
+	return d, &ops, &applied
+}
+
+// TestApplyManagedBlockStorageClass_RecreatesOnImmutableParamDrift is THE
+// regression. StorageClass parameters are immutable, and the CSI parameter keys
+// this class ships changed (`/encryption`+`/volume-tags` → `/encrypted`+
+// `/volumeTags`). A plain apply over the old class is refused by the API server
+// with "parameters: Forbidden: updates to parameters are forbidden", and
+// bootstrap-cluster dies before the Argo bridge is placed — so on a live
+// deployment NO LLZ extra, OpenBao included, ever syncs. The class must be
+// deleted and recreated, in that order.
+func TestApplyManagedBlockStorageClass_RecreatesOnImmutableParamDrift(t *testing.T) {
+	d, ops, applied := managedSCFake{live: oldKeysBlockStorageRetainJSON}.deps()
+	stderr := captureStderr(t, func() {
+		if err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+			t.Fatalf("applyManagedBlockStorageClass: %v", err)
+		}
+	})
+	// The recreate is the only way this class's volumeTags can ever change, and
+	// `llz reap` keys on the lke<id> inside them — so it prints what it stamped.
+	if !strings.Contains(stderr, "volumeTags=") || !strings.Contains(stderr, "lke637888") {
+		t.Errorf("the recreate must print the volumeTags it stamped, stderr was:\n%s", stderr)
+	}
+	if len(*ops) != 2 || (*ops)[0] != "delete" || (*ops)[1] != "apply" {
+		t.Fatalf("a parameters change is immutable — expected delete then apply, got %v", *ops)
+	}
+	if len(*applied) != 1 {
+		t.Fatalf("expected exactly one recreate, got %d", len(*applied))
+	}
+
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte((*applied)[0]), &got); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := got["parameters"].(map[string]any)
+	// The corrected keys — the whole point of the recreate. The old spellings are
+	// accepted by the API server and ignored by the driver, so asserting only that
+	// "a class was applied" would pass while every Volume stayed unencrypted.
+	if params[csiEncryptedParam] != "true" {
+		t.Errorf("recreated class is not encrypted under %s: %v", csiEncryptedParam, params)
+	}
+	if params[csiVolumeTagsParam] != "block-storage,platform-support-services,lke637888" {
+		t.Errorf("%s = %v — reap keys on the lke<id> tag", csiVolumeTagsParam, params[csiVolumeTagsParam])
+	}
+	if _, stale := params["linodebs.csi.linode.com/encryption"]; stale {
+		t.Errorf("recreated class still carries the driver-ignored /encryption key: %v", params)
+	}
+	if _, stale := params["linodebs.csi.linode.com/volume-tags"]; stale {
+		t.Errorf("recreated class still carries the driver-ignored /volume-tags key: %v", params)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_GreenfieldAppliesWithoutDelete: with no live
+// class there is nothing to collide with. Deleting here would be a pointless
+// window in which a PVC can be created with no class to bind to.
+func TestApplyManagedBlockStorageClass_GreenfieldAppliesWithoutDelete(t *testing.T) {
+	d, ops, applied := managedSCFake{}.deps()
+	if err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+		t.Fatalf("applyManagedBlockStorageClass: %v", err)
+	}
+	if len(*ops) != 1 || (*ops)[0] != "apply" {
+		t.Fatalf("greenfield must apply without deleting, got %v", *ops)
+	}
+	if !strings.Contains((*applied)[0], "block-storage-retain") {
+		t.Errorf("applied manifest is not the block-storage-retain class:\n%s", (*applied)[0])
+	}
+}
+
+// TestApplyManagedBlockStorageClass_IdempotentWhenAlreadyCorrect: a re-bootstrap
+// of a correct cluster must not churn the class. The live fixture is built by
+// running the REAL renderer and converting it — restating the parameters here
+// would let the test agree with itself while the shipped comparison drifts.
+func TestApplyManagedBlockStorageClass_IdempotentWhenAlreadyCorrect(t *testing.T) {
+	y, err := renderBlockStorageClass("637888")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveJSON, err := yaml.YAMLToJSON([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ops, _ := managedSCFake{live: string(liveJSON)}.deps()
+	if err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+		t.Fatalf("applyManagedBlockStorageClass: %v", err)
+	}
+	// One plain apply, no delete: mutable drift (annotations) still converges.
+	if len(*ops) != 1 || (*ops)[0] != "apply" {
+		t.Fatalf("an already-correct class must be applied in place, never deleted; got %v", *ops)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_RecreateFailureIsLoud pins the one genuinely
+// dangerous path: the class is deleted before it can be recreated, so a failed
+// recreate leaves the cluster with NO default class and every PVC naming it
+// Pending. That must surface as a hard error naming the class and the consequence.
+func TestApplyManagedBlockStorageClass_RecreateFailureIsLoud(t *testing.T) {
+	d, _, _ := managedSCFake{live: oldKeysBlockStorageRetainJSON, applyFails: true}.deps()
+	err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d)
+	if err == nil {
+		t.Fatal("a failed recreate leaves the cluster with no block-storage-retain class — it must hard-fail")
+	}
+	if !strings.Contains(err.Error(), "block-storage-retain") || !strings.Contains(err.Error(), "Pending") {
+		t.Errorf("error must name the class and the consequence, got: %v", err)
+	}
+}
+
+// TestImmutableStorageClassDiff_IgnoresMutableFields: allowVolumeExpansion and
+// metadata ARE mutable. Treating them as drift would delete+recreate the cluster
+// default on every bootstrap that so much as re-labels the class.
+func TestImmutableStorageClassDiff_IgnoresMutableFields(t *testing.T) {
+	expand := true
+	base := stockStorageClass{
+		Name: "block-storage-retain", Provisioner: linodeCSIProvisioner,
+		ReclaimPolicy: "Retain", VolumeBindingMode: "Immediate",
+		Parameters: map[string]string{csiEncryptedParam: "true"},
+	}
+	live := base
+	live.AllowVolumeExpansion = &expand
+	live.IsDefault = false
+	want := base
+	want.IsDefault = true
+	if diff := immutableStorageClassDiff(live, want); len(diff) != 0 {
+		t.Errorf("allowVolumeExpansion/metadata are mutable and must not force a recreate, got %v", diff)
+	}
+	// ...but a real immutable field must still be caught.
+	want.ReclaimPolicy = "Delete"
+	if diff := immutableStorageClassDiff(live, want); len(diff) != 1 || diff[0] != "reclaimPolicy" {
+		t.Errorf("reclaimPolicy is immutable and must be reported, got %v", diff)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_RefusesToRecycleAForeignClass: an adopted
+// cluster can already carry its OWN class named block-storage-retain. Every
+// immutable field disagrees with ours, so the drift check alone would delete it —
+// destroying an adopter's storage configuration to fix a problem they do not have.
+// The sibling encryptStockStorageClasses refuses a non-Linode-CSI class for the
+// same reason; this must too, and nothing may be deleted or applied over it.
+func TestApplyManagedBlockStorageClass_RefusesToRecycleAForeignClass(t *testing.T) {
+	d, ops, _ := managedSCFake{live: foreignBlockStorageRetainJSON}.deps()
+	err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d)
+	if err == nil {
+		t.Fatal("a same-named class owned by someone else must be reported, not recycled")
+	}
+	if !strings.Contains(err.Error(), "ebs.csi.aws.com") {
+		t.Errorf("error must name the foreign provisioner so the collision is diagnosable, got: %v", err)
+	}
+	if len(*ops) != 0 {
+		t.Fatalf("a class LLZ did not create must never be deleted or overwritten, got %v", *ops)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_UnreadableGetIsNotSilentlyGreenfield: the get
+// seam reports failure for BOTH "no such class" and "I could not ask" (RBAC, an
+// apiserver blip). Only the first is greenfield. We still fall through to the
+// plain apply — a blip must not fail a bootstrap that would otherwise succeed —
+// but on a brownfield cluster that apply dies on "parameters: Forbidden", and
+// without this warning the operator has no way to tell why the recreate never ran.
+func TestApplyManagedBlockStorageClass_UnreadableGetIsNotSilentlyGreenfield(t *testing.T) {
+	d, ops, _ := managedSCFake{getErr: kubectlSCForbidden}.deps()
+	var err error
+	stderr := captureStderr(t, func() {
+		err = applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d)
+	})
+	if err != nil {
+		t.Fatalf("a get blip must not fail the bootstrap on its own: %v", err)
+	}
+	if len(*ops) != 1 || (*ops)[0] != "apply" {
+		t.Fatalf("nothing may be deleted on a class we could not read, got %v", *ops)
+	}
+	if !strings.Contains(stderr, "NOT the same as it being absent") {
+		t.Errorf("an unreadable get must not pass silently as greenfield, stderr was:\n%s", stderr)
+	}
+	// ...and a genuine absence is NOT worth a warning, or every greenfield bootstrap
+	// cries wolf.
+	d2, _, _ := managedSCFake{}.deps()
+	quiet := captureStderr(t, func() {
+		if err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d2); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(quiet, "WARNING") {
+		t.Errorf("an absent class is the greenfield case and must warn about nothing, got:\n%s", quiet)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_DeleteFailureStopsBeforeApplying: if the
+// delete fails the old class is STILL THERE, and the apply that follows would die
+// on the same "parameters: Forbidden" the delete existed to get past. Fail on the
+// delete, naming it, rather than reporting the apply's confusing symptom.
+func TestApplyManagedBlockStorageClass_DeleteFailureStopsBeforeApplying(t *testing.T) {
+	d, ops, _ := managedSCFake{live: oldKeysBlockStorageRetainJSON, deleteFails: true}.deps()
+	err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "637888"}, d)
+	if err == nil {
+		t.Fatal("a failed delete leaves the un-updatable class in place — it must hard-fail")
+	}
+	if !strings.Contains(err.Error(), "delete StorageClass block-storage-retain") {
+		t.Errorf("error must name the delete as what failed, got: %v", err)
+	}
+	if len(*ops) != 1 || (*ops)[0] != "delete" {
+		t.Fatalf("no apply may follow a delete that did not happen, got %v", *ops)
+	}
+}
+
+// TestApplyManagedBlockStorageClass_RefusesAClassOwnedByAnotherCluster: a live
+// class that ALREADY carries the corrected keys and an `lke<id>` tag for some
+// other cluster cannot be a stale copy of ours — cluster_id is fixed for a
+// cluster's life, so it means --cluster-id does not describe the cluster this
+// kubeconfig reaches. Before this fix, parameter immutability made re-stamping
+// that tag impossible; the recreate removes that stop, and `llz reap` deletes
+// Volumes whose tagged cluster is gone. Getting this wrong reaps live Volumes.
+func TestApplyManagedBlockStorageClass_RefusesAClassOwnedByAnotherCluster(t *testing.T) {
+	y, err := renderBlockStorageClass("637888")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveJSON, err := yaml.YAMLToJSON([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ops, _ := managedSCFake{live: string(liveJSON)}.deps()
+	err = applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "999111"}, d)
+	if err == nil {
+		t.Fatal("re-tagging this class for a cluster it does not belong to makes `llz reap` delete live Volumes — it must hard-fail")
+	}
+	if !strings.Contains(err.Error(), "637888") || !strings.Contains(err.Error(), "999111") {
+		t.Errorf("error must name BOTH ids so the operator can tell which is wrong, got: %v", err)
+	}
+	if len(*ops) != 0 {
+		t.Fatalf("nothing may be deleted or applied when the ids disagree, got %v", *ops)
+	}
+
+	// ...but the class this whole function exists to repair — pre-correction keys,
+	// so NO lke<id> token under the new volumeTags key — must still be recreated.
+	d2, ops2, _ := managedSCFake{live: oldKeysBlockStorageRetainJSON}.deps()
+	if err := applyManagedBlockStorageClass(bootstrapClusterOpts{clusterID: "999111"}, d2); err != nil {
+		t.Fatalf("a pre-correction class carries no tag under the new key and must still be repaired: %v", err)
+	}
+	if len(*ops2) != 2 || (*ops2)[0] != "delete" {
+		t.Fatalf("expected delete then apply, got %v", *ops2)
+	}
+}
