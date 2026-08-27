@@ -302,3 +302,33 @@ var TransientMarkers = []string{
 	"error sending request",        // request never delivered to the node
 	"TLS handshake timeout",        // apiserver↔kubelet handshake stalled
 }
+
+// PodStateMarkers are kubelet answers that there is NO EXEC TARGET: the stream
+// reached the node and the kubelet replied, definitively, that the pod has no
+// such container right now. They are checked BEFORE TransientMarkers and win,
+// because the kubelet phrases them as
+//
+//	unable to upgrade connection: container not found ("openbao")
+//
+// whose PREFIX is the `unable to upgrade connection` transport marker above. A
+// plain substring match therefore reads an authoritative "it isn't there" as a
+// SPDY blip, and the two want opposite handling.
+//
+// WHAT THAT COST. On akamai/gsap-apl's prod cluster one OpenBao replica sat in
+// CrashLoopBackOff for eight days. Every bao exec against it burned the full
+// transport budget — 24 attempts, ~5 minutes, PER exec call, and the seal/token
+// lifecycle makes several — and then reported a transport failure, pointing the
+// operator at konnectivity and the node network. The pod had no container at all.
+//
+// STILL A RETRY, NOT A HARD FAIL. `container not found` is genuine for a second
+// or two while a pod that just reached Running finishes creating its container,
+// so this keeps a SHORT budget (podStateRetries) rather than failing on the first
+// answer. What it must not do is spend the konnectivity-warmup budget — measured
+// in minutes — on a question the kubelet already answered.
+//
+// Retrying stays safe for the same reason it is safe for TransientMarkers, and
+// more obviously so: no container means the in-pod command certainly never ran.
+var PodStateMarkers = []string{
+	"container not found",   // kubelet: no container by that name in this pod
+	"container not running", // kubelet: the container exists but has exited
+}

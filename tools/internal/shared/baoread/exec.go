@@ -79,7 +79,25 @@ var (
 // as platform.DeliveredDocs and manifestguard.BootstrapValuePlaceholders.
 
 func isTransientExecErr(stderr string) bool {
+	// Pod-state answers win: the kubelet phrases them with the
+	// `unable to upgrade connection` transport marker as a PREFIX, so checking
+	// TransientMarkers first would classify every one of them as a blip.
+	if isPodStateExecErr(stderr) {
+		return false
+	}
 	for _, m := range TransientMarkers {
+		if strings.Contains(stderr, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPodStateExecErr reports whether the kubelet answered that there is no
+// container to exec into. See PodStateMarkers for why this is not a transport
+// failure even though it is worded like one.
+func isPodStateExecErr(stderr string) bool {
+	for _, m := range PodStateMarkers {
 		if strings.Contains(stderr, m) {
 			return true
 		}
@@ -105,6 +123,17 @@ func isTransientExecErr(stderr string) bool {
 // before konnectivity registered — one attempt of margin — so the budget was
 // widened again from 18 to 24 (~5m) to keep a slower-than-usual warmup from
 // failing the bootstrap on the last try.
+// podStateRetries is the SEPARATE, much smaller budget for "the kubelet says
+// there is no container" (PodStateMarkers). It is not the konnectivity budget
+// because it is not the konnectivity question: the node answered.
+//
+// A pod that has just reached Running can be a second or two from having its
+// container, so this is not zero. But past a handful of attempts the answer stops
+// being "not yet" and becomes "not at all" — a pod that is Pending, crashlooping,
+// or terminating — and no amount of further waiting changes it. Six attempts with
+// the shared backoff is ~42s; the transport budget is ~5m, per exec call.
+var podStateRetries = 6
+
 var (
 	baoExecRetries = 24
 	baoExecBackoff = func(attempt int) time.Duration {
@@ -123,11 +152,32 @@ var (
 func execResilient(pod, token, stdin string, args ...string) (stdout, stderr string, err error) {
 	for attempt := 1; ; attempt++ {
 		stdout, stderr, err = ExecRaw(pod, token, stdin, args...)
-		if err == nil || attempt >= baoExecRetries || !isTransientExecErr(stderr) {
+		if err == nil {
 			return stdout, stderr, err
 		}
-		fmt.Fprintf(os.Stderr, "llz: transient exec error on %s (attempt %d/%d), retrying: %s\n",
-			pod, attempt, baoExecRetries, strings.TrimSpace(stderr))
+
+		// Two retry classes with two budgets — see PodStateMarkers. Pod-state is
+		// tested first because its wording embeds a transport marker.
+		kind, budget := "transient", baoExecRetries
+		if isPodStateExecErr(stderr) {
+			kind, budget = "pod-state", podStateRetries
+		} else if !isTransientExecErr(stderr) {
+			return stdout, stderr, err // a real bao error: never retried
+		}
+
+		if attempt >= budget {
+			if kind == "pod-state" {
+				// Say what this actually is. The kubelet's own wording starts with
+				// "unable to upgrade connection", which reads as a network fault and
+				// sends the operator to konnectivity instead of to the pod.
+				fmt.Fprintf(os.Stderr,
+					"llz: %s has no container to exec into after %d attempts — the kubelet answered, so this is POD STATE, not a network fault. Inspect it: kubectl -n llz-openbao describe pod %s / kubectl -n llz-openbao logs %s -c openbao --previous\n",
+					pod, budget, pod, pod)
+			}
+			return stdout, stderr, err
+		}
+		fmt.Fprintf(os.Stderr, "llz: %s exec error on %s (attempt %d/%d), retrying: %s\n",
+			kind, pod, attempt, budget, strings.TrimSpace(stderr))
 		Sleep(baoExecBackoff(attempt))
 	}
 }
