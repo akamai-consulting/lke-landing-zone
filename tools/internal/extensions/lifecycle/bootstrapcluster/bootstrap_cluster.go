@@ -37,6 +37,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
 	"sigs.k8s.io/yaml"
 )
@@ -389,7 +390,7 @@ func waitManagedArgoReady(d bootstrapDeps) error {
 // operator-facing replacement for `terraform plan` on this layer.
 func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("→ (dry-run) bootstrap-cluster (managed App Platform / apl_enabled) env=%s kubeconfig=%s\n", o.env, kubeconfigPath)
-	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (cluster DEFAULT; volumeTags lke<id> rendered from --cluster-id; llzReconciler sc-demote keeps LKE's linode-block-storage-retain non-default)\n")
+	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (cluster DEFAULT; volumeTags lke<id> rendered from --cluster-id; llzReconciler sc-demote keeps LKE's linode-block-storage-retain non-default) → DELETE+RECREATE instead if a live class disagrees on an immutable field (parameters, provisioner, reclaimPolicy, volumeBindingMode); a live class with a FOREIGN provisioner is refused, not deleted\n")
 	fmt.Printf("  0a. SPIKE: delete+recreate LKE's stock StorageClasses (%s) with encryption + lke<id> volumeTags — parameters are immutable, so this is the only way to fix them, and the only lever that lands BEFORE apl-core creates its PVCs\n",
 		strings.Join(lkeStockStorageClasses, ", "))
 	fmt.Printf("  0b. kubectl apply --server-side pvc-deny-untaggable-clone ValidatingAdmissionPolicy + binding\n")
@@ -510,6 +511,13 @@ var lkeStockStorageClasses = []string{"linode-block-storage", "linode-block-stor
 // applied in place (idempotent, and mutable drift such as the is-default-class
 // annotation still converges), because a needless delete reopens the window in
 // which a PVC can be created with no class to bind to.
+//
+// AND ONLY ON A CLASS WE OWN. A live class provisioned by something other than the
+// Linode CSI driver is an adopter's own `block-storage-retain`, not a stale copy of
+// ours; that is a name collision to report, never a class to recycle. Nor is one
+// already tagged for a DIFFERENT lke<id>: parameter immutability used to be what
+// stopped a wrong --cluster-id from re-stamping that tag, and `llz reap` deletes
+// Volumes whose tagged cluster is gone — so both cases stop the bootstrap instead.
 func applyManagedBlockStorageClass(o bootstrapClusterOpts, d bootstrapDeps) error {
 	scYAML, err := renderBlockStorageClass(o.clusterID)
 	if err != nil {
@@ -523,14 +531,65 @@ func applyManagedBlockStorageClass(o bootstrapClusterOpts, d bootstrapDeps) erro
 	// Absent is the greenfield case — nothing to collide with. An EMPTY body on a
 	// successful get counts as absent too: never delete a class whose definition
 	// could not actually be read back.
-	if raw, ok := d.kubectl("get", "storageclass", want.Name, "-o", "json"); ok && strings.TrimSpace(raw) != "" {
+	raw, ok := d.kubectl("get", "storageclass", want.Name, "-o", "json")
+	if !ok && !strings.Contains(strings.ToLower(raw), "not found") {
+		// A get that failed for a reason OTHER than absence — an RBAC denial, an
+		// apiserver blip — is NOT evidence the class isn't there. Fall through to the
+		// plain apply anyway, because a blip must not fail a bootstrap that would
+		// otherwise succeed; but say so HERE. If this cluster is in fact brownfield,
+		// that apply dies on "parameters: Forbidden" and the reason it was never
+		// recreated is this line, not the apply's.
+		fmt.Fprintf(os.Stderr, "  WARNING: could not read the live %s StorageClass — this is NOT the same as it being absent, so an immutable-field recreate may be skipped:\n%s", want.Name, raw)
+	}
+	if ok && strings.TrimSpace(raw) != "" {
 		live, err := parseStorageClass([]byte(raw))
 		if err != nil {
 			return fmt.Errorf("parse live StorageClass %s: %w", want.Name, err)
 		}
+		// NEVER recycle a class LLZ did not create. `block-storage-retain` is our
+		// name, but an adopted cluster can already carry a same-named class of its
+		// own, and deleting THAT to install ours would destroy an adopter's storage
+		// configuration to fix a problem they do not have. encryptStockStorageClasses
+		// below refuses a non-Linode-CSI class for the same reason. Before this
+		// function existed the plain apply stopped here too — on the apiserver's
+		// `provisioner: Forbidden` — so this keeps that stop, it just says why.
+		if live.Provisioner != linodeCSIProvisioner {
+			return fmt.Errorf("StorageClass %s already exists on this cluster provisioned by %q, not %s "+
+				"— refusing to delete a class LLZ did not create. Rename or remove the existing class, "+
+				"then re-run bootstrap-cluster", want.Name, live.Provisioner, linodeCSIProvisioner)
+		}
+		// AND ONLY ON THIS CLUSTER'S CLASS. A live class already carrying an
+		// `lke<id>` ownership tag for a DIFFERENT cluster is not stale — it is
+		// evidence that --cluster-id does not describe the cluster this kubeconfig
+		// points at. Recreating would stamp the wrong id into every Volume the class
+		// provisions from then on, and `llz reap`'s cluster-liveness gate keys on
+		// exactly that tag: Volumes tagged for a cluster that no longer exists are
+		// reaped, while these are still attached HERE. Parameter immutability used to
+		// make that impossible; the recreate removes that stop, so check it.
+		//
+		// Only the `lke<id>` token is compared, via the same parse reap classifies
+		// with — the static tags around it are free to change, and a class predating
+		// the CSI key correction has no token under this key at all (it used
+		// `/volume-tags`), which is the very case this function exists to repair.
+		liveOwner := linode.LKEIDFromTags(strings.Split(live.Parameters[csiVolumeTagsParam], ","))
+		wantOwner := linode.LKEIDFromTags(strings.Split(want.Parameters[csiVolumeTagsParam], ","))
+		if liveOwner != "" && liveOwner != wantOwner {
+			return fmt.Errorf("StorageClass %s on this cluster is tagged for LKE cluster lke%s, but --cluster-id says lke%s "+
+				"— refusing to recreate it. One of the two is wrong, and stamping the wrong id into this class's volumeTags "+
+				"would make `llz reap` treat every Volume it provisions as owned by a cluster that isn't this one. Point "+
+				"--cluster-id (or $LKE_CLUSTER_ID) at the `cluster` workspace's cluster_id output for the cluster this "+
+				"kubeconfig reaches", want.Name, liveOwner, wantOwner)
+		}
 		if diff := immutableStorageClassDiff(live, want); len(diff) > 0 {
 			fields := strings.Join(diff, ", ")
 			fmt.Fprintf(os.Stderr, "→ %s: live %s disagree with the desired class (delete+recreate; those fields are immutable)\n", want.Name, fields)
+			// Name the two CSI parameters old→new, the way encryptStockStorageClasses
+			// does. The lke<id> mismatch is already refused above, but the tags AROUND
+			// it are free to change, and this recreate is the only thing that can ever
+			// change them — so what got stamped is never left to inference.
+			fmt.Fprintf(os.Stderr, "   encrypted=%q→%q volumeTags=%q→%q\n",
+				live.Parameters[csiEncryptedParam], want.Parameters[csiEncryptedParam],
+				live.Parameters[csiVolumeTagsParam], want.Parameters[csiVolumeTagsParam])
 			if out, ok := d.kubectl("delete", "storageclass", want.Name, "--ignore-not-found"); !ok {
 				fmt.Fprint(os.Stderr, out)
 				return fmt.Errorf("delete StorageClass %s (needed because %s are immutable)", want.Name, fields)
