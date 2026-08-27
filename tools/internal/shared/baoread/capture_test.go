@@ -30,3 +30,23 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	return b.String()
 }
+
+// captureStderr is captureStdout's twin for the diagnostics execResilient writes
+// to stderr. Same pipe-swap, same small-output assumption.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = orig
+	var b strings.Builder
+	if _, err := io.Copy(&b, r); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
+}

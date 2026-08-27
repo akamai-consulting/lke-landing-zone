@@ -281,3 +281,93 @@ func TestWaitForAutoUnsealFollowerTimeoutDumpsLogs(t *testing.T) {
 // TestCIBaoCommandWiring executes every `llz ci bao-*` cobra command end to
 // end (flag parsing → RunE) under --dry-run with the exec/gh seams stubbed,
 // pinning the Use strings and required-flag errors the workflows depend on.
+
+// ── "no container to exec into" is not a transport failure ───────────────────
+
+// kubeletNoContainer is the kubelet's verbatim answer when a pod has no such
+// container. Note the PREFIX: `unable to upgrade connection` is also the SPDY
+// transport marker, which is exactly how this came to be retried as a blip.
+const kubeletNoContainer = `error: Internal error occurred: unable to upgrade connection: container not found ("openbao")`
+
+// TestPodStateExecErrIsNotTransient is the classification gate. On
+// akamai/gsap-apl one OpenBao replica sat in CrashLoopBackOff for eight days and
+// every exec against it spent the full konnectivity budget before reporting a
+// transport fault — for a pod that had no container at all.
+func TestPodStateExecErrIsNotTransient(t *testing.T) {
+	if !isPodStateExecErr(kubeletNoContainer) {
+		t.Errorf("isPodStateExecErr(%q) = false — the kubelet answered; this is pod state", kubeletNoContainer)
+	}
+	if isTransientExecErr(kubeletNoContainer) {
+		t.Errorf("isTransientExecErr(%q) = true — its transport-marker PREFIX must not win over the kubelet's answer", kubeletNoContainer)
+	}
+	// The transport cases it is worded like must stay transient, including the
+	// `unable to upgrade connection` family this now has to disambiguate.
+	for _, s := range []string{
+		"unable to upgrade connection: pod does not exist",
+		"error dialing backend: remote error",
+		"No agent available",
+	} {
+		if isPodStateExecErr(s) {
+			t.Errorf("isPodStateExecErr(%q) = true, want false", s)
+		}
+		if !isTransientExecErr(s) {
+			t.Errorf("isTransientExecErr(%q) = false — narrowing must not cost a real transport case", s)
+		}
+	}
+}
+
+// TestBaoExecResilientPodStateUsesShortBudget pins the budget SPLIT. The cost of
+// the old behaviour was not one wasted wait but the konnectivity budget spent per
+// exec call, and the seal/token lifecycle makes several against each pod.
+func TestBaoExecResilientPodStateUsesShortBudget(t *testing.T) {
+	withBaoSleep(t)
+	calls := 0
+	withBaoExecRaw(t, func(_, _, _ string, _ ...string) (string, string, error) {
+		calls++
+		return "", kubeletNoContainer, errors.New("exit 1")
+	})
+	var err error
+	out := captureStderr(t, func() { _, _, err = execResilient("platform-openbao-2", "", "") })
+	if err == nil {
+		t.Fatal("expected the error to surface once the pod-state budget is spent")
+	}
+	if calls != podStateRetries {
+		t.Errorf("raw exec called %d times, want podStateRetries=%d (not baoExecRetries=%d)",
+			calls, podStateRetries, baoExecRetries)
+	}
+	if podStateRetries >= baoExecRetries {
+		t.Errorf("podStateRetries=%d must be well under baoExecRetries=%d — the node already answered",
+			podStateRetries, baoExecRetries)
+	}
+	// The diagnostic has to name the pod and say this is pod state. The kubelet's
+	// own wording sends the reader to konnectivity; that misdirection is the bug.
+	if !strings.Contains(out, "platform-openbao-2") || !strings.Contains(out, "POD STATE") {
+		t.Errorf("give-up diagnostic must name the pod and the class, got:\n%s", out)
+	}
+	if !strings.Contains(out, "describe pod") {
+		t.Errorf("give-up diagnostic must point at the pod, got:\n%s", out)
+	}
+}
+
+// TestBaoExecResilientPodStateStillRetriesBriefly: a pod that has just reached
+// Running can be a second from having its container, so this must not fail on the
+// first answer. The short budget is a budget, not a hard stop.
+func TestBaoExecResilientPodStateStillRetriesBriefly(t *testing.T) {
+	withBaoSleep(t)
+	calls := 0
+	withBaoExecRaw(t, func(_, _, _ string, _ ...string) (string, string, error) {
+		calls++
+		if calls < 3 {
+			return "", kubeletNoContainer, errors.New("exit 1")
+		}
+		return `{"sealed":false}`, "", nil
+	})
+	var err error
+	captureStderr(t, func() { _, _, err = execResilient("platform-openbao-2", "", "") })
+	if err != nil {
+		t.Fatalf("a container that appears on attempt 3 must succeed, got: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("raw exec called %d times, want 3 (2 pod-state + 1 success)", calls)
+	}
+}
