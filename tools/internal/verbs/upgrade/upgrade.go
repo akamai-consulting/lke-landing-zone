@@ -426,13 +426,45 @@ func printNextSteps(steps []string) {
 // next and the two must read as the same instruction.
 var reportCIImageSkew = func(ref string) string {
 	local := cli.ReadEnvFile(".llz/vars.env")
-	skew := templatecommit.StaleCIImageVars(ref, func(k string) string { return local[k] })
-	if len(skew) == 0 {
-		return ""
-	}
+	skew, unchecked := templatecommit.CIImageSkewReport(ref, func(k string) string { return local[k] })
 	repo := "<owner>/<instance>"
 	if a, _ := answers.Read("."); a != nil && strings.Contains(a.InstanceRepo, "/") {
 		repo = a.InstanceRepo
+	}
+	// ── COULD NOT TELL IS NOT THE SAME AS NOTHING TO DO ───────────────────────
+	//
+	// This used to return "" here, which put the upgrade's most time-critical
+	// instruction behind a silent abstention. computeCIImageVars has no
+	// commit-pinned answer when the new ref does not resolve or when the images
+	// for the commit it names are not published yet — and the second is the NORMAL
+	// state in the minutes after a release, while build-images.yml is still
+	// running. That is precisely when someone runs `llz upgrade`.
+	//
+	// Measured on akamai/gsap-apl's v0.0.47 → v0.0.48: NEXT STEPS listed three
+	// items and none was the re-pin; `llz tokens --env prod --yes` then re-pinned
+	// BOTH variables off the previous commit. The upgrade had the pin, had the
+	// recorded values, and reported nothing.
+	//
+	// IT STILL ADVISES NO RE-PIN, and that restraint is the pre-existing one this
+	// keeps: with no commit-pinned answer the only thing to re-pin ONTO is the
+	// floating tags, and #407 exists to keep instances off those. `llz tokens`
+	// refuses to write them for the same reason, so the step says re-run it once
+	// the images exist rather than naming a value.
+	if unchecked != "" {
+		repin := color.Cyan("llz tokens --env " + oneOrPlaceholder(instanceDeployments()) + " --yes")
+		fmt.Fprintf(os.Stderr, "\n%s could not check the ci images this instance should run: %s\n",
+			color.Yellow("!"), unchecked)
+		fmt.Fprintf(os.Stderr, "  TF_IMAGE / KUBE_IMAGE are computed FROM the pin this upgrade just moved, so they are\n"+
+			"  stale by construction until something re-pins them. CI reads them as %s repo\n"+
+			"  variables, which this command reads no more than it writes. Re-run this once the\n"+
+			"  release's images are published:\n", repo)
+		fmt.Fprintf(os.Stderr, "    %s\n", repin)
+		fmt.Fprintln(os.Stderr, color.Dim("  It re-pins only a commit-pinned answer, so running it early is safe: it writes\n"+
+			"  nothing until the images exist. Until then the first pipeline run fails `llz ci assert-image-fresh`."))
+		return "Re-pin the CI image variables once the release images publish: " + repin + " (unverified this run)"
+	}
+	if len(skew) == 0 {
+		return ""
 	}
 	fmt.Fprintf(os.Stderr, "\n%s the new pin moved the ci images this instance should run — %d variable(s) still name the old commit:\n",
 		color.Yellow("!"), len(skew))

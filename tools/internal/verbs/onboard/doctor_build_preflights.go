@@ -186,7 +186,20 @@ func checkCIImagePins(tokensCmd string, recorded func(string) string) error {
 			color.Dim("TF_IMAGE / KUBE_IMAGE not set yet — `llz tokens` computes them (reported above)"))
 		return nil
 	}
-	skew := templatecommit.StaleCIImageVars(ref, recorded)
+	skew, unchecked := templatecommit.CIImageSkewReport(ref, recorded)
+	// A TICK IS AN ASSERTION, and this one was printed for a comparison that never
+	// ran. computeCIImageVars has no commit-pinned answer when the pin does not
+	// resolve or its images are not published yet, and the old slice-only call
+	// returned that identically to "both variables already name this pin" — so
+	// doctor announced the images matched while `llz tokens`, asked the same
+	// question minutes later, re-pinned both. Reported, not decided: doctor cannot
+	// see whether the variables are right, so it must not fail on a guess either.
+	if unchecked != "" {
+		fmt.Printf("  %s  %s\n", color.Dim("—"),
+			color.Dim("TF_IMAGE / KUBE_IMAGE not verified — "+unchecked))
+		fmt.Printf("     %s\n", color.Dim("re-run "+tokensCmd+" once the release's images are published"))
+		return nil
+	}
 	if len(skew) == 0 {
 		report("TF_IMAGE / KUBE_IMAGE match the template pin", true)
 		return nil

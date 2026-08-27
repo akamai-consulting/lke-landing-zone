@@ -357,16 +357,47 @@ type ImageSkew struct{ Name, Have, Want string }
 //     hand-chosen image is a decision someone made on purpose, and telling them
 //     it is wrong — or worse, silently overwriting it — is not this function's
 //     call to make.
-//   - !pinned says nothing at all. That is computeCIImageVars reporting it has
+//   - !pinned ADVISES NOTHING. That is computeCIImageVars reporting it has
 //     no commit-pinned answer — the ref did not resolve, or the images for the
 //     commit it names were never published — and the floating tags it returns
 //     instead are the very thing #407 exists to keep instances off. Advising a
 //     re-pin onto them would make a correctly pinned instance worse. (An
 //     unreachable REGISTRY is not this case: ciImageVarsForTag deliberately
 //     keeps the pin when it could not ask, so the skew is still reported.)
+//
+// ADVISING NOTHING IS NOT THE SAME AS REPORTING NOTHING, and collapsing the two
+// is what CIImageSkewReport below exists to undo. This function answers with a
+// slice, so "no skew" and "could not tell" arrive identically — and every caller
+// then presents the second as the first: `llz upgrade` left the re-pin off its
+// NEXT STEPS entirely and `llz doctor` printed a green "TF_IMAGE / KUBE_IMAGE
+// match the template pin" for a comparison that never ran. Measured on
+// akamai/gsap-apl's v0.0.47 → v0.0.48 upgrade: the checklist named three steps,
+// none of them the re-pin, and `llz tokens` then found BOTH variables naming the
+// previous commit. Callers that must not overstate use CIImageSkewReport; this
+// one stays as it is for `llz tokens`, whose job is to re-pin what it can compute
+// and which correctly does nothing when there is no pinned answer to write.
 func StaleCIImageVars(ref string, recorded func(string) string) []ImageSkew {
+	skew, _ := CIImageSkewReport(ref, recorded)
+	return skew
+}
+
+// CIImageSkewReport is StaleCIImageVars with the answer it throws away: unchecked
+// is non-empty exactly when no comparison could be made against a commit-pinned
+// value, and says why in computeCIImageVars' own words.
+//
+// THE TWO STATES A SLICE CANNOT DISTINGUISH. An empty slice means "the recorded
+// variables already name this pin's commit" OR "there is no commit-pinned answer
+// to compare them to" — a green verdict and an abstention, returned identically.
+// The second is not rare and not benign: it is the NORMAL state in the minutes
+// after a release, while build-images.yml is still publishing the images for the
+// commit the new pin names, which is exactly when an operator runs `llz upgrade`.
+//
+// unchecked is empty when nothing is recorded at all. That genuinely is nothing
+// to report — filling the variables is ComputeAndReportImageVars' job, and a
+// fresh instance has not reached it yet.
+func CIImageSkewReport(ref string, recorded func(string) string) (skew []ImageSkew, unchecked string) {
 	if ref = strings.TrimSpace(ref); ref == "" {
-		return nil
+		return nil, ""
 	}
 	// Read what is recorded BEFORE resolving anything. A fresh instance has neither
 	// variable set — filling those is ComputeAndReportImageVars' job, not this
@@ -380,11 +411,15 @@ func StaleCIImageVars(ref string, recorded func(string) string) []ImageSkew {
 		}
 	}
 	if empty {
-		return nil
+		return nil, ""
 	}
-	tfImage, kubeImage, pinned, _ := computeCIImageVars(InstanceTemplateRepo(), ref)
+	tfImage, kubeImage, pinned, reason := computeCIImageVars(InstanceTemplateRepo(), ref)
 	if !pinned {
-		return nil
+		// The reason is the whole point of this return. It says WHICH of the two
+		// happened — an unresolvable ref or an unpublished image — and those need
+		// different remedies, so a caller handed only `nil` can either say nothing
+		// or say something vague.
+		return nil, reason
 	}
 	want := [...]string{tfImage, kubeImage}
 	var out []ImageSkew
@@ -394,7 +429,7 @@ func StaleCIImageVars(ref string, recorded func(string) string) []ImageSkew {
 		}
 		out = append(out, ImageSkew{Name: w.name, Have: have[i], Want: want[i]})
 	}
-	return out
+	return out, ""
 }
 
 // ciImageVars pairs each ci image variable with the GHCR repository it names.
