@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -230,8 +231,6 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// then demotes), so without this a managed cluster ends up with NO default
 	// StorageClass and PVCs without an explicit class stay Pending. Making this the
 	// default also lands new apl-core app PVCs on encrypted+Retain storage directly.
-	// force=false: LLZ is the sole owner of this class and re-applies it under the
-	// same field manager, so there's no cross-manager conflict to force through.
 	//
 	// The class's volumeTags carry this cluster's `lke<id>` ownership tag AT
 	// CreateVolume time — the tag `llz reap`'s cluster-liveness gate keys on, so a
@@ -240,13 +239,8 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// workspace's cluster_id output) and substituted into the manifest's
 	// ${volume_tags} slot; an empty/malformed id hard-fails, because SC `parameters`
 	// are immutable and a silently-untagged class can never be fixed in place.
-	scYAML, err := renderBlockStorageClass(o.clusterID)
-	if err != nil {
+	if err := applyManagedBlockStorageClass(o, d); err != nil {
 		return err
-	}
-	if out, ok := d.apply(scYAML, "llz-managed-bridge", false); !ok {
-		fmt.Fprint(os.Stderr, out)
-		return fmt.Errorf("apply managed block-storage-retain StorageClass")
 	}
 
 	// SPIKE — encrypt the LKE stock StorageClasses IN PLACE (by delete+recreate).
@@ -490,6 +484,101 @@ const (
 // lkeStockStorageClasses are the two classes LKE's own `workload` Helm release
 // installs into every cluster, unencrypted and untagged.
 var lkeStockStorageClasses = []string{"linode-block-storage", "linode-block-storage-retain"}
+
+// applyManagedBlockStorageClass applies LLZ's own block-storage-retain class,
+// DELETING and RECREATING it first when a live class disagrees on a field the API
+// server will not let us change.
+//
+// THE BUG THIS FIXES. StorageClass `parameters` are immutable, and the CSI
+// parameter KEYS this class ships changed: `linodebs.csi.linode.com/encryption:
+// enabled` and `/volume-tags` — both silently ignored by the driver — became
+// `/encrypted: "true"` and `/volumeTags`. On a cluster whose class predates that
+// correction the plain server-side apply this used to do fails outright:
+//
+//	The StorageClass "block-storage-retain" is invalid: parameters: Forbidden:
+//	updates to parameters are forbidden.
+//
+// bootstrap-cluster then dies BEFORE the Argo bridge is placed, so every LLZ extra
+// (OpenBao included) never syncs — a whole-deployment outage from a two-key rename.
+//
+// WHY IT SHIPPED. A greenfield cluster has no class to collide with, so it passes;
+// the failure exists only on a cluster that already ran an older LLZ, and no lane
+// builds one of those. encryptStockStorageClasses below already delete+recreates
+// for exactly this reason — LLZ's OWN class was the one left on a plain apply.
+//
+// ONLY AN IMMUTABLE DISAGREEMENT EARNS A DELETE. An already-correct class is
+// applied in place (idempotent, and mutable drift such as the is-default-class
+// annotation still converges), because a needless delete reopens the window in
+// which a PVC can be created with no class to bind to.
+func applyManagedBlockStorageClass(o bootstrapClusterOpts, d bootstrapDeps) error {
+	scYAML, err := renderBlockStorageClass(o.clusterID)
+	if err != nil {
+		return err
+	}
+	want, err := parseStorageClass([]byte(scYAML))
+	if err != nil {
+		return fmt.Errorf("parse rendered block-storage StorageClass: %w", err)
+	}
+
+	// Absent is the greenfield case — nothing to collide with. An EMPTY body on a
+	// successful get counts as absent too: never delete a class whose definition
+	// could not actually be read back.
+	if raw, ok := d.kubectl("get", "storageclass", want.Name, "-o", "json"); ok && strings.TrimSpace(raw) != "" {
+		live, err := parseStorageClass([]byte(raw))
+		if err != nil {
+			return fmt.Errorf("parse live StorageClass %s: %w", want.Name, err)
+		}
+		if diff := immutableStorageClassDiff(live, want); len(diff) > 0 {
+			fields := strings.Join(diff, ", ")
+			fmt.Fprintf(os.Stderr, "→ %s: live %s disagree with the desired class (delete+recreate; those fields are immutable)\n", want.Name, fields)
+			if out, ok := d.kubectl("delete", "storageclass", want.Name, "--ignore-not-found"); !ok {
+				fmt.Fprint(os.Stderr, out)
+				return fmt.Errorf("delete StorageClass %s (needed because %s are immutable)", want.Name, fields)
+			}
+			if out, ok := d.apply(scYAML, "llz-managed-bridge", false); !ok {
+				fmt.Fprint(os.Stderr, out)
+				// The class is GONE at this point and we could not put it back. Say so
+				// unmistakably: any PVC naming it will sit Pending until an operator
+				// recreates it.
+				return fmt.Errorf("recreate StorageClass %s FAILED after it was deleted — the cluster now has NO %s class and any PVC naming it will stay Pending. Recreate it by hand or re-run bootstrap-cluster", want.Name, want.Name)
+			}
+			fmt.Fprintf(os.Stderr, "  %s recreated.\n", want.Name)
+			return nil
+		}
+	}
+
+	// force=false: LLZ is the sole owner of this class and re-applies it under the
+	// same field manager, so there's no cross-manager conflict to force through.
+	if out, ok := d.apply(scYAML, "llz-managed-bridge", false); !ok {
+		fmt.Fprint(os.Stderr, out)
+		return fmt.Errorf("apply managed block-storage-retain StorageClass")
+	}
+	return nil
+}
+
+// immutableStorageClassDiff names the fields a live StorageClass disagrees on that
+// the API server will refuse to update in place. Everything on a StorageClass is
+// immutable EXCEPT metadata and allowVolumeExpansion, so those two are deliberately
+// absent here — they converge through a plain apply and must never trigger a delete.
+//
+// A field the desired manifest leaves unset is not compared: the API server
+// defaults it, so a live default is not a disagreement.
+func immutableStorageClassDiff(live, want stockStorageClass) []string {
+	var diff []string
+	if want.Provisioner != "" && live.Provisioner != want.Provisioner {
+		diff = append(diff, "provisioner")
+	}
+	if want.ReclaimPolicy != "" && live.ReclaimPolicy != want.ReclaimPolicy {
+		diff = append(diff, "reclaimPolicy")
+	}
+	if want.VolumeBindingMode != "" && live.VolumeBindingMode != want.VolumeBindingMode {
+		diff = append(diff, "volumeBindingMode")
+	}
+	if !maps.Equal(live.Parameters, want.Parameters) {
+		diff = append(diff, "parameters")
+	}
+	return diff
+}
 
 // encryptStockStorageClasses rewrites LKE's stock StorageClasses so they encrypt
 // and ownership-tag at CreateVolume, by DELETING and RECREATING each one with the
