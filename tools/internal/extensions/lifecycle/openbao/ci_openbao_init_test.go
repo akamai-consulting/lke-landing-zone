@@ -33,11 +33,37 @@ func withGHSetSecret(t *testing.T, fail func(name string) error) *[]string {
 	return calls
 }
 
-const initJSON = `{"recovery_keys_b64":["uk1","uk2","uk3","uk4","uk5"],"root_token":"s.root"}`
+// Fixture key material, DELIBERATELY full length. The disclosure test below
+// substring-searches the ESCROW job summary for each of these values, and that
+// summary embeds five base64 RSA-OAEP ciphertexts built with a fresh ephemeral
+// key on every run — ~1700 characters of fresh random base64. The old fixtures
+// were three characters ("uk1".."uk5"), which collided with that random base64
+// often enough to redden CI at random: 6 failures in `go test -count=300`, on
+// PRs touching nothing in this package. At share length a chance collision is
+// not a thing that happens, and these now match the shape `operator init`
+// actually mints. Detection is unchanged: the summary writer emits whole
+// ciphertext blocks, never a truncated secret, so a real leak still lands here
+// in full.
+const (
+	fxShare1    = "bGx6LXRlc3QtcmVjb3Zlcnktc2hhcmUtMS1ub3QtcmVhbA=="
+	fxShare2    = "bGx6LXRlc3QtcmVjb3Zlcnktc2hhcmUtMi1ub3QtcmVhbA=="
+	fxShare3    = "bGx6LXRlc3QtcmVjb3Zlcnktc2hhcmUtMy1ub3QtcmVhbA=="
+	fxShare4    = "bGx6LXRlc3QtcmVjb3Zlcnktc2hhcmUtNC1ub3QtcmVhbA=="
+	fxShare5    = "bGx6LXRlc3QtcmVjb3Zlcnktc2hhcmUtNS1ub3QtcmVhbA=="
+	fxRootToken = "s.bGx6LXRlc3Qtcm9vdC10b2tlbi1ub3QtcmVhbA"
+)
+
+// fxShares is the same five in index order, for the assertions that walk them.
+var fxShares = []string{fxShare1, fxShare2, fxShare3, fxShare4, fxShare5}
+
+// initJSON is derived from the constants above rather than restating them, so a
+// fixture change cannot leave the payload and the assertions disagreeing.
+var initJSON = fmt.Sprintf(`{"recovery_keys_b64":[%q,%q,%q,%q,%q],"root_token":%q}`,
+	fxShare1, fxShare2, fxShare3, fxShare4, fxShare5, fxRootToken)
 
 func TestParseBaoInit(t *testing.T) {
 	r, err := ParseInit(initJSON)
-	if err != nil || r.RootToken != "s.root" || len(r.RecoveryKeysB64) != 5 {
+	if err != nil || r.RootToken != fxRootToken || len(r.RecoveryKeysB64) != 5 {
 		t.Fatalf("ParseInit = (%+v, %v), want full payload", r, err)
 	}
 	for _, bad := range []string{
@@ -72,7 +98,7 @@ func initHarness(t *testing.T, failSet func(name string) error) (string, *[]stri
 
 // allInitSecrets is every value `operator init` mints. NOTHING in this list may
 // appear in the job summary on any path — see the next test for why.
-var allInitSecrets = []string{"uk1", "uk2", "uk3", "uk4", "uk5", "s.root"}
+var allInitSecrets = append(append([]string{}, fxShares...), fxRootToken)
 
 func TestRunCIBaoInit(t *testing.T) {
 	dir, ghCalls := initHarness(t, nil)
@@ -82,7 +108,8 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 
 	env, _ := os.ReadFile(filepath.Join(dir, "GITHUB_ENV"))
-	wantEnv := "OPENBAO_ROOT_TOKEN=s.root\nRECOVERY_K1=uk1\nRECOVERY_K2=uk2\nRECOVERY_K3=uk3\n"
+	wantEnv := fmt.Sprintf("OPENBAO_ROOT_TOKEN=%s\nRECOVERY_K1=%s\nRECOVERY_K2=%s\nRECOVERY_K3=%s\n",
+		fxRootToken, fxShare1, fxShare2, fxShare3)
 	if string(env) != wantEnv {
 		t.Errorf("GITHUB_ENV = %q, want %q", env, wantEnv)
 	}
@@ -92,12 +119,12 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 	// Shares 4 and 5 have no other home on this path, so they must be persisted.
 	want := []string{
-		"OPENBAO_RECOVERY_KEY_1@infra-primary=uk1",
-		"OPENBAO_RECOVERY_KEY_2@infra-primary=uk2",
-		"OPENBAO_RECOVERY_KEY_3@infra-primary=uk3",
-		"OPENBAO_ROOT_TOKEN@infra-primary=s.root",
-		"OPENBAO_RECOVERY_KEY_4@infra-primary=uk4",
-		"OPENBAO_RECOVERY_KEY_5@infra-primary=uk5",
+		"OPENBAO_RECOVERY_KEY_1@infra-primary=" + fxShare1,
+		"OPENBAO_RECOVERY_KEY_2@infra-primary=" + fxShare2,
+		"OPENBAO_RECOVERY_KEY_3@infra-primary=" + fxShare3,
+		"OPENBAO_ROOT_TOKEN@infra-primary=" + fxRootToken,
+		"OPENBAO_RECOVERY_KEY_4@infra-primary=" + fxShare4,
+		"OPENBAO_RECOVERY_KEY_5@infra-primary=" + fxShare5,
 	}
 	if strings.Join(*ghCalls, " ") != strings.Join(want, " ") {
 		t.Errorf("gh calls = %v, want %v", *ghCalls, want)
@@ -206,7 +233,7 @@ func TestRunCIBaoInitEscrowDeliversCiphertextOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("block %d did not decrypt: %v", i+1, err)
 		}
-		if want := fmt.Sprintf("uk%d", i+1); string(got) != want {
+		if want := fxShares[i]; string(got) != want {
 			t.Errorf("block %d = %q, want %q", i+1, got, want)
 		}
 		// The same ciphertext must ALSO be inline in the summary: the artifact
