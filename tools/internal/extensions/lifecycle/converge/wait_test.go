@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +191,74 @@ func TestRunCIWaitClusterReady(t *testing.T) {
 	})
 	if err := runCIWaitClusterReady(0, 0, 10, 1); err == nil {
 		t.Errorf("wait-cluster-ready (unreachable) = %v, want an error", err)
+	}
+}
+
+// ── phase is not a verdict: a wedged pod must not pass the gate ──────────────
+
+// withDepsExec stubs the deps.Exec seam runCIWaitPods now reads pod status
+// through, so the gate is exercised without a cluster (and without the default
+// Exec shelling out to a real kubectl).
+func withDepsExec(t *testing.T, fn func(name string, args ...string) ([]byte, error)) {
+	t.Helper()
+	orig := deps.Exec
+	deps.Exec = fn
+	t.Cleanup(func() { deps.Exec = orig })
+}
+
+// podStatusJSON is a `kubectl get pod -o jsonpath={.status}` body: phase Running
+// with the named container in the given waiting reason ("" = running instead).
+func podStatusJSON(container, waitingReason string, restarts int) []byte {
+	state := `"running":{}`
+	if waitingReason != "" {
+		state = `"waiting":{"reason":"` + waitingReason + `"}`
+	}
+	return []byte(`{"phase":"Running","containerStatuses":[{"name":"` + container +
+		`","ready":false,"restartCount":` + strconv.Itoa(restarts) + `,"state":{` + state + `}}]}`)
+}
+
+// TestRunCIWaitPodsRejectsWedgedPod is THE regression. platform-openbao-2 sat in
+// CrashLoopBackOff for eight days (2318 restarts) and this gate passed it,
+// because .status.phase stays Running while a container crashloops. The next step
+// then execs into a container that does not exist.
+func TestRunCIWaitPodsRejectsWedgedPod(t *testing.T) {
+	stubKubectlWait(t, func(string) error { return nil }) // phase reached
+	withDepsExec(t, func(_ string, _ ...string) ([]byte, error) {
+		return podStatusJSON("openbao", "CrashLoopBackOff", 2318), nil
+	})
+	err := runCIWaitPods("llz-openbao", "Running", []string{"platform-openbao-2"}, 0, 0)
+	if err == nil {
+		t.Fatal("a pod in CrashLoopBackOff reached Running phase and passed the gate — phase is not a verdict")
+	}
+	if !strings.Contains(err.Error(), "platform-openbao-2") || !strings.Contains(err.Error(), "CrashLoopBackOff") {
+		t.Errorf("error must name the pod and the blocking reason, got: %v", err)
+	}
+}
+
+// TestRunCIWaitPodsAllowsRunningNotReady is the constraint that rules out the
+// obvious fix. An uninitialized OpenBao reports sealed and its readiness probe
+// correctly marks it not-Ready; readiness only arrives after the `bao operator
+// init` that runs AFTER this gate. Waiting for Ready here would time out on every
+// cold bootstrap, so a running-but-unready container must PASS.
+func TestRunCIWaitPodsAllowsRunningNotReady(t *testing.T) {
+	stubKubectlWait(t, func(string) error { return nil })
+	withDepsExec(t, func(_ string, _ ...string) ([]byte, error) {
+		return podStatusJSON("openbao", "", 0), nil // running, ready=false
+	})
+	if err := runCIWaitPods("llz-openbao", "Running", []string{"platform-openbao-0"}, 0, 0); err != nil {
+		t.Fatalf("a running-but-unready OpenBao pod is the NORMAL pre-init state and must pass: %v", err)
+	}
+}
+
+// TestRunCIWaitPodsTolerantOfUnreadableStatus: a status we could not read is not
+// evidence of a wedge. This gate must not start failing bootstraps on a kubectl
+// blip — the failure mode it is replacing was a false PASS, not a false fail.
+func TestRunCIWaitPodsTolerantOfUnreadableStatus(t *testing.T) {
+	stubKubectlWait(t, func(string) error { return nil })
+	withDepsExec(t, func(_ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("the server was unable to return a response")
+	})
+	if err := runCIWaitPods("llz-openbao", "Running", []string{"platform-openbao-0"}, 0, 0); err != nil {
+		t.Fatalf("an unreadable status must not fail the gate: %v", err)
 	}
 }

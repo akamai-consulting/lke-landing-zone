@@ -9,6 +9,7 @@ package converge
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/terraform"
 )
 
@@ -74,9 +76,56 @@ func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) error
 			dumpPodDiagnostics(ns, pod)
 			return fmt.Errorf("%s did not reach %s phase within %ds", pod, phase, timeout)
 		}
+		// PHASE IS NOT A VERDICT. `.status.phase` stays Running while a container
+		// crashloops, restarts, or has never successfully started — so the wait
+		// above is satisfied by a pod with no container to exec into, and every
+		// caller of this gate execs.
+		//
+		// Measured on akamai/gsap-apl's prod cluster: platform-openbao-2 had been
+		// in CrashLoopBackOff for eight days (2318 restarts) and this step passed
+		// it as Running. The NEXT step then spent its whole retry budget on
+		// `container not found ("openbao")` before failing with a message about
+		// the network. A gate that reports success on a pod dead for a week looks
+		// exactly like the outage it exists to catch.
+		//
+		// READINESS IS NOT THE FIX HERE, and reaching for it would break every
+		// cold bootstrap: an uninitialized OpenBao reports sealed, its readiness
+		// probe correctly marks it not-Ready, and readiness only arrives after the
+		// `bao operator init` that runs AFTER this gate. What separates "not Ready,
+		// as expected" from "wedged" is a container waiting on a reason Kubernetes
+		// has already given up on — health.PodBlockedReason, the complement of the
+		// startup reasons it is defined beside.
+		if reason, err := podBlockedReason(ns, pod); err != nil {
+			// Best-effort: a status we could not read is not evidence of a wedge,
+			// and this gate must not start failing on a transient kubectl blip.
+			fmt.Fprintf(os.Stderr, "::warning::%s reached %s but its status could not be read (%v) — not treating that as a failure\n", pod, phase, err)
+		} else if reason != "" {
+			fmt.Fprintf(os.Stderr, "::error::%s reached %s phase but is wedged: %s — phase alone does not mean there is a running container\n", pod, phase, reason)
+			dumpPodDiagnostics(ns, pod)
+			return fmt.Errorf("%s reached %s phase but is wedged: %s", pod, phase, reason)
+		}
 		fmt.Printf("%s is %s\n", pod, phase)
 	}
 	return nil
+}
+
+// podBlockedReason reads one pod's status and asks health.PodBlockedReason. The
+// judgement is the health package's — calling its real function rather than
+// restating the reason list is what keeps this gate and the converge gate from
+// drifting apart on what "wedged" means.
+func podBlockedReason(ns, pod string) (string, error) {
+	out, err := deps.Exec("kubectl", "-n", ns, "get", "pod", pod, "-o", "jsonpath={.status}")
+	if err != nil {
+		return "", err
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return "", fmt.Errorf("empty status for pod/%s", pod)
+	}
+	var st health.PodStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return "", err
+	}
+	return health.PodBlockedReason(st), nil
 }
 
 // remainingSecs is the whole seconds left until deadline, floored at 1 so a

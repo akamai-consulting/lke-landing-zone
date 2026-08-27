@@ -36,6 +36,33 @@ var startingWaitReasons = map[string]bool{
 	"PodInitializing":   true,
 }
 
+// PodBlockedReason names the first container Kubernetes has TRIED to start and
+// cannot — "<container>:<reason>" for any waiting reason that is not one of the
+// startup reasons above, "" when nothing is blocked.
+//
+// It is the complement of startingWaitReasons and lives beside it deliberately:
+// the two partition the same set of waiting reasons, so a reason added to one
+// and not the other silently changes the meaning of both.
+//
+// UNLIKE PodIsStarting / PodIsFailing, THIS SAYS NOTHING ABOUT READINESS, and
+// that is the point. A caller may need to know a pod is wedged while a
+// not-Ready pod is perfectly normal — `llz ci wait-pods` waits on OpenBao pods
+// that CANNOT be Ready yet, because an uninitialized OpenBao reports sealed and
+// its readiness probe correctly marks it not-Ready until `bao operator init`
+// runs afterwards. A gate there has to distinguish "not Ready, as expected" from
+// "CrashLoopBackOff", and readiness cannot draw that line.
+func PodBlockedReason(s PodStatus) string {
+	for _, group := range [][]ContainerStatus{s.InitContainerStatuses, s.ContainerStatuses} {
+		for _, c := range group {
+			w := c.State.Waiting
+			if w != nil && w.Reason != "" && !startingWaitReasons[w.Reason] {
+				return c.Name + ":" + w.Reason
+			}
+		}
+	}
+	return ""
+}
+
 // PodIsStarting reports whether a not-yet-ready pod is merely coming up: it has
 // not been scheduled long enough to have container statuses, or every container
 // that is not already running is waiting on one of the startup reasons above.
