@@ -23,6 +23,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path" // git ls-files always emits slash-separated paths, on every platform
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -184,7 +185,7 @@ func Run(dryRun bool, env string, tfvarsOnly, check, diff bool) error {
 	// fetched) shared dns tree — it rides as a kustomize patch in each env's manifest
 	// overlay (RenderManifestKustomization), emitted above.
 	if !dryRun {
-		UntrackRenderedTfvars(relPrefix)
+		UntrackRenderedArtifacts(relPrefix)
 	}
 	return nil
 }
@@ -272,27 +273,42 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 	return targets, nil
 }
 
-// UntrackRenderedTfvars self-heals an instance that committed its per-env tfvars
-// before they became gitignored build artifacts: it drops any tracked
-// <env>.tfvars from the git index so the operator can commit the removal. The
-// terraform-iac-bootstrap/.gitignore (shipped by the template) keeps newly
-// rendered files untracked; this only handles the one-time migration of files
-// already in the index. Idempotent — a no-op once nothing matches.
+// UntrackRenderedArtifacts self-heals an instance that committed a file under the
+// TF roots before it became a gitignored build artifact: it drops any tracked
+// <env>.tfvars AND any tracked .terraform.lock.hcl from the git index so the
+// operator can commit the removal. The terraform-iac-bootstrap/.gitignore (shipped
+// by the template) keeps newly rendered files untracked; this only handles the
+// one-time migration of files already in the index. Idempotent — a no-op once
+// nothing matches.
+//
+// THE LOCK JOINED THE TFVARS FOR THE SAME REASON, one release later and at a
+// higher cost. It was `owned` in .template-manifest — seeded at scaffold time and
+// never re-touched — while the `required_providers` constraint it had to satisfy
+// shipped in the ci image, so a release that raised one hard-blocked every
+// instance in the field at `tofu init` while a fresh scaffold stayed green. Both
+// halves now live in the tfroots embed and Files lays them down together.
+//
+// .template-removals carries the same rule and is the PRIMARY migration path — it
+// runs during `llz upgrade`, which is where an instance meets this change. This is
+// the second door: an operator who renders before upgrading, or who never runs
+// `llz upgrade` at all, still stops carrying a pin the template has moved past.
 //
 // Skipped in two cases: the in-template dev layout (relPrefix != "", not a real
 // instance repo), and CI (GITHUB_ACTIONS) — there the render is ephemeral and the
 // migration is a local, committed action, so CI's index must stay pristine.
-func UntrackRenderedTfvars(relPrefix string) {
+func UntrackRenderedArtifacts(relPrefix string) {
 	if relPrefix != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
 		return
 	}
-	// All tracked files under the TF roots, filtered in Go to the rendered per-env
-	// tfvars across every root (cluster, object-storage, vpc).
+	// All tracked files under the TF roots, filtered in Go to the artifacts a render
+	// now writes: the per-env tfvars across every root (cluster, object-storage,
+	// vpc) and each root's provider lockfile.
 	// terraform.tfvars.example stays tracked — it ends in .example, not .tfvars.
 	listed := gitcmd.Out("ls-files", "--", "terraform-iac-bootstrap")
 	var tracked []string
 	for _, p := range strings.Split(strings.TrimSpace(listed), "\n") {
-		if p = strings.TrimSpace(p); strings.HasSuffix(p, ".tfvars") {
+		p = strings.TrimSpace(p)
+		if strings.HasSuffix(p, ".tfvars") || path.Base(p) == tfroots.LockFile {
 			tracked = append(tracked, p)
 		}
 	}
@@ -302,7 +318,8 @@ func UntrackRenderedTfvars(relPrefix string) {
 	if err := proc.Run(append([]string{"git", "rm", "--cached", "-q", "--"}, tracked...), ""); err != nil {
 		return // best-effort: no git, not a repo, etc.
 	}
-	fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored tfvars (rendered from the spec) — commit the removal:\n  %s\n",
+	fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored build artifact(s) under the TF roots "+
+		"(`llz render` regenerates them) — commit the removal:\n  %s\n",
 		color.Dim("→"), len(tracked), strings.Join(tracked, "\n  "))
 }
 

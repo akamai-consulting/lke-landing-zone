@@ -19,3 +19,25 @@
 # embedded tfroots package (like the per-env *.tfvars) — an instance commits ZERO
 # Terraform code, only the .terraform.lock.hcl provider pins. See tools/internal/shared/tfroots.
 */*.tf
+
+# The provider lockfile is generated too, and for the same reason the *.tf above
+# are: the pin and the `required_providers` constraint it has to satisfy are two
+# halves of one decision, and they now travel together inside the llz binary
+# (tools/internal/shared/tfroots/roots/<root>/) instead of one shipping in the ci
+# image and the other sitting committed here.
+#
+# THE SPLIT THIS ENDS. The lock used to be `owned` in .template-manifest — seeded
+# at scaffold time and never re-touched by an upgrade — while the constraint moved
+# with each release. So a release that raised one left EVERY instance in the field
+# pinned below it, hard-blocked at the first step of every terraform op:
+#
+#   locked provider registry.opentofu.org/linode/linode 3.12.0 does not match
+#   configured version constraint ~> 4.3
+#
+# while a fresh scaffold and release-e2e (which force-pushes a new instantiation
+# every run) both stayed green. Greenfield passed, brownfield broke, and no lane
+# could see the difference. Rendering it removes the state rather than checking it.
+#
+# Legacy (pre-spec) instances never run `llz render`, so they never receive this
+# file; whatever lock they committed stays theirs, next to the *.tf they also own.
+*/.terraform.lock.hcl

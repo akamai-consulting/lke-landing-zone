@@ -305,7 +305,7 @@ func TestRunFailsWhenNothingLinedUp(t *testing.T) {
 	writeTree(t, repo, map[string]string{
 		"tools/internal/shared/tfroots/roots/cluster/versions.tf": clusterVersionsTF,
 		"terraform-modules/llz-cluster/versions.tf":               moduleVersionsTF("~> 3.11"),
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": `
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": `
 provider "registry.opentofu.org/someone/else" {
   version = "1.0.0"
 }
@@ -326,8 +326,8 @@ func TestScanFailsWhenTheRootsAreGone(t *testing.T) {
 func TestScanFailsOnALockThatRecordsNoProvider(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
-		"tools/internal/shared/tfroots/roots/cluster/versions.tf":               clusterVersionsTF,
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": "# nothing here\n",
+		"tools/internal/shared/tfroots/roots/cluster/versions.tf":         clusterVersionsTF,
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": "# nothing here\n",
 	})
 	_, err := Scan(testRepo(repo))
 	if err == nil || !strings.Contains(err.Error(), "records no provider") {
@@ -338,8 +338,8 @@ func TestScanFailsOnALockThatRecordsNoProvider(t *testing.T) {
 func TestScanFailsOnARootThatConstrainsNothing(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
-		"tools/internal/shared/tfroots/roots/cluster/versions.tf":               "terraform {\n  required_version = \">= 1.5.0\"\n}\n",
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
+		"tools/internal/shared/tfroots/roots/cluster/versions.tf":         "terraform {\n  required_version = \">= 1.5.0\"\n}\n",
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	_, err := Scan(testRepo(repo))
 	if err == nil || !strings.Contains(err.Error(), "declares no provider constraint") {
@@ -352,9 +352,9 @@ func TestScanFailsOnARootThatConstrainsNothing(t *testing.T) {
 func TestScanSkipsRootsWithoutALock(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
-		"tools/internal/shared/tfroots/roots/cluster/versions.tf":               clusterVersionsTF,
-		"tools/internal/shared/tfroots/roots/vpc/versions.tf":                   clusterVersionsTF,
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
+		"tools/internal/shared/tfroots/roots/cluster/versions.tf":         clusterVersionsTF,
+		"tools/internal/shared/tfroots/roots/vpc/versions.tf":             clusterVersionsTF,
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	got, err := Scan(testRepo(repo))
 	if err != nil {
@@ -380,18 +380,23 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 
 // ── The report ───────────────────────────────────────────────────────────────
 
-// A failure has to teach the reader something they do not already know: that a
-// green e2e proves nothing here, and that the fix has two halves. This is the
-// whole value of the gate — a bare "constraint not satisfied" sends a maintainer
-// to regenerate the lock and ship the bump anyway, stranding every instance in
-// the field exactly as before.
+// A failure has to teach the reader something they do not already know. A bare
+// "constraint not satisfied" sends a maintainer to regenerate the lock with the
+// obvious command — `tofu init -upgrade` — which EXITS 1 in these roots, because
+// they carry encryption.tf and an init that configures the backend needs
+// $TF_ENCRYPTION. The report therefore has to carry `-backend=false` and say why
+// it is the correct scope rather than a workaround, or the gate hands its reader a
+// command that fails in a way that reads as a broken checkout.
+//
+// It also has to say what EXISTING instances owe, because the answer changed and
+// is counter-intuitive: nothing. They commit no lock any more.
 func TestRunExplainsTheAsymmetryAndBothHalvesOfTheFix(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
 		"tools/internal/shared/tfroots/roots/cluster/versions.tf": strings.Replace(
 			clusterVersionsTF, `version = "~> 3.11"`, `version = "~> 4.0"`, 1),
-		"terraform-modules/llz-cluster/versions.tf":                             moduleVersionsTF("~> 4.0"),
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
+		"terraform-modules/llz-cluster/versions.tf":                       moduleVersionsTF("~> 4.0"),
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	var out, errOut bytes.Buffer
 	err := Run(repo, &out, &errOut)
@@ -400,11 +405,12 @@ func TestRunExplainsTheAsymmetryAndBothHalvesOfTheFix(t *testing.T) {
 	}
 	report := errOut.String()
 	for _, want := range []string{
-		"3.12.0",             // what is pinned
-		"~> 4.0",             // what is required
-		"tofu init -upgrade", // the command that regenerates the lock
-		".template-removals", // the half that decides what EXISTING instances do
-		"release-e2e",        // why a green pipeline is not evidence
+		"3.12.0",          // what is pinned
+		"~> 4.0",          // what is required
+		"-backend=false",  // the scope without which the remedy exits 1
+		"-upgrade",        // the flag that re-resolves the provider
+		"llz render",      // why existing instances owe nothing
+		"NOTHING IS OWED", // ...said plainly enough to be read
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("failure report never mentions %q — the reader cannot act on it:\n%s", want, report)
@@ -421,9 +427,9 @@ func TestRunExplainsTheAsymmetryAndBothHalvesOfTheFix(t *testing.T) {
 func TestRunReportsWhatItCompared(t *testing.T) {
 	repo := t.TempDir()
 	writeTree(t, repo, map[string]string{
-		"tools/internal/shared/tfroots/roots/cluster/versions.tf":               clusterVersionsTF,
-		"terraform-modules/llz-cluster/versions.tf":                             moduleVersionsTF("~> 3.11"),
-		"instance-template/terraform-iac-bootstrap/cluster/.terraform.lock.hcl": clusterLock,
+		"tools/internal/shared/tfroots/roots/cluster/versions.tf":         clusterVersionsTF,
+		"terraform-modules/llz-cluster/versions.tf":                       moduleVersionsTF("~> 3.11"),
+		"tools/internal/shared/tfroots/roots/cluster/.terraform.lock.hcl": clusterLock,
 	})
 	var out, errOut bytes.Buffer
 	if err := Run(repo, &out, &errOut); err != nil {

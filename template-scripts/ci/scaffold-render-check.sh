@@ -94,20 +94,25 @@ LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 
 cleanup() {
   rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"
-  # `llz env add` also materializes each root's *.tf from the embedded tfroots
-  # package. They are gitignored, regenerated on demand, and were NOT being
-  # cleaned — so every run left ~6 files per root behind. That is what makes
-  # `make template-manifest-check` fail on a developer's machine while passing in
-  # CI: the gate walks the filesystem (the CI container has no usable git) and
-  # counts this debris as unclassified scaffold. Remove only *.tf — the
-  # .terraform.lock.hcl provider pins beside them ARE tracked.
+  # `llz env add` also materializes each root's *.tf AND its .terraform.lock.hcl
+  # from the embedded tfroots package. They are gitignored, regenerated on demand,
+  # and were NOT being cleaned — so every run left ~6 files per root behind. That
+  # is what makes `make template-manifest-check` fail on a developer's machine
+  # while passing in CI: the gate walks the filesystem (the CI container has no
+  # usable git) and counts this debris as unclassified scaffold.
+  #
+  # THE LOCK JOINED THE *.tf when it stopped being delivered. It used to be
+  # tracked here and had to be spared; now it is generated beside them from the
+  # same embed, so leaving it behind reintroduces exactly the debris this cleanup
+  # exists for — and it is a DOTFILE, which `rm -f "$d"*.tf` would never have
+  # matched even if the suffix had lined up.
   #
   # Iterate the root DIRECTORIES, not GEN_TFVARS: `vpc` is a root whose tfvars is
   # per-NETWORK (vpc/<name>.tfvars), not per-env, so it never appears in
   # GEN_TFVARS — and its six .tf files leaked from every run even after the
   # per-root cleanup landed. Globbing the roots also means the next root added is
   # cleaned without touching this script.
-  for d in "$INSTANCE"/terraform-iac-bootstrap/*/; do rm -f "$d"*.tf; done
+  for d in "$INSTANCE"/terraform-iac-bootstrap/*/; do rm -f "$d"*.tf "$d".terraform.lock.hcl; done
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
   if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }

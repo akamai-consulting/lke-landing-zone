@@ -112,3 +112,83 @@ func join(s []string) string {
 	}
 	return out
 }
+
+// shippedRemovals is instance-template/.template-removals — the real file, not a
+// fixture. The tests above prove the MECHANISM on synthetic rules; this one
+// proves the rules actually shipped hit the paths they name.
+const shippedRemovals = "../../../../../instance-template/.template-removals"
+
+// TestTheShippedRemovalRulesMatchRealInstancePaths.
+//
+// A removal rule that matches nothing is a SILENT no-op: `llz upgrade` applies it,
+// finds no tracked file, reports nothing, and every instance in the field keeps
+// the artifact the template meant to take away. Nothing else in the tree looks at
+// these globs, so a typo — or the difference between filepath.Match (where `*`
+// stops at a '/') and the shell globbing a reader has in mind — costs the entire
+// migration with no failure anywhere.
+//
+// THE PROVIDER LOCK IS WHY THIS EXISTS. Its rule is the only thing that stops an
+// instance carrying a pin the template has moved past: the file used to be `owned`,
+// so an upgrade could not replace it, and dropping it from the index is what hands
+// the decision back to the llz that ships the constraint. A rule that quietly
+// matched nothing would strand exactly the instances the change was written for,
+// and they would look fine — a stale lock is invisible until `tofu init` refuses it.
+//
+// It asserts the rules against REPRESENTATIVE paths rather than a live instance,
+// because there is no instance here to read. That is the weaker half of the
+// property and is deliberate: what can go wrong in this file is the glob, and a
+// concrete path is enough to catch it.
+func TestTheShippedRemovalRulesMatchRealInstancePaths(t *testing.T) {
+	rules, err := readTemplateRemovals(shippedRemovals)
+	if err != nil {
+		t.Fatalf("read the shipped %s: %v", shippedRemovals, err)
+	}
+	if len(rules) == 0 {
+		t.Fatal("the shipped .template-removals declares no rules — either it moved, or this " +
+			"test is asserting nothing. It cannot tell the difference, so it fails.")
+	}
+
+	// One path per rule the template ships today, spelled as `git ls-files` emits it.
+	// A rule added later with no entry here fails the coverage arm below, which is
+	// the point: writing the path down is how the author says what it should hit.
+	wantMatch := map[string]string{
+		"terraform-iac-bootstrap/*/[a-z]*.tfvars":       "terraform-iac-bootstrap/cluster/prod.tfvars",
+		"terraform-iac-bootstrap/*/.terraform.lock.hcl": "terraform-iac-bootstrap/cluster/.terraform.lock.hcl",
+		".template-version":                             ".template-version",
+		".template-workflows.lock":                      ".template-workflows.lock",
+	}
+	for _, r := range rules {
+		sample, ok := wantMatch[r.glob]
+		if !ok {
+			t.Errorf("the shipped rule %q (%s) has no representative path here — add one, so this "+
+				"test says what the rule is meant to hit instead of trusting that it hits something",
+				r.glob, r.mode)
+			continue
+		}
+		matched, err := filepath.Match(r.glob, sample)
+		if err != nil {
+			t.Errorf("rule %q is not a valid filepath.Match pattern: %v", r.glob, err)
+			continue
+		}
+		if !matched {
+			t.Errorf("rule %q matches nothing at %q — `llz upgrade` would apply it, find no tracked "+
+				"file and say nothing, leaving every instance carrying what it was meant to remove",
+				r.glob, sample)
+		}
+	}
+
+	// The other direction: a lock rule that ALSO swallowed the tracked
+	// terraform.tfvars.example beside it would remove a file the template ships.
+	for _, keep := range []string{
+		"terraform-iac-bootstrap/cluster/terraform.tfvars.example",
+		"terraform-iac-bootstrap/AGENTS.md",
+		"terraform-iac-bootstrap/.gitignore",
+		"terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt",
+	} {
+		for _, r := range rules {
+			if matched, _ := filepath.Match(r.glob, keep); matched {
+				t.Errorf("rule %q (%s) also matches %q, which the instance keeps", r.glob, r.mode, keep)
+			}
+		}
+	}
+}

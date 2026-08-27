@@ -306,13 +306,13 @@ state.
 
 **Both render first, and that step is what makes them mean anything.** An
 instance commits **zero** Terraform: `terraform-iac-bootstrap/.gitignore`
-excludes `*/*.tf`, and the roots are build artifacts `llz render` generates from
-the embedded `tfroots` package. Every other Terraform job gets them for free
-because it inits through the `terraform-init` composite, which renders first —
-these two do not init. Without an explicit `llz render --tfvars-only --if-spec`
-they walk four directories holding nothing but a `.terraform.lock.hcl`, find no
-HCL, and exit 0: a gate that passes having read nothing, which is exactly the
-vacuous green that let `make tf-lint` ship broken for several releases.
+excludes `*/*.tf` and `*/.terraform.lock.hcl`, and the roots are build artifacts
+`llz render` generates from the embedded `tfroots` package. Every other Terraform
+job gets them for free because it inits through the `terraform-init` composite,
+which renders first — these two do not init. Without an explicit `llz render
+--tfvars-only --if-spec` they walk four empty directories, find no HCL, and exit
+0: a gate that passes having read nothing, which is exactly the vacuous green
+that let `make tf-lint` ship broken for several releases.
 `--if-spec` keeps a legacy pre-spec instance a no-op rather than an error.
 
 `.checkov.yaml`'s header records what the scan over the rendered roots actually

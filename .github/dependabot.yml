@@ -67,8 +67,8 @@ updates:
   # A MAJOR-VERSION TRIPWIRE, NOT A PR STREAM. Dependabot only opens a PR when a
   # release falls OUTSIDE the declared constraint — so a 4.4 arrives silently at
   # the next `tofu init` and only a 5.0 raises a PR here. That is the point: the
-  # majors are what need a human. No `.terraform.lock.hcl` is tracked in this
-  # tree (the delivered ones are class `owned` — each instance owns its own).
+  # majors are what need a human. The `.terraform.lock.hcl` files tracked in this
+  # tree live beside the generated roots, NOT here — see below.
   #
   # A PR HERE IS ONLY EVER HALF THE BUMP, AND IT LANDS RED ON PURPOSE. The same
   # provider constraint is restated in the four generated roots under
@@ -83,8 +83,10 @@ updates:
   #
   # That was PR #504. `provider-lock-guard` now fails such a PR with all the
   # disagreeing sites named, so the remediation is mechanical: set the roots to
-  # the spec the bot chose, then regenerate the delivered locks. Do NOT add the
-  # roots here to "fix" it — Dependabot cannot parse them.
+  # the spec the bot chose, then regenerate the `.terraform.lock.hcl` sitting in
+  # each of those root directories — the same gate checks that second half, and
+  # `llz render` is what carries it to every instance. Do NOT add the roots here
+  # to "fix" it — Dependabot cannot parse them.
   - package-ecosystem: "terraform"
     directories:
       - "/terraform-modules/*"

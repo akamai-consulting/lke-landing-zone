@@ -233,7 +233,7 @@ help:
 	@echo "  setup-go-sole-site  workflows must set up Go via ./.github/actions/setup-llz, never a second setup-go pin"
 	@echo "  dependabot-coverage  every dependency manifest is scanned by dependabot.yml, or excluded with a reason"
 	@echo "  mutable-tag-guard  build-images.yml may publish :latest / :<version> only from the default branch"
-	@echo "  provider-lock-guard delivered .terraform.lock.hcl pins satisfy the shipped provider constraints"
+	@echo "  provider-lock-guard each root's .terraform.lock.hcl satisfies the constraint declared beside it"
 	@echo "  k8s-minor-coherence  lint.yml's kind node image must run the k8s minor we deploy to LKE-E"
 	@echo
 	@echo "Kubernetes targets:"
@@ -308,6 +308,11 @@ install-tools: install-syft install-trivy
 # Pinned, SHA-verified syft install. Used ONLY by sbom-terraform — trivy does
 # not parse .terraform.lock.hcl for provider inventory; everything else uses
 # trivy. Override SYFT_VERSION / SYFT_INSTALL_DIR via env.
+#
+# NOTE: sbom-terraform scans `terraform-iac-bootstrap/`, which exists in an
+# INSTANCE, not at this repo's root — and the locks it reads are now generated
+# there by `llz render` from tools/internal/shared/tfroots/roots/. No workflow
+# invokes this target.
 install-syft:
 	@./template-scripts/ci/install-syft.sh
 
@@ -1057,21 +1062,23 @@ mutable-tag-guard: export LLZ_FORCE_SOURCE := 1
 mutable-tag-guard:
 	$(call LLZ_CI,gates --only mutable-tag-guard,)
 
-# provider-lock-guard: the delivered .terraform.lock.hcl vs. the constraints the
-# roots and modules ship — `llz ci provider-lock-guard`.
+# provider-lock-guard: each root's .terraform.lock.hcl vs. the constraints that
+# root and its modules declare — `llz ci provider-lock-guard`.
 #
-# THE FAILURE MODE. An instance commits no Terraform code: the roots are
-# generated at every terraform op by the llz inside vars.TF_IMAGE, and
-# terraform-iac-bootstrap/*/*.tf is gitignored. What it DOES commit is the
-# provider lockfile, which .template-manifest classes `owned` — seeded once at
-# scaffold time and never re-touched by an upgrade. So the CONSTRAINT ships in
-# the image and the PIN sits in the adopter's repo, and nothing compared them.
+# THE FAILURE MODE. A constraint bump has two halves — edit versions.tf, then
+# regenerate the lock beside it — and nothing else forces the second. Both files
+# are embedded in the llz binary and written into every instance's roots together
+# by `llz render`, so shipping them in disagreement produces a rendered root whose
+# own `tofu init` refuses it, on every instance, at the first step of every op.
 #
-# Raise linode past the shipped pin and a new adopter is fine, release-e2e is
-# green (it force-pushes a fresh instantiation every run), and EVERY EXISTING
-# INSTANCE is hard-blocked at `tofu init` — which the terraform-init composite
-# runs with no -upgrade, so there is no recovery inside CI. Greenfield passes,
-# brownfield breaks, and no lane can see the difference.
+# IT USED TO GUARD A WORSE SHAPE. The lock was DELIVERED — class `owned` in
+# .template-manifest, seeded at scaffold time and never re-touched — while the
+# constraint travelled inside the ci image. Raising linode past the shipped pin
+# then left a new adopter fine and release-e2e green (it force-pushes a fresh
+# instantiation every run) while EVERY EXISTING INSTANCE was hard-blocked at
+# `tofu init`. Greenfield passed, brownfield broke, and no lane could see the
+# difference. Moving the lock into the roots removed that state; this gate now
+# holds the pair that remains.
 #
 # FROM SOURCE for the usual reason: on the PR that introduces the verb, the
 # merge-base image binary does not have it.
@@ -1240,7 +1247,9 @@ gitleaks:
 # SBOM generation — release evidence. Three sources:
 #   * sbom-go         — `trivy fs` CycloneDX SBOM of the Go tools module.
 #   * sbom-terraform  — `syft scan` against terraform-iac-bootstrap/ (parses
-#                       every .terraform.lock.hcl for provider versions).
+#                       every .terraform.lock.hcl for provider versions — in an
+#                       INSTANCE, where `llz render` writes them; this repo has
+#                       no such directory at its root).
 #                       Trivy doesn't parse Terraform lock files; syft does,
 #                       so syft is retained here even though trivy owns the
 #                       rest of the SBOM + CVE pipeline.

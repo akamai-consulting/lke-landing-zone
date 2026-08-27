@@ -22,7 +22,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/providerlock"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
@@ -477,16 +476,6 @@ func reportWhatTheUpgradeCouldNotDo(newRef string) []string {
 	// assert-image-fresh` on the first pipeline run after every upgrade.
 	steps := appendStep(nil, reportCIImageSkew(newRef))
 
-	// The provider lock is the same lever with a different owner again, and the one
-	// that had no reporter at all. `.terraform.lock.hcl` is `owned` in
-	// .template-manifest, so copier will not touch it; the constraint it has to
-	// satisfy ships in the ci image and just moved. A release that raises one
-	// therefore leaves every instance in the field mismatched, and the first thing
-	// that says so is a red `llz ci provider-lock-guard` on the upgrade PR the
-	// operator has already opened. Saying it here costs one scan of the working
-	// tree and moves the finding to the moment it becomes true.
-	steps = appendStep(steps, reportProviderLockSkew())
-
 	// The bucket prefix is the same family again, and the one that costs the most
 	// to learn late: it is invisible until an APPLY plans a rename, which is
 	// twenty minutes into a run, after the PR has already merged.
@@ -519,52 +508,6 @@ func appendStep(steps []string, step string) []string {
 		return steps
 	}
 	return append(steps, step)
-}
-
-// reportProviderLockSkew warns when the pins this instance committed can no
-// longer satisfy the constraints the llz that just ran ships.
-//
-// THE SAME SCAN `llz ci provider-lock-guard --instance` RUNS, on the same tree, at
-// the moment the skew is created rather than on the pull request that inherits
-// it — the #405 lens that reportCIImageSkew above is built on. It prints the same
-// remedy from the same function, so the operator who acts here and the operator
-// who acts on the red check are given one instruction, not two that agree today.
-//
-// ADVISORY, LIKE ITS NEIGHBOURS. The lock is `owned`: which providers an instance
-// pins is the instance's decision, and one legitimate answer to this warning is to
-// delete the lock and stop pinning. Failing the upgrade over it would also fail a
-// command whose work is already in the tree.
-//
-// Silent when there is nothing to say, and that includes every non-instance
-// checkout — StaleInstancePins cannot read a Terraform tree that is not there and
-// returns nothing, which is the correct output for `llz upgrade` run somewhere it
-// has no locks to judge.
-//
-// Package var for the same reason its neighbours are: the real one reads the
-// working tree.
-var reportProviderLockSkew = func() string {
-	stale, err := providerlock.StaleInstancePins(".")
-	if err != nil {
-		// SAID, NOT SWALLOWED. The scan returns no partial results, so one lock it
-		// cannot read hides every other root's verdict — and the operator would
-		// otherwise read the silence as "my pins are fine".
-		fmt.Fprintf(os.Stderr, "\n%s could not check this instance's provider pins: %v\n", color.Yellow("!"), err)
-		fmt.Fprintln(os.Stderr, color.Dim("  `llz ci provider-lock-guard --instance` reports the same thing, and fails the upgrade PR."))
-		return ""
-	}
-	if len(stale) == 0 {
-		return ""
-	}
-	fmt.Fprintf(os.Stderr, "\n%s the new pin moved a provider constraint past what this instance's %s files allow:\n",
-		color.Yellow("!"), providerlock.LockFile)
-	for _, v := range stale {
-		fmt.Fprintf(os.Stderr, "    %s\n", v)
-	}
-	fmt.Fprintf(os.Stderr, "  `llz upgrade` does not touch these — they are `owned` in .template-manifest. Regenerate them:\n")
-	fmt.Fprint(os.Stderr, providerlock.RegenerateSteps(stale))
-	fmt.Fprintln(os.Stderr, color.Dim("  Until then `llz ci provider-lock-guard` fails on the upgrade PR, and every\n"+
-		"  terraform run re-resolves providers under a plan nobody reviewed."))
-	return "Regenerate and commit the provider locks (this one blocks the PR)"
 }
 
 // reportUnpinnedObjLabelPrefix warns when this instance leaves its Object Storage
@@ -656,9 +599,10 @@ func objPrefixCheck(env string) []string {
 // just moved. v0.0.45 rendered the empty placeholder for a one-deployment
 // instance and v0.0.47 renders a real single stage from the identical spec, so an
 // upgrade across that boundary leaves a promote.yml that is stale by definition
-// and produces no diff of its own to notice. Same shape as reportCIImageSkew and
-// reportProviderLockSkew: a value derived from the pin, left behind by a command
-// that cannot reach it.
+// and produces no diff of its own to notice. Same shape as reportCIImageSkew: a
+// value derived from the pin, left behind by a command that cannot reach it. (The
+// third of that family reported a stale provider lock; it is gone, because its
+// subject is rendered now — see tools/internal/shared/tfroots.)
 //
 // SAID HERE BECAUSE OF WHERE THE ALTERNATIVE SAYS IT. `llz doctor` already fails
 // on this (doctor_build_preflights.go, PR #511) and runs a few lines below —
@@ -685,7 +629,7 @@ var reportUnrunnablePromotionPipeline = func() string {
 	tfDir, _, relPrefix := instancelayout.Detect()
 	plan, err := promote.PlanWorkflow(promote.DefaultDeps(), tfDir, relPrefix)
 	if err != nil {
-		// SAID, NOT SWALLOWED — the neighbouring lock reporter's rule. A spec or a
+		// SAID, NOT SWALLOWED. A spec or a
 		// promote.yml this cannot read yields no verdict at all, and silence here
 		// reads as "my pipeline is fine" for the one file that is about to be
 		// dispatched.

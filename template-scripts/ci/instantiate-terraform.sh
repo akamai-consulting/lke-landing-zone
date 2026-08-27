@@ -35,8 +35,11 @@ mkdir -p "$BUILD"
 
 # Mirror the embedded roots at the SAME depth (<build>/terraform-iac-bootstrap/<root>)
 # so the rewritten ../../../terraform-modules path resolves to the repo-root modules
-# from each root. The roots' *.tf come from the embed (tools/internal/shared/tfroots/roots/),
-# not instance-template/ (where only the .gitignore + provider locks remain now).
+# from each root. The roots' *.tf AND their .terraform.lock.hcl both come from the
+# embed (tools/internal/shared/tfroots/roots/) — the lock moved there so the pin and
+# the constraint it satisfies ship as one artifact. `cp -R <src>/. <dst>` copies
+# dotfiles, so the lock arrives with them and `tofu init` below validates the pair.
+# instance-template/terraform-iac-bootstrap/ now holds only .gitignore + AGENTS.md.
 mkdir -p "$BUILD/terraform-iac-bootstrap"
 cp -R tools/internal/shared/tfroots/roots/. "$BUILD/terraform-iac-bootstrap/"
 REL="../../../terraform-modules"

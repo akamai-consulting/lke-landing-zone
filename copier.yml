@@ -58,8 +58,8 @@ _exclude:
 _answers_file: .copier-answers.yml
 
 # Seed once on `copier copy`, never overwrite on `copier update` (= manifest
-# `owned`): the provider lockfile each instance regenerates, and the operator's
-# control-plane ACL allow-list. Per-env tfvars and apl-values/<env> overlays are
+# `owned`): the operator's control-plane ACL allow-list. Per-env tfvars and
+# apl-values/<env> overlays are
 # created by `llz env add` and never exist in the template, so Copier
 # leaves them alone without needing a rule here.
 #
@@ -70,8 +70,12 @@ _answers_file: .copier-answers.yml
 # asserts this manifest↔copier consistency in CI (see
 # docs/designs/cross-org-reuse-pattern.md Phase 0), so an owned file added to
 # .template-manifest without a rule here fails the build.
+# THE PROVIDER LOCKFILES USED TO HEAD THIS LIST and are deliberately not here any
+# more: they no longer ship from the template at all. The pin now lives beside the
+# constraint it satisfies in tools/internal/shared/tfroots/roots/<root>/, and
+# `llz render` writes it into each root as a gitignored build artifact — so there
+# is nothing for copier to seed and nothing for an update to preserve.
 _skip_if_exists:
-  - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
   - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
   # The operator-owned custom/ escape hatch (shipped once as an empty namespaces/ +
   # global/ skeleton) is `owned`, so an update must never re-render + merge it — an
