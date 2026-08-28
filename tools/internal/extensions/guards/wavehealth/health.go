@@ -14,11 +14,19 @@ package wavehealth
 // The guard makes that class a PR-time failure: every resource kind that
 // appears at a NEGATIVE sync wave anywhere in the platform-bootstrap tree
 // (platform-apl/manifest/ + platform-apl/components/) must be listed in
-// AllowedKinds — either because Argo assesses no health for it, or
-// because apl-values/values.yaml carries a resource.customizations.health
-// override neutralizing its built-in check. Kinds whose safety DEPENDS on such
-// an override are cross-checked against values.yaml, so deleting the override
-// re-fails the guard.
+// AllowedKinds — either because Argo assesses no health for it, or because the
+// apl-overlay carries a resource.customizations.health override neutralizing its
+// built-in check. Kinds whose safety DEPENDS on such an override are
+// cross-checked against that overlay, so deleting the override re-fails the guard.
+//
+// THE OVERLAY, NOT apl-values/values.yaml, AND THE DIFFERENCE IS THE WHOLE POINT.
+// This guard spent its life cross-checking values.yaml — a file `llz render`
+// stopped emitting at the managed App Platform pivot. So it was enforcing, on
+// every PR, that a bootstrap protection existed in a file no cluster reads: green
+// here, absent there. It now reads
+// apl-values/_shared/apl-overlay/appvalues.yaml, which the in-cluster apl-overlay
+// reconciler merges onto apl-core's own argocd AplApp CR. Passing this guard and
+// having the override on the cluster are the same fact again.
 //
 // Adding a new kind at a negative wave forces the author to decide — and
 // document here — why it cannot wedge a fresh-cluster bootstrap.
@@ -35,11 +43,18 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/guardwalk"
 )
 
+// OverrideSourceFile is the apl-overlay file the health overrides are rendered
+// into, relative to apl-values/_shared/apl-overlay/. Named here rather than
+// inlined so the guard's own error text and the path it actually reads cannot
+// drift apart — a guard that reports the wrong remedy is how the last one stayed
+// wrong for months.
+const OverrideSourceFile = "appvalues.yaml"
+
 // KindRule describes why a kind is safe at a negative sync wave.
 type KindRule struct {
 	// overrideKey non-empty → safety depends on the named
-	// resource.customizations.health entry in apl-values/values.yaml; the guard
-	// fails if that key is missing there.
+	// resource.customizations.health entry in the apl-overlay's appvalues.yaml;
+	// the guard fails if that key is missing there.
 	overrideKey string
 	reason      string
 }
@@ -88,8 +103,8 @@ var AllowedKinds = map[string]KindRule{
 	// in lockstep with THIS map by TestWaveHealthVAPMatchesGuard.
 	"admissionregistration.k8s.io/ValidatingAdmissionPolicy":        {reason: "no Argo health check (admission config)"},
 	"admissionregistration.k8s.io/ValidatingAdmissionPolicyBinding": {reason: "no Argo health check (admission config)"},
-	// Health-checked kinds neutralized by apl-values/values.yaml overrides — the
-	// two wedges of PR #142. The override key is cross-checked below.
+	// Health-checked kinds neutralized by apl-overlay appvalues.yaml overrides —
+	// the two wedges of PR #142. The override key is cross-checked below.
 	"networking.k8s.io/NetworkPolicy": {
 		overrideKey: "resource.customizations.health.networking.k8s.io_NetworkPolicy",
 		reason:      "LKE CNI writes no NP status; built-in check waits Progressing forever",
@@ -182,7 +197,11 @@ type waveHealthFinding struct {
 func runCIWaveHealthGuard(root string) error {
 	repo := capability.RepoForGate(Extension(), root)
 	aplDir := guardkit.RepoPath(repo, "apl-values")
-	valuesPath := filepath.Join(aplDir, "values.yaml")
+	// READ FAILURE IS A HARD ERROR, not an empty override set. An unreadable
+	// source would otherwise make every override-backed kind look unbacked, which
+	// this guard reports as a failure — the right verdict for the wrong reason,
+	// and a reader sent to add an override that is already there.
+	valuesPath := filepath.Join(aplDir, "_shared", "apl-overlay", OverrideSourceFile)
 	valuesRaw, err := repo.ReadFile(valuesPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
@@ -207,11 +226,11 @@ func runCIWaveHealthGuard(root string) error {
 		}
 		failed = true
 		if f.rule.overrideKey != "" {
-			fmt.Printf("::error file=%s::%s/%s at sync-wave %d needs the %q health override in apl-values/values.yaml (apps.argocd._rawValues.configs.cm) — it is missing. Without it this kind can wedge the platform-bootstrap sync before OpenBao (wave 0); see PR #142.\n",
+			fmt.Printf("::error file=%s::%s/%s at sync-wave %d needs the %q health override in apl-values/_shared/apl-overlay/appvalues.yaml (apps.argocd._rawValues.configs.cm) — it is missing. That file is RENDERED: add the entry to argoHealthCustomizations() in clusterspec/overlay_appvalues.go and re-run `llz render`. Without it this kind can wedge the platform-bootstrap sync before OpenBao (wave 0); see PR #142.\n",
 				f.file, f.groupKind, f.name, f.wave, f.rule.overrideKey)
 			continue
 		}
-		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in AllowedKinds (guards/wavehealth/health.go) with the override key, or register it with a documented reason it cannot wedge.\n",
+		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in argoHealthCustomizations() (clusterspec/overlay_appvalues.go, rendered to apl-values/_shared/apl-overlay/appvalues.yaml) and register the kind in AllowedKinds (guards/wavehealth/health.go) with the override key, or register it with a documented reason it cannot wedge.\n",
 			f.file, f.groupKind, f.name, f.wave, f.groupKind)
 	}
 	if failed {
@@ -222,7 +241,7 @@ func runCIWaveHealthGuard(root string) error {
 }
 
 // collectWaveHealthFindings walks the given dirs and classifies every
-// negative-wave resource against AllowedKinds + the values overrides.
+// negative-wave resource against AllowedKinds + the apl-overlay's overrides.
 // It also returns how many manifest files were read, which the caller must gate
 // on (requireCorpus) — an empty corpus is a failure, not a pass.
 func collectWaveHealthFindings(repo capability.Repo, dirs []string, values string) ([]waveHealthFinding, int, error) {

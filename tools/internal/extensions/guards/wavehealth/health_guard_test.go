@@ -11,7 +11,7 @@ import (
 )
 
 // The values fragment carrying every override the allowlist depends on —
-// mirrors the real apl-values/values.yaml keys.
+// mirrors the real apl-overlay appvalues.yaml keys.
 const waveGuardValuesAllOverrides = `
           resource.customizations.health.networking.k8s.io_NetworkPolicy: |
             local hs = {}
@@ -200,13 +200,14 @@ metadata:
 // class unpoliced by a guard that reported success. Its three siblings all gated on
 // requireCorpus; this one did not.
 func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
-	// A root with an apl-values/values.yaml (so the guard gets past the values
+	// A root with an apl-overlay appvalues.yaml (so the guard gets past the values
 	// read) but no platform-apl tree at all: nothing to examine.
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "apl-values"), 0o755); err != nil {
+	overlayDir := filepath.Join(root, "apl-values", "_shared", "apl-overlay")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "apl-values", "values.yaml"),
+	if err := os.WriteFile(filepath.Join(overlayDir, OverrideSourceFile),
 		[]byte(waveGuardValuesAllOverrides), 0o644); err != nil {
 		t.Fatal(err)
 	}

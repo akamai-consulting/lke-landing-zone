@@ -92,8 +92,10 @@ spec:
     - name: nameKey
       expression: 'variables.groupKind + "/" + (has(object.metadata.name) ? object.metadata.name : "")'
     # Kinds that are health-inert OR neutralized by a resource.customizations.health
-    # override in apl-values/values.yaml (the CI guard cross-checks the override's
-    # presence; admission can only assert the kind is vetted). == waveHealthAllowedKinds.
+    # override in apl-values/_shared/apl-overlay/appvalues.yaml, which the in-cluster
+    # apl-overlay reconciler merges onto apl-core's argocd AplApp CR (the CI guard
+    # cross-checks the override's presence; admission can only assert the kind is
+    # vetted). == waveHealthAllowedKinds.
     - name: allowedKinds
       expression: >-
         [
