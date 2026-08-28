@@ -19,7 +19,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/tokeninv"
@@ -34,6 +33,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -413,7 +413,6 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(manifestguard.DroppedAPIVersionsCmd())
 	// Offline apl-core schema validation (helm template) — the check
 	// helm_release.apl runs at apply time, shifted left into scaffold-check.
-	c.AddCommand(manifestguard.AplSchemaValidateCmd())
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.

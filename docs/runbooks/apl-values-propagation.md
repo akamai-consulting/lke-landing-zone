@@ -79,8 +79,9 @@ next reconcile pass, deliberately.
 `apl-gitea-operator` on `gitea.enabled`, and with BYO-Git that operator's clone
 path points at a repo the platform does not use. It also carries an unencrypted
 `gitea-valkey` PVC. LLZ disables it on every managed cluster, and
-`instance-template/apl-values/values.yaml` — which is **not** rendered on managed
-— has documented that intent all along.
+the retired apl-core values base — which was **not** rendered on managed, and has
+since been deleted for that reason — documented that intent all along. The
+`_shared` apps overlay is where it lives now.
 
 **But omitting a key does not undo one already committed.** An instance that ran
 an affected release still carries `kyverno`, `policy-reporter` and `trivy` forced

@@ -110,14 +110,20 @@ managed  terraform-iac-bootstrap/.gitignore
 # cluster-bootstrap Terraform root any more — installing apl-core is
 # `llz ci bootstrap-cluster`, run from the bootstrap-openbao job.)
 managed  apl-values/README.md
-# The apl-core values BASE. Template-managed — `llz render` renders every env's
-# values.yaml from it and writes only the per-env overlay (owned, below). The heavy
-# platform manifests (the always-on manifest base, the per-component trees, and the
-# secret-store bootstrap tree) live at platform-apl/ (repo root, OUTSIDE the
+# THERE IS NO apl-values/values.yaml ENTRY, and its absence is deliberate. The
+# apl-core values BASE used to be listed here as `managed`, with a comment saying
+# `llz render` rendered every env's values.yaml from it. That stopped being true at
+# the managed App Platform pivot (ADR 0005): Linode owns apl-core's values, and
+# render_test + scaffold-render-check both assert LLZ never emits one. The file kept
+# shipping to every instance and reaching no cluster, so edits to it — including a
+# Loki OOM fix — silently did nothing. What LLZ can still say about an apl-core app
+# goes through apl-values/_shared/apl-overlay/ (below).
+#
+# The heavy platform manifests (the always-on manifest base, the per-component trees,
+# and the secret-store bootstrap tree) live at platform-apl/ (repo root, OUTSIDE the
 # scaffold) and are fetched as pinned kustomize remote refs, so they are no longer
 # part of the instance and carry no manifest entry. The operator's OWN manifests are
 # not under apl-values/ at all — see kubernetes-custom/** below.
-managed  apl-values/values.yaml
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
 # (promote.yml used to be listed here and is NOT a caller stub any more — it is

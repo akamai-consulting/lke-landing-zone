@@ -63,7 +63,6 @@ var unclaimedCommands = []string{
 	"apl openbao get",
 	"apl status",
 	"apl values",
-	"apl values validate",
 	"build",
 	"check",
 	"check actions-lint",

@@ -1,11 +1,14 @@
 package manifestguard
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 )
 
 // dropped_apiversions.go — THE FOURTH LANE, and this extension's Incomplete
@@ -96,14 +99,23 @@ func IsDeclaredAPIVersion(line, api string) bool {
 // Vendored subchart directories (kubernetes-charts/<chart>/charts/, which `helm dep
 // build` populates during the same lint run) are skipped — upstream chart templates
 // are not ours to gate and would false-positive.
-func ManifestYAMLFiles(root string) ([]string, error) {
+//
+// HAND-ROLLED RATHER THAN guardwalk.Walk, and the difference is not cosmetic:
+// guardwalk skips `templates/` and does NOT skip vendored `charts/`. Swapping to
+// it would silently change what this gate catches in both directions. It now goes
+// through capability.Repo, which is what the read-repo fence actually requires —
+// the fence is about WHERE a gate may read, not about which walker it uses.
+func ManifestYAMLFiles(repo capability.Repo) ([]string, error) {
 	var out []string
 	for _, tree := range ScannedManifestTrees {
-		base := filepath.Join(root, filepath.FromSlash(tree))
-		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		base := filepath.FromSlash(tree)
+		if _, statErr := repo.Stat(base); errors.Is(statErr, fs.ErrNotExist) {
+			continue // tree absent in this layout
+		}
+		err := repo.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
-				if os.IsNotExist(err) {
-					return fs.SkipDir // tree absent in this layout
+				if errors.Is(err, fs.ErrNotExist) {
+					return fs.SkipDir
 				}
 				return err
 			}
@@ -114,11 +126,7 @@ func ManifestYAMLFiles(root string) ([]string, error) {
 				return nil
 			}
 			if strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") {
-				rel, relErr := filepath.Rel(root, p)
-				if relErr != nil {
-					rel = p
-				}
-				out = append(out, filepath.ToSlash(rel))
+				out = append(out, filepath.ToSlash(p))
 			}
 			return nil
 		})
@@ -136,12 +144,13 @@ func ScanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, er
 	if root == "" {
 		root = "."
 	}
-	files, err := ManifestYAMLFiles(root)
+	repo := capability.RepoForGate(Extension(), root)
+	files, err := ManifestYAMLFiles(repo)
 	if err != nil {
 		return nil, 0, err
 	}
 	for _, f := range files {
-		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		data, readErr := repo.ReadFile(filepath.FromSlash(f))
 		if readErr != nil {
 			continue // race with a delete / unreadable — not this check's concern
 		}

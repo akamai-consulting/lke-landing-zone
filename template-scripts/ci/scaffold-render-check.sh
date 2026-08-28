@@ -18,12 +18,13 @@
 #   1. Scaffold a throwaway env via llz env add (the real path).
 #   2. Assert no `your-env` placeholder survived in the generated tfvars/overlay.
 #   3. Assert the per-env files cluster-bootstrap reads at plan time exist.
-#   4+5. `llz ci validate-apl-values` on the rendered values.yaml: the
-#      templatefile var-contract (every unescaped ${...} is a key in
-#      cluster-bootstrap/main.tf's templatefile() map — the ${apl_values_repo_url}
-#      class) AND apl-core's chart schema via `helm template apl/apl` (the
-#      required/renamed/mistyped-key class, e.g. v6's `apps.loki: adminPassword
-#      is required`). Both were previously Release-E2E-only.
+#   4. Assert NO apl-core values.yaml was emitted. Linode owns apl-core's values
+#      on the managed App Platform; a rendered one would be a file shipping to
+#      instances that reaches no cluster, which is what happened to the retired
+#      base for a year. This step used to run validate-apl-values (a
+#      templatefile var-contract plus apl-core's chart schema via
+#      `helm template apl/apl`) — that verb is retired, because the file it took
+#      as input is no longer rendered.
 #
 # It does NOT stand up a cluster or run `terraform plan` (remote_state.cluster
 # and the kubeconfig provider still need a real cluster — that stays Release-E2E

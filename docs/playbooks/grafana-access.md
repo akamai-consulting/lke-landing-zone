@@ -2,7 +2,9 @@
 
 **Applies to:** Grafana (`<release>-grafana` Deployment in the `grafana` namespace) on every cluster.
 
-**Related:** your observability configuration (dashboards, metrics topology), [`grafana-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml).
+**Related:** your observability configuration (dashboards, metrics topology). Grafana's
+chart values are apl-core's own on the managed App Platform — LLZ ships no
+`grafana-values.yaml`.
 
 ---
 
@@ -55,9 +57,17 @@ These users live in Grafana's local SQLite DB — they survive pod restarts but 
 
 ## Adding a new data source
 
-The two data sources today are Prometheus and Loki, both configured declaratively in [`grafana-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml). For a new data source:
+The two data sources today are Prometheus and Loki, both configured declaratively by
+apl-core. **LLZ does not render Grafana's values**: on the managed App Platform Linode
+owns apl-core's `values.yaml` and `llz render` emits none (ADR
+[0005](../adr/0005-managed-app-platform.md)). The one channel LLZ has into an apl-core
+app's chart values is the apl-overlay's `apps.<name>._rawValues`
+(`apl-values/_shared/apl-overlay/appvalues.yaml`, rendered from
+`tools/internal/shared/clusterspec/overlay_appvalues.go`). For a new data source:
 
-1. Add a block under `grafana.datasources['datasources.yaml'].datasources` in `grafana-values.yaml`. Use the existing entries as a template.
+1. Add a `grafana.datasources` block under `apps.grafana._rawValues` in that renderer,
+   then `llz render`. Use apl-core's existing entries as a template — read them off the
+   cluster (`kubectl -n grafana get cm grafana -o yaml`), not from this repo.
 2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.
 3. PR + ArgoCD sync — the change applies on the next reconciliation.
 

@@ -47,7 +47,6 @@ var mixedBucket = map[string]string{
 	"assertplatform": "assertions",
 	"assertsecrets":  "assertions",
 	"volumes":        "assertions", // assert-storage: reconciler lanes serve the assertion
-	"manifestguard":  "assertions",
 	"sustain":        "assertions",
 	"tokeninv":       "assertions", // a predicate at three states; the invariant samples
 

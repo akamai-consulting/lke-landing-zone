@@ -5,7 +5,6 @@ package cli
 // is "an extension owns its own command", not "every constructor leaves".
 //
 import (
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	openbaoext "github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
@@ -39,7 +38,7 @@ func aplCmd() *cobra.Command {
 	c.AddCommand(
 		identityconfig.AplUserCmd(), // apl user — onboarding (retired from the top level)
 		aplAppCmd(),                 // apl app — list | enable | disable App Platform apps
-		aplValuesCmd(),              // apl values — render | validate the apl-values
+		aplValuesCmd(),              // apl values — render the apl-values/overlay tree
 		openbaoext.OpenbaoCmd(),     // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
 		statusCmd(),                 // apl status — platform health
 		onboard.DoctorCmd(),         // apl doctor — APL-scoped readiness
@@ -48,21 +47,25 @@ func aplCmd() *cobra.Command {
 	return c
 }
 
-// aplValuesCmd is `llz apl values` — author & check the App Platform values
-// (apl-values): `render` reconciles the LandingZone spec into the values/overlay
-// tree, `validate` runs the offline apl-values var-contract + apl-core schema
-// check (surfaced from `llz ci validate-apl-values` as a first-class values
-// command). The ADR's target grows `set` and `show` here in later phases
-// (Appendix A). Both leaves delegate to the existing top-level implementations.
+// aplValuesCmd is `llz apl values` — author the App Platform values (apl-values):
+// `render` reconciles the LandingZone spec into the values/overlay tree. The
+// ADR's target grows `set` and `show` here in later phases (Appendix A).
+//
+// IT NO LONGER HAS A `validate` LEAF. That leaf surfaced `llz ci
+// validate-apl-values`, whose two checks — the runtime-placeholder var-contract
+// and apl-core's chart schema — both took a rendered apl-core values.yaml as
+// input. On the managed App Platform LLZ renders no such file (Linode owns
+// apl-core's values; render_test and scaffold-render-check both assert LLZ never
+// emits one), so the verb had no input left to validate and nothing had called it
+// since the pivot. What LLZ does render — the apl-overlay — is checked by
+// `llz render --check` and the overlay's own tests.
 func aplValuesCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "values",
-		Short: "author & check the App Platform values (apl-values): render, validate",
+		Short: "author the App Platform values (apl-values): render",
 	}
 	c.AddCommand(
 		render.RenderCmd(), // apl values render — spec → values/overlay tree
-		renamed(manifestguard.AplSchemaValidateCmd(), "validate",
-			"offline apl-values var-contract + apl-core schema check (no cluster)"),
 	)
 	return c
 }

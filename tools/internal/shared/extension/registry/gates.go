@@ -59,7 +59,6 @@ import (
 	clideps "github.com/akamai-consulting/lke-landing-zone/tools/internal/cli/deps"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/budget"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/callerperms"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/chartguard"
@@ -69,6 +68,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -452,7 +452,7 @@ type Run struct {
 	//
 	// The affordance those targets provided is real and the driver could not
 	// replace it: iterating on ONE guard means running one guard, not the whole
-	// table (34 rows, 31 of them taking the default subject — both pinned by
+	// table (35 rows, 32 of them taking the default subject — both pinned by
 	// TestTheDefaultedMajorityIsStillTheMajority).
 	// This is that, with the flags coming from the model.
 	Only string

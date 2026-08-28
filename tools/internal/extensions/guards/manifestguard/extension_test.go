@@ -53,52 +53,28 @@ func TestGateLanesStayFilesOnly(t *testing.T) {
 	}
 }
 
-// The two bindings must not collapse back into one: the gate may hold read-repo
-// alone, and apl-schema needs the registry.
-func TestBindingsStaySplitByCapability(t *testing.T) {
-	var gate, assertion *extension.Binding
+// guard-manifests is a GATE-ONLY extension, and its single binding may hold
+// read-repo and nothing else.
+//
+// It used to carry a second, `apl-schema` assertion binding with cloud-read —
+// `llz ci validate-apl-values`, which resolved apl-core's chart from a registry
+// to schema-check a rendered apl-core values.yaml. LLZ renders no such file on
+// the managed App Platform, so that verb had no input and was retired; the
+// binding went with it, and the package moved from assertions/ to guards/ under
+// the mechanical bucket rule. What is pinned here is that the remaining binding
+// stays a gate: a files-only lane that reaches the network is a different kind of
+// thing and must be declared as one.
+func TestTheOnlyBindingIsAFilesOnlyGate(t *testing.T) {
 	bs := Extension().Bindings
-	for i := range bs {
-		switch bs[i].Kind {
-		case extension.Gate:
-			gate = &bs[i]
-		case extension.Assertion:
-			assertion = &bs[i]
-		}
+	if len(bs) != 1 {
+		t.Fatalf("want exactly one binding, got %d — a new one must declare its own grants", len(bs))
 	}
-	if gate == nil || assertion == nil {
-		t.Fatal("want one gate (files-only lanes) and one assertion (apl-schema, needs helm + a registry)")
+	if bs[0].Kind != extension.Gate {
+		t.Errorf("binding kind = %v, want Gate", bs[0].Kind)
 	}
-	for _, g := range gate.Grants {
+	for _, g := range bs[0].Grants {
 		if g != extension.ReadRepo {
 			t.Errorf("gate declared %q — a gate may only read the repo", g)
-		}
-	}
-	if !hasGrant(*assertion, extension.CloudRead) {
-		t.Error("apl-schema must declare cloud-read: it resolves the apl-core chart from a registry")
-	}
-}
-
-func hasGrant(b extension.Binding, g extension.Grant) bool {
-	for _, have := range b.Grants {
-		if have == g {
-			return true
-		}
-	}
-	return false
-}
-
-// The placeholder set is defined HERE and imported by cmd/llz's bootstrap-cluster,
-// not the other way round: a check that validates a set is meaningless if it runs
-// against a different set than the producer ships. Same resolution as
-// platform.DeliveredDocs.
-func TestPlaceholderSetIsOwnedHere(t *testing.T) {
-	if len(BootstrapValuePlaceholders) == 0 {
-		t.Fatal("the placeholder set emptied — bootstrap-cluster substitutes these and this guard validates them")
-	}
-	for _, k := range BootstrapValuePlaceholders {
-		if strings.TrimSpace(k) == "" {
-			t.Errorf("blank placeholder key in the set")
 		}
 	}
 }

@@ -46,7 +46,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/buildpreflight"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/sustain"
@@ -64,6 +63,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -271,7 +271,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// forty of the seventy-four — half of them: `assert-storage` lives in assertions/volumes,
+// forty-one of the seventy-five — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

@@ -149,13 +149,16 @@ func RunEnvReadiness(env string) error {
 
 	files := instancelayout.TFVarsPaths(tfDir, env)
 	files = append(files, OverlayScanFiles(overlay)...)
-	// The apl-core values BASE is shared across envs (DRY), so any unfilled
-	// placeholder in it lives ONCE at apl-values/values.yaml rather than in the
-	// per-env overlay — scan it too (no-op on a tree without it). (The ACME email is
+	// apl-values/values.yaml is GONE (LLZ renders no apl-core values on the managed
+	// App Platform — ADR 0005), so there is no shared values base left to scan for
+	// unfilled placeholders. The scan is kept as a no-op rather than deleted: an
+	// instance that has not yet run `llz upgrade` still carries the file, and a
+	// REPLACE_ME left in it is worth reporting even though nothing reads it — the
+	// operator needs to know it is there before it disappears. (The ACME email is
 	// no longer a placeholder: it renders to a valid `email: ""` by default — the
-	// contact is optional — so there's nothing to flag there. The cert/DNS tree that
-	// used to carry the REPLACE_ME webhook repoURL now lives at platform-apl/ and is
-	// fetched as a pinned remote ref, so it is no longer part of the instance.)
+	// contact is optional. The cert/DNS tree that used to carry the REPLACE_ME
+	// webhook repoURL now lives at platform-apl/ and is fetched as a pinned remote
+	// ref, so it is no longer part of the instance.)
 	files = append(files, OverlayScanFiles(filepath.Join(aplDir, "values.yaml"))...)
 	for _, cf := range chartValuesFiles {
 		if fi, err := os.Stat(cf); err == nil && !fi.IsDir() {

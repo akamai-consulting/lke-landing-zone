@@ -156,6 +156,12 @@ func TestTheShippedRemovalRulesMatchRealInstancePaths(t *testing.T) {
 		"terraform-iac-bootstrap/*/.terraform.lock.hcl": "terraform-iac-bootstrap/cluster/.terraform.lock.hcl",
 		".template-version":                             ".template-version",
 		".template-workflows.lock":                      ".template-workflows.lock",
+		// The retired apl-core values base and the per-env copies `llz render`
+		// used to produce from it. TWO rules, and the samples show why one would
+		// not do: filepath.Match's `*` does not span '/', so the base pattern
+		// cannot reach apl-values/<env>/values.yaml.
+		"apl-values/values.yaml":   "apl-values/values.yaml",
+		"apl-values/*/values.yaml": "apl-values/prod/values.yaml",
 	}
 	for _, r := range rules {
 		sample, ok := wantMatch[r.glob]

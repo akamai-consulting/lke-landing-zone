@@ -190,7 +190,7 @@ keep.
 | `users` → `apl user` | **Align (done)** | Extracted to `internal/apl/identity` (Phase 1) and **retired from the top level** — `apl user` is its sole home. First realized disposition. |
 | `components` | **Align (done)** | `apl app` — `list` (registry) + `enable`/`disable <app> --env` (edit env spec + re-render, the GitOps source). `llz components` stays as the top-level list. |
 | `render` | **Align (done)** | Wired as `apl values render` — the front door; provider-specific bits stay behind the provider layer. (Top-level `llz render` still exists, not yet retired.) |
-| `validate` (`validate-apl-values`) | **Align (done)** | Wired as `apl values validate` — surfaced from `llz ci validate-apl-values` as a first-class values command |
+| `validate` (`validate-apl-values`) | **Retired** | Was wired as `apl values validate`. Both it and the verb behind it are gone: their input was a rendered apl-core values.yaml, which LLZ stopped emitting on the managed platform. `llz render --check` covers the tree LLZ does render. |
 | `status` | **Align** | `apl status` |
 | `doctor` | **Align** | `apl doctor` |
 | `env` | **Split** | env-as-APL-env → `apl` env selector; `vpc`/`peer`/`role` → keep (fleet) |
