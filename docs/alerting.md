@@ -18,8 +18,9 @@ Loki) is itself broken.
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
 
 > **Alertmanager runs; notification needs a one-time opt-in.** Alertmanager is
-> enabled (`apps.alertmanager.enabled: true` in
-> [apl-values/values.yaml](../instance-template/apl-values/values.yaml))
+> enabled by apl-core (it is part of the managed App Platform's observability set;
+> LLZ neither enables nor configures it — see ADR
+> [0005](adr/0005-managed-app-platform.md))
 > and every firing rule reaches it — but the default receiver set is `[none]`
 > (a null route), so until an instance wires a receiver the only alerts that
 > actively reach a human are the GitHub Actions annotations. See **Wiring a
@@ -27,8 +28,28 @@ Loki) is itself broken.
 
 ## Wiring a notification receiver (Slack)
 
-The receiver config is spec-driven and the webhook secret lives in OpenBao —
-no GitHub secret, no values churn:
+> ### ⚠️ Step 1 does not currently work, and nothing else on this page changes that
+>
+> **The routing half of Slack notification is unwired on the managed App Platform.**
+> `spec.alerting` is parsed and validated and then rendered by nothing. apl-core
+> builds Alertmanager's route/receiver config from a **top-level `alerts:` values
+> block**; the only channel LLZ has into apl-core's values is the apl-overlay's
+> **per-app** `apps.<name>._rawValues`, which cannot reach a top-level key, and the
+> per-env values file that used to carry it stopped being rendered at the managed
+> pivot (ADR [0005](adr/0005-managed-app-platform.md)).
+>
+> So an instance can set `receivers: [slack]`, seed the webhook, see no error
+> anywhere, and be paged by nothing. `llz doctor` now reports it when the spec sets
+> the field; `llz ci assert-alert-delivery` states the same limit in its own scope
+> note — it proves Prometheus reaches Alertmanager and deliberately does **not**
+> claim Alertmanager reaches a human.
+>
+> Tracked in [upstream-asks.md](upstream-asks.md) §4, which carries the exit
+> condition. **Until it is closed, treat the GitHub Actions annotations from the
+> scheduled checks as the only alerting that reaches a person**, and plan on-call
+> around that.
+
+The intended flow, for when §4 closes — the secret half already works today:
 
 1. **Spec** — in `landingzone.yaml`:
 
@@ -41,13 +62,12 @@ no GitHub secret, no values churn:
          channelCrit: platform-alerts-crit
    ```
 
-   then `llz render`: the receivers + channels land in every env's committed
-   values.yaml `alerts:` block, and apl-core renders the full Alertmanager
-   route/receiver config from it (critical-severity alerts go to
-   `channelCrit`, the rest to `channel`).
+   **This is the step that is unwired** (above). It is still worth setting: it
+   records the intent, `llz doctor` will tell you it is not being delivered, and it
+   is what will be rendered once there is a channel to render it into.
 
-2. **Webhook secret** — seed the Slack webhook URL into each env's OpenBao
-   (dual-write on HA pairs):
+2. **Webhook secret — THIS HALF WORKS.** Seed the Slack webhook URL into each env's
+   OpenBao (dual-write on HA pairs):
 
    ```bash
    llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/services/…
@@ -61,9 +81,12 @@ no GitHub secret, no values churn:
    again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
    failure, not silently-dead notifications.
 
-3. **Verify** — fire a test alert (e.g. `amtool alert add …` against the
-   Alertmanager API, or temporarily scale a watched Deployment to 0) and
-   confirm the Slack message.
+3. **Verify — and do not skip it.** Fire a test alert (e.g. `amtool alert add …`
+   against the Alertmanager API, or temporarily scale a watched Deployment to 0)
+   and confirm the Slack message arrives. Given step 1, expect it **not** to until
+   §4 closes. That is exactly why this step exists: the receiver being configured
+   and the receiver working are different facts, and this page asserted the first
+   while meaning the second for the whole life of the managed platform.
 
 `msteams` is deliberately not surfaced: apl-core renders its webhook URLs
 inline from values (x-secret), which would put secret material into the
@@ -124,7 +147,7 @@ Covered by `support-plane-alerts` (under
 [platform-apl/components/observability/prometheus-rules/](../platform-apl/components/observability/prometheus-rules/)).
 Two layers now: the original **scrape-health** alerts (`...MetricsTargetDown`,
 `up == 0`) plus **workload-availability** alerts (`SupportPlaneDeploymentUnavailable`,
-`LokiStatefulSetUnavailable`) that fire on zero available/ready replicas via
+`LokiStatefulSetDegraded`, `LokiStatefulSetUnavailable`) that fire on missing or zero ready replicas via
 kube-state-metrics — a pod that is Running-but-NotReady scrapes fine yet serves
 nothing. The third + fourth layers — **error-rate** and **saturation** — need
 service-internal exporter metric names (`otelcol_*`, `loki_*`, `harbor_*`) that
@@ -134,7 +157,7 @@ promtool can't verify exist, so each was checked against a live `/metrics` with
 | Service | Scrape-health | Availability | Error-rate / saturation |
 |---------|---------------|--------------|-------------------------|
 | OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | 🟡 `OTelCollectorRefusingData` (memory_limiter/backpressure) + `OTelCollectorExportFailures` — **provisional**: `otelcol_*` only scrapes after the 0.1.8 NP fix below, and the pipeline is still a placeholder (debug exporter), so these read `DEAD?`/quiet until a real exporter + the fix land |
-| Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ✅ `LokiRequestErrors` (5xx ratio) + `LokiObjectStoreErrors` (S3 Put/Get 5xx, List excluded) + `LokiIngestionDiscarding` — **verified live** against 271 real `loki_*` series (armed, not false-firing) |
+| Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetDegraded` + `LokiStatefulSetUnavailable` ✅ (**both** — see the note below the table; the single `== 0` rule they replace could not fire) | ✅ `LokiRequestErrors` (5xx ratio) + `LokiObjectStoreErrors` (S3 Put/Get 5xx, List excluded) + `LokiIngestionDiscarding` — **verified live** against 271 real `loki_*` series (armed, not false-firing) |
 | Grafana | `GrafanaMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | — (availability is the main concern) |
 | Harbor | `HarborMetricsTargetDown` ✅ (retargeted) | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | 🟡 `HarborComponentDown` (`harbor_up`) + `HarborCoreHighErrorRate` (core 5xx ratio) + `HarborJobQueueBacklog` (`harbor_task_queue_size`) — defined, but **not scrape-gated** (see below). The exporter (`harbor._rawValues.metrics`), its ServiceMonitor and the `monitoring`→`:8001` NetworkPolicy all ship; `harbor_*` appears once the cluster converges. `HarborMetricsTargetDown` targets the real `harbor-*` targets, not the CNPG database (`harbor-otomi-db`, which also lives in the `harbor` namespace). Registry-disk saturation is N/A — the registry writes to S3, not a PVC. |
 | Prometheus | (self — via `defaultRules`) | (via `defaultRules`) | ⚠️ confirm TSDB compaction failures + scrape-duration are covered by defaults |
@@ -251,3 +274,46 @@ template.
    Prometheus. Likewise, a new landing-zone ServiceMonitor goes in that file's
    `defaultScrapeMonitors` so the e2e asserts it actually produces an `up` target.
 3. Argo CD syncs the rule into Prometheus on the next reconcile.
+
+## A rule that parses is not a rule that fires
+
+`LokiStatefulSetUnavailable` shipped as
+`kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset="loki"} == 0`
+and was incapable of firing, for two independent reasons:
+
+- **The name.** apl-core runs the Loki chart's *distributed* topology, so the
+  StatefulSet is `loki-ingester`. The selector matched no series, and an
+  expression over an empty vector is never true.
+- **The threshold.** `== 0` asks for a total outage. The failure that actually
+  happened was 1 of 3 ingesters ready for 16 days — ingestion degraded, node
+  drains blocked — which a zero-replica test grades healthy.
+
+`promtool check rules` passed on it every day. So did `llz ci alert-eval`, which
+graded it **ARMED**: its `DEAD?` detection asks whether any metric *name* in the
+expression exists, and `kube_statefulset_status_replicas_ready` very much does.
+The name was right and the label was wrong, and name-level detection cannot tell
+those apart.
+
+Three things changed, and it is worth being clear that only the third would have
+caught it on its own:
+
+1. The rule was split in two (`LokiStatefulSetDegraded` on `< desired`,
+   `LokiStatefulSetUnavailable` on `== 0`) and matches `statefulset=~"loki.*"`.
+2. `alert-eval` now probes an ARMED rule's **label selectors** and annotates
+   `NOMATCH` when every one of them matches zero series. Reported, never gating —
+   a counter that has never incremented also matches nothing, and that is healthy,
+   so failing on it would make the job red on good clusters and it would stop
+   being read.
+3. **The rules are executed against named series in CI.**
+   `TestSupportPlaneAlertSemantics` runs promtool's rule unit tests over the
+   shipped CRD with `loki-ingester` series at 1-of-3 ready, and requires the alert
+   to fire. Restoring either half of the original bug turns it red.
+
+And a fourth gap sat underneath all three: **no scheduled job evaluated these
+rules at all.** The weekly single-pane job filters to
+`^LLZ(Token|Certificate|Credential)`, so the Loki/Harbor/Grafana/OTel rules were
+syntax-checked at PR time and never run again. `llz-scheduled-checks.yml` now
+carries a second `alert-eval` step for them, and
+`TestSupportPlaneAlertsMatchTheScheduledFilter` fails if a shipped alert is named
+outside every filter — a rule no job selects is indistinguishable from a healthy
+one.

@@ -88,16 +88,60 @@ spec:
             summary: 'support-plane Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: '{{ $labels.namespace }}/{{ $labels.deployment }} has 0 available replicas for 10m — the workload is down or wedged, not merely unscrapable.'
+        # ── Loki availability: TWO alerts, because one of them never fired ───────
+        #
+        # There was a single rule here, `statefulset="loki"` == 0, and it could not
+        # fire for either of two independent reasons.
+        #
+        # WRONG NAME. apl-core runs the loki chart in its DISTRIBUTED topology, so
+        # the StatefulSet is `loki-ingester` — there is no `loki` StatefulSet, the
+        # selector matched no series, and an expression over an empty vector is
+        # never true. Matching `loki.*` now, so a chart that splits or renames the
+        # workload again is still covered rather than silently unwatched.
+        #
+        # WRONG THRESHOLD. `== 0` asks for a TOTAL outage. The failure actually
+        # observed was 1 of 3 ingesters ready for 16 days — degraded, ingesting
+        # nothing reliably, and blocking node drains (the PDB sat at
+        # disruptionsAllowed=0 the whole time) — which a zero-replica test reads as
+        # healthy. So the gating alert compares against DESIRED replicas.
+        #
+        # `== 0` is kept as a second, separately-named alert rather than folded in:
+        # "some replicas are down" and "the service is gone" want different
+        # urgencies and different first moves, and collapsing them loses that.
+        - alert: LokiStatefulSetDegraded
+          # kube_statefulset_replicas is spec.replicas (DESIRED).
+          # kube_statefulset_status_replicas — one word longer, and the one this
+          # first compared against — is status.replicas: pods the controller has
+          # CREATED. They agree right up until the case that matters: a replica the
+          # controller cannot create (quota, no schedulable node, a pending PVC)
+          # never reaches status.replicas, so `ready < created` stays false and a
+          # StatefulSet stuck at 1 of 3 reads perfectly healthy. Desired is the only
+          # number that makes "degraded" mean what the alert name says.
+          expr: |
+            kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset=~"loki.*"}
+            <
+            kube_statefulset_replicas{namespace="monitoring", statefulset=~"loki.*"}
+          # 15m, not 10m: a rolling restart legitimately drops a replica, and a
+          # StatefulSet rolls one pod at a time. 15m clears an ordinary rollout
+          # while still catching a crashloop in well under an hour.
+          for: 15m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: 'Loki {{ $labels.statefulset }} has fewer ready replicas than desired'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'monitoring/{{ $labels.statefulset }} has had a replica not-Ready for 15m ({{ $value }} ready). Ingestion is degraded and the PodDisruptionBudget will block node drains. On an INGESTER the usual cause is an OOMKill during WAL replay, which does not self-heal — `kubectl -n monitoring logs <pod> --previous | tail` and check the memory limit against the WAL-replay floor (`llz ci assert-loki` reports it).'
         - alert: LokiStatefulSetUnavailable
-          expr: kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset="loki"} == 0
+          expr: kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset=~"loki.*"} == 0
           for: 10m
           labels:
             severity: warning
             service: loki
           annotations:
-            summary: Loki has no ready replicas
+            summary: 'Loki {{ $labels.statefulset }} has no ready replicas'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
-            description: The Loki StatefulSet has 0 ready replicas for 10m — log ingestion and queries are down.
+            description: 'monitoring/{{ $labels.statefulset }} has 0 ready replicas for 10m — log ingestion and queries are down.'
         # ── Error-rate / saturation (the third + fourth layer) ────────────────────
         # Availability (above) answers "is it up"; these answer "is it healthy while
         # up". The Loki exprs are VERIFIED against the live metric surface (`llz ci
@@ -204,14 +248,22 @@ spec:
             description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
         # ── Harbor error-rate / saturation ────────────────────────────────────────
         # PROVISIONAL — and NOT scrape-gated, which is the part that matters.
-        # The pieces harbor_* needs all ship: apl-values/values.yaml
-        # harbor._rawValues.metrics, the harbor-allow-metrics NetworkPolicy, and the
-        # ServiceMonitor. But Harbor's ServiceMonitor is NOT in defaultScrapeMonitors
-        # (tools/internal/extensions/assertions/assertobs/scrape.go), so nothing fails if its metrics stop
-        # arriving and these three quietly read DEAD? in `alert-eval`. Names are the
-        # goharbor v2.15 exporter/core metrics; confirm against real values with
-        # `llz ci prom-metrics --match '^harbor_'`, tune the thresholds, then add the
-        # ServiceMonitor to defaultScrapeMonitors to close the gap.
+        # The pieces harbor_* needs all ship: apps.harbor._rawValues.metrics in the
+        # apl-overlay (apl-values/_shared/apl-overlay/appvalues.yaml — it lived in the
+        # retired apl-core values base until that base was deleted, which means it had
+        # never actually reached a cluster), the harbor-allow-metrics NetworkPolicy,
+        # and the ServiceMonitor. Harbor's ServiceMonitor is deliberately NOT in
+        # defaultScrapeMonitors (tools/internal/extensions/assertions/assertobs/scrape.go): it was
+        # added there and withdrawn in the same change, because Harbor is opt-in
+        # (ManagedConditionalOn "harbor") and a hard-gating entry turned the scrape
+        # lane permanently red on every instance that does not run it. So nothing
+        # FAILS if Harbor's metrics stop arriving — these three read DEAD?/NOMATCH in
+        # the weekly `alert-eval`, which is a report, not a gate.
+        #
+        # Names are the goharbor v2.15 exporter/core metrics; confirm against real
+        # values with `llz ci prom-metrics --match '^harbor_'` and tune the
+        # thresholds. Closing the gap properly needs defaultScrapeMonitors to become
+        # component-aware, not another unconditional entry.
         # (Registry-disk saturation is intentionally omitted —
         # the registry stores to Linode Object Storage (S3), not a PVC. DB health is
         # covered by the CNPG cnpg_* metrics + the availability alert above.)
