@@ -52,6 +52,7 @@ package onboard
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
@@ -157,6 +158,30 @@ func checkSpecPreflights(env string) []error {
 		}
 	}
 
+	// ── spec fields that reach no cluster ─────────────────────────────────────
+	// ADVISORY, NOT GATING, and the distinction is deliberate: the instance is not
+	// misconfigured — LLZ is. The operator wrote a supported-looking spec field and
+	// this repo has no channel to deliver it, which is a promise this repo is
+	// breaking, not an error the operator can fix. Failing doctor over it would
+	// make an adopter's own build red for someone else's gap.
+	//
+	// It only speaks when the instance actually SETS one. spec.alerting went
+	// unrendered for the whole life of the managed platform without a single
+	// signal; a line printed on every instance regardless would be tuned out
+	// inside a week and restore exactly that silence.
+	specTFDir, _, _ := instancelayout.Detect()
+	if lz, lerr := clusterspec.LoadInstance(filepath.Dir(specTFDir)); lerr == nil && lz != nil {
+		if findings := clusterspec.InertFindings(lz); len(findings) > 0 {
+			report("spec fields reach a cluster", false)
+			for _, f := range findings {
+				for _, l := range wrapDoctorFinding(f) {
+					fmt.Printf("     %s\n", l)
+				}
+			}
+			fmt.Printf("     %s\n", color.Dim("advisory: this is an LLZ gap, not an instance misconfiguration — see docs/upstream-asks.md"))
+		}
+	}
+
 	// ── object-storage bucket labels ──────────────────────────────────────────
 	// Advisory (objlabel_preflight.go): it can only see this account's buckets, so
 	// it never gates. Naming the labels here is what gives the operator the right
@@ -214,4 +239,31 @@ func checkCIImagePins(tokensCmd string, recorded func(string) string) error {
 	fmt.Printf("     re-pin with %s\n", color.Cyan(tokensCmd))
 	return fmt.Errorf("%d ci image variable(s) name an older template commit than this instance's pin — "+
 		"the first pipeline run fails `llz ci assert-image-fresh`", len(skew))
+}
+
+// wrapDoctorFinding splits a long finding across lines at word boundaries so a
+// terminal reader gets a paragraph rather than one unreadable line. The findings
+// are deliberately long — each carries WHY the field is inert, which is the half
+// an operator needs to decide whether to keep the setting — and truncating them
+// would leave only the accusation.
+func wrapDoctorFinding(s string) []string {
+	const width = 92
+	var out []string
+	line := ""
+	for _, w := range strings.Fields(s) {
+		if line != "" && len(line)+1+len(w) > width {
+			out = append(out, line)
+			line = "  " + w // continuation indent
+			continue
+		}
+		if line == "" {
+			line = w
+		} else {
+			line += " " + w
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
 }
