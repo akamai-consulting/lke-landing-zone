@@ -62,7 +62,8 @@ data:
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "targets": [
             { "expr": "max(llz_convergence_apps_failed{namespace=\"llz-reconciler\"})", "legendFormat": "failed" },
-            { "expr": "max(llz_convergence_apps_pending{namespace=\"llz-reconciler\"})", "legendFormat": "pending" }
+            { "expr": "max(llz_convergence_apps_pending{namespace=\"llz-reconciler\"})", "legendFormat": "pending" },
+            { "expr": "max(llz_convergence_apps_instance_failed{namespace=\"llz-reconciler\"})", "legendFormat": "instance-failed" }
           ]
         },
         {

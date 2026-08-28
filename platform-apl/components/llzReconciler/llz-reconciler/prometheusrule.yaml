@@ -127,6 +127,30 @@ spec:
             summary: cluster is not converged (hard-failed)
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
+        - alert: LLZAppScopeNotConverged
+          # The other half of the convergence boundary. Instance-owned Applications
+          # (the operator escape hatch and the apps deployed through it) are
+          # deliberately excluded from llz_convergence_state, so a broken one leaves
+          # the platform alert silent by design. Without this alert that exclusion is
+          # indistinguishable from health: eight unseeded per-app credentials once
+          # survived eight days behind exactly that silence. Longer `for` than the
+          # platform alert — an app team's deploy is theirs to finish, and this is a
+          # notification that it did not, not a platform incident.
+          expr: max(llz_convergence_apps_instance_failed{namespace="llz-reconciler"}) > 0 or max(llz_convergence_apps_instance_pending{namespace="llz-reconciler"}) > 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: instance-owned Argo Applications are hard-failed
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: >-
+              One or more Applications in the instance-custom project are hard-failed or have been reconciling for an hour.
+              They do not gate platform convergence (llz_convergence_state stays 0); they are the instance's own to fix.
+              SCOPE: this lane classifies Argo APPLICATIONS, so a Synced+Healthy instance app whose ExternalSecrets, Jobs
+              or Pods are broken does not move it — run `llz ci converge --scope=apps` (converge, not health: the one-shot
+              reads a pod that is merely being created as failed) for the per-resource verdict, which the blocking
+              app-scope-health job in llz-scheduled-checks also runs unattended each week.
         - alert: LLZConvergenceUnobserved
           # llz_convergence_state == 0 means "converged" — but the state is derived
           # from classifying Argo Applications, and classifying NOTHING produced the

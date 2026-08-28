@@ -263,6 +263,35 @@ func StuckFinalizer(hasDeletionTimestamp bool, finalizerCount int, ageSeconds fl
 	return hasDeletionTimestamp && finalizerCount > 0 && ageSeconds > 300
 }
 
+// StuckResourceRef maps one StuckResourceKinds entry's resource plural to the
+// (group, Kind) identity the ownership index is keyed on, so the stuck-finalizer
+// sweep can ask the boundary like every other section. ok=false for a plural with
+// no mapping — which gates, the fail-closed direction.
+//
+// The sweep scans exactly the kinds instance-owned Applications declare
+// (ExternalSecrets, Certificates, PVCs, Workflows), and a half-deleted escape-hatch
+// app is one of the likelier ways to produce a stuck finalizer, so leaving it on
+// the platform-only funnel meant an app team's wedged delete aborted the platform
+// bootstrap.
+func StuckResourceRef(plural, namespace, name string) (ResourceRef, bool) {
+	res, group, _ := strings.Cut(plural, ".")
+	kind, ok := map[string]string{
+		"pv":                  "PersistentVolume",
+		"pvc":                 "PersistentVolumeClaim",
+		"certificates":        "Certificate",
+		"certificaterequests": "CertificateRequest",
+		"workflows":           "Workflow",
+		"externalsecrets":     "ExternalSecret",
+		"clustersecretstores": "ClusterSecretStore",
+		"clusterissuers":      "ClusterIssuer",
+		"issuers":             "Issuer",
+	}[res]
+	if !ok {
+		return ResourceRef{}, false
+	}
+	return ResourceRef{Group: group, Kind: kind, Namespace: namespace, Name: name}, true
+}
+
 // StuckResourceKinds are the kinds swept for stuck-finalizer deletions, in
 // "kind|scope" form (scope "-A" = namespaced, "" = cluster-scoped).
 func StuckResourceKinds() []string {

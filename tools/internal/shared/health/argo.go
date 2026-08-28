@@ -29,6 +29,24 @@ type ArgoApp struct {
 	// SyncErr is the message of a sync operation that is FAILING AND RETRYING —
 	// phase still "Running", tasks reported unsuccessful. See ParseArgoApp.
 	SyncErr string
+	// Project is .spec.project — the AppProject scoping this Application, and the
+	// authority on whether it is platform or instance-owned. See
+	// health.InstanceCustomProject.
+	Project string
+	// Resources is every resource this Application declares (.status.resources),
+	// which is what lets ownership follow the platform/instance boundary DOWN from
+	// the Application to its ExternalSecrets, Deployments, Workflows and Pods.
+	// Already fetched — Drifted is derived from the same list.
+	Resources []ResourceRef
+	// DestNamespace is .spec.destination.namespace — where this Application puts
+	// what it does not namespace itself.
+	//
+	// IT IS ONLY READ WHEN Resources IS EMPTY. An Application Argo has not compared
+	// publishes nothing, so the ownership index has to assume it could own
+	// something; the destination is the only evidence available about WHERE. An
+	// empty value means "could be anywhere", which is the fail-closed reading. See
+	// OwnershipIndex.platformMayClaim.
+	DestNamespace string
 }
 
 // SyncTasksFailing reports whether an operationState message describes a sync
@@ -64,24 +82,34 @@ func summarizeDrifted(drifted []string) string {
 // instance-OWNED (.template-manifest classifies kubernetes-custom/ as `owned`, not
 // `managed`), not platform components.
 func IsInstanceCustomApp(name string) bool {
-	return strings.HasPrefix(name, "instance-custom-")
+	return strings.HasPrefix(name, instanceCustomAppPrefix)
 }
 
-// ClassifyArgoApp classifies one Application, then applies the platform-vs-instance
-// boundary: an instance-custom escape-hatch App in a GATING state (CatFail /
-// CatPending) is remapped to CatInstance — reported, but excluded from the
-// convergence verdict. The contract gates the PLATFORM; a broken or still-settling
-// operator manifest must not fail the whole bootstrap (the hatch mechanism itself
-// is proven by `llz ci assert-instance-custom` in release-e2e). Healthy (CatOK) and
-// cosmetic Drift are left unchanged — they were already non-gating and their labels
-// read correctly. The underlying decision order is classifyArgoApp.
-func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
-	cat, msg := classifyArgoApp(a, phase1)
-	if IsInstanceCustomApp(a.Name) && (cat == CatFail || cat == CatPending) {
-		return CatInstance, msg + "  ⇒ instance-owned (operator escape hatch); reported, does NOT gate platform convergence"
-	}
-	return cat, msg
+// IsInstanceOwnedApp is the boundary Report.RouteApp and the ownership index both
+// read: an Application scoped to the instance-custom AppProject, or one named by
+// the escape-hatch ApplicationSet's convention.
+//
+// THE PROJECT IS THE AUTHORITY; the name prefix is kept as a second signal, not
+// as the definition. Keying on the name ALONE is what let nine instance-owned
+// Applications gate the platform on akamai/gsap-apl: the managed-apps
+// ApplicationSet names its Applications after the app (`dispatch`,
+// `account-health`) while stamping `project: instance-custom` on every one. The
+// prefix stays because it costs nothing and covers an Application whose project
+// could not be read.
+//
+// FAILS CLOSED: an Application in any other project — or in none we recognise —
+// is platform, and gates.
+func IsInstanceOwnedApp(a ArgoApp) bool {
+	return a.Project == InstanceCustomProject || IsInstanceCustomApp(a.Name)
 }
+
+// THERE IS NO EXPORTED classify-and-demote. There was — ClassifyArgoApp — and it
+// returned the demoted category WITHOUT recording it, so every caller had to
+// remember to bank the severity the demotion had just consumed. Callers forgot,
+// which is how a hard-failed instance-owned Application came to gate NEITHER
+// scope. Report.RouteApp is the only way in: it classifies, applies the boundary,
+// and records the pre-demotion severity in one call. The tests reach the same
+// funnel through classifyApp (argo_test.go) rather than around it.
 
 // classifyArgoApp applies section 2's decision order to one Application:
 //  1. operator-deferred (EXTERNAL_DEP_APPS) wins even over a spec error, since
@@ -94,7 +122,7 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 //  7. Progressing => reconcile still in flight => pending (poll, don't fail);
 //  8. otherwise => fail.
 //
-// The instance-custom remap is layered on top by the exported ClassifyArgoApp.
+// The instance-custom remap is layered on top by Report.RouteApp.
 func classifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 	label := fmt.Sprintf("%s (%s/%s)", a.Name, a.Sync, a.Health)
 	if reason, ok := MatchExternalDep(a.Name, ExternalDepApps()); ok {
@@ -255,6 +283,10 @@ type argoAppJSON struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
+		Project     string `json:"project"`
+		Destination struct {
+			Namespace string `json:"namespace"`
+		} `json:"destination"`
 		SyncPolicy struct {
 			Automated json.RawMessage `json:"automated"`
 		} `json:"syncPolicy"`
@@ -275,6 +307,7 @@ type argoAppJSON struct {
 			Message string `json:"message"`
 		} `json:"operationState"`
 		Resources []struct {
+			Group     string `json:"group"`
 			Kind      string `json:"kind"`
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
@@ -329,8 +362,15 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 	// A resource with an EMPTY status is not drift: Argo leaves .status blank on
 	// resources it does not diff (hooks, and children it only observes). Only an
 	// explicit non-Synced value names a difference.
+	// One pass over .status.resources feeds two consumers: `drifted` (which
+	// resources differ) and `resources` (which resources this App DECLARES,
+	// regardless of sync state — the ownership index's authority). Keeping them
+	// together is deliberate: they must describe the same list, and reading the
+	// list twice invites them to diverge.
 	var drifted []string
+	resources := make([]ResourceRef, 0, len(j.Status.Resources))
 	for _, r := range j.Status.Resources {
+		resources = append(resources, ResourceRef{Group: r.Group, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name})
 		if r.Status == "" || r.Status == "Synced" {
 			continue
 		}
@@ -341,14 +381,17 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 		drifted = append(drifted, ref)
 	}
 	return ArgoApp{
-		Name:      j.Metadata.Name,
-		Sync:      j.Status.Sync.Status,
-		Health:    j.Status.Health.Status,
-		Automated: auto,
-		SpecErr:   strings.Join(specErrs, " | "),
-		OpErr:     opErr,
-		Drifted:   drifted,
-		SyncErr:   syncErr,
+		Name:          j.Metadata.Name,
+		Sync:          j.Status.Sync.Status,
+		Health:        j.Status.Health.Status,
+		Automated:     auto,
+		SpecErr:       strings.Join(specErrs, " | "),
+		OpErr:         opErr,
+		Drifted:       drifted,
+		SyncErr:       syncErr,
+		Project:       j.Spec.Project,
+		Resources:     resources,
+		DestNamespace: j.Spec.Destination.Namespace,
 	}, nil
 }
 

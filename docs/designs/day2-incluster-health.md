@@ -40,7 +40,7 @@ Two options, best-first:
    hand-rolled REST client, no kubectl) instead of shelling out. Most of the
    pieces already exist kubectl-free in the reconciler:
    - `reconcile_convergence.go` lists Argo Applications via `internal/kube` and
-     classifies them with the SAME `internal/health.ClassifyArgoApp` predicate
+     classifies them with the SAME `internal/health.Report.RouteApp` funnel
      `llz ci health` uses → the 0/1/2 convergence code.
    - `reconcile_health.go` reads ESO store / cert-manager Certificates / OpenBao
      pods via `internal/kube`.
@@ -79,7 +79,7 @@ reconciler already proved.
       ([ci_health_incluster.go](../../tools/internal/extensions/lifecycle/converge/incluster.go)):
       builds the in-cluster client, classifies Argo Application convergence via
       the shared `convergenceReport` (factored out of `reconcile_convergence.go`,
-      same `health.ClassifyArgoApp` predicate), and exits 0/1/2/3. `--fail-on-
+      same `health.Report.RouteApp` funnel), and exits 0/1/2/3. `--fail-on-
       unhealthy=false` is report-only. Unit-tested (`convergenceReport` +
       `convergenceExit`, and the reconciler gauge still passes on the shared core).
 - [x] **Point the WorkflowTemplate at it** (`ci health-incluster`); WIP marker
@@ -135,7 +135,7 @@ webhook adapter ships.
 
 **Scheduled `CronWorkflow` — dropped (does not earn its keep).** It ran
 `llz ci health-incluster` every 6h, report-only. But the `llz-reconciler` already
-samples the **identical** `convergenceReport` (same `health.ClassifyArgoApp`
+samples the **identical** `convergenceReport` (same `health.Report.RouteApp`
 predicate) every ~30s and emits it as the **alertable, historized** Prometheus
 gauge `llz_convergence_state` (+ `_apps_failed`/`_pending`), alongside richer
 ESO/cert-manager/OpenBao gauges. A 6-hourly, non-alertable log line of a verdict

@@ -44,9 +44,18 @@ type PodStatus struct {
 }
 
 // OwnerRef is the subset of metadata.ownerReferences the health checks read.
+//
+// Controller and APIVersion are read because ownership resolution needs both: a
+// resource may carry several ownerReferences with at most one `controller: true`
+// (the rest are GC-adoption or back-references), and the group half of the
+// resource identity the ownership index keys on comes from the apiVersion.
+// Controller is a POINTER because absent and false are different answers — older
+// writers omit the field entirely, and those refs are still usable fallbacks.
 type OwnerRef struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	APIVersion string `json:"apiVersion"`
+	Controller *bool  `json:"controller"`
 }
 
 // IsJobControlled reports whether a pod is owned by a Job — i.e. an ephemeral

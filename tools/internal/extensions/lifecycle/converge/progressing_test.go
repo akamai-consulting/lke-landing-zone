@@ -28,7 +28,7 @@ func TestProgressingCondition(t *testing.T) {
 
 func TestPrintHealthSummary(t *testing.T) {
 	hardFail := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Failed: []string{"openbao sealed"}, Drift: []string{"argocd OutOfSync"}})
+		printHealthSummary(&health.Report{Failed: []string{"openbao sealed"}, Drift: []string{"argocd OutOfSync"}}, health.OwnershipIndex{})
 	})
 	if !strings.Contains(hardFail, "FAILED:   openbao sealed") || !strings.Contains(hardFail, "1 check(s) hard-failed.") {
 		t.Errorf("hard-fail summary wrong:\n%s", hardFail)
@@ -38,20 +38,20 @@ func TestPrintHealthSummary(t *testing.T) {
 	}
 
 	inProgress := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Pending: []string{"cert Issuing"}})
+		printHealthSummary(&health.Report{Pending: []string{"cert Issuing"}}, health.OwnershipIndex{})
 	})
 	if !strings.Contains(inProgress, "still converging") {
 		t.Errorf("in-progress summary wrong:\n%s", inProgress)
 	}
 
 	convergedDeferred := captureStdout(t, func() {
-		printHealthSummary(&health.Report{Deferred: []string{"dns token"}})
+		printHealthSummary(&health.Report{Deferred: []string{"dns token"}}, health.OwnershipIndex{})
 	})
 	if !strings.Contains(convergedDeferred, "1 operator-deferred item(s) remain") {
 		t.Errorf("deferred-converged summary wrong:\n%s", convergedDeferred)
 	}
 
-	clean := captureStdout(t, func() { printHealthSummary(&health.Report{}) })
+	clean := captureStdout(t, func() { printHealthSummary(&health.Report{}, health.OwnershipIndex{}) })
 	if !strings.Contains(clean, "Cluster converged.") {
 		t.Errorf("clean summary wrong:\n%s", clean)
 	}

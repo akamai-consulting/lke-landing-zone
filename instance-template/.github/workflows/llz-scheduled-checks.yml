@@ -121,6 +121,12 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci health-certmanager
 
+      # THE APP SCOPE IS NOT A STEP HERE — it is the app-scope-health JOB below.
+      # It was a step, with continue-on-error, which made it the one thing in this
+      # job that could never go red: the boundary removed app content from the
+      # platform gate and handed it a check that reported and passed. It also
+      # contradicted this job's stated invariant three comments up.
+
       # tee -a, not tee — plain tee truncates $GITHUB_STEP_SUMMARY and would
       # clobber what the checks above wrote.
       - name: Assert the wave-health guard VAP is bound and enforcing
@@ -232,6 +238,74 @@ jobs:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
+
+  # ── App-scope convergence — the gate the excluded content HAS ────────────────
+  # `llz ci converge` gates the PLATFORM and deliberately does not fail on
+  # instance-owned content — the operator escape hatch and the apps deployed
+  # through it — so an app team's missing credential cannot block a platform
+  # release. THIS is what gates that content instead, and it blocks: no
+  # continue-on-error, so a red app estate is a red run with an owner.
+  #
+  # A JOB, NOT A STEP, and that is the whole point. Excluding app content from the
+  # platform verdict is only safe if something else says no, and the first cut of
+  # this shipped as a warn-only step in the weekly job above — a check that
+  # reported and passed, which is the failure mode the boundary was drawn to fix
+  # (eight unseeded per-app credentials, eight days, nobody looked). It cannot be
+  # a blocking step there either: a red step skips the platform probes after it,
+  # re-creating the coupling one layer up. A separate job gets its own verdict,
+  # its own cluster-access, and its own owner, and cannot skip anything.
+  #
+  # NOT in llz-cluster-health.yml: that workflow is workflow_dispatch-only, so a
+  # gate placed there runs when a human clicks it, which is not a gate.
+  #
+  # converge, not health: health.Budgeted is true only inside a budget, and
+  # outside one a pod that is merely being created classifies as failed — a
+  # routine app rollout would go red. The budget is short because this is a
+  # steady-state sweep, not a bootstrap wait; the continuous detector is the
+  # in-cluster LLZAppScopeNotConverged alert, and this is the sweep behind it
+  # that also sees the resource level the alert cannot.
+  app-scope-health:
+    name: App-scope convergence (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # tee -a, not tee — plain tee truncates $GITHUB_STEP_SUMMARY.
+      - name: Converge the instance-owned content
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci converge --scope=apps --budget 300 --interval 30 | tee -a "$GITHUB_STEP_SUMMARY"
+
 
   # ── Credential single pane of glass ──────────────────────────────────────────
   # Daily. Cluster-as-source-of-truth: a WRITER step publishes token expiry into

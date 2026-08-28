@@ -266,7 +266,7 @@ func TestCheckArgoApps(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkArgoApps(&r, false)
+	checkArgoApps(&r, mustArgoApps(t), true, false)
 	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
 		t.Errorf("checkArgoApps = failed %v deferred %v, want 1 each", r.Failed, r.Deferred)
 	}
@@ -287,7 +287,7 @@ func TestCheckArgoAppsRedisAuthSplit(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkArgoApps(&r, false)
+	checkArgoApps(&r, mustArgoApps(t), true, false)
 	if !r.RedisAuthSplit {
 		t.Error("checkArgoApps did not set RedisAuthSplit on a WRONGPASS ComparisonError")
 	}
@@ -312,7 +312,7 @@ func TestCheckArgoAppsAnnotationLimitWedge(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkArgoApps(&r, false)
+	checkArgoApps(&r, mustArgoApps(t), true, false)
 	if !r.AnnotationLimitWedge {
 		t.Error("checkArgoApps did not set AnnotationLimitWedge on a 'Too long' sync failure")
 	}
@@ -374,7 +374,7 @@ func TestCheckWorkloads(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkWorkloads(&r, mustInventory(t), false)
+	checkWorkloads(&r, mustInventory(t), health.OwnershipIndex{}, false)
 	if len(r.Failed) != 1 {
 		t.Errorf("checkWorkloads = %v, want 1 (the 1/2 deploy)", r.Failed)
 	}
@@ -413,7 +413,7 @@ func TestCheckPVCsAndPVs(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkPVCs(&r)
+	checkPVCs(&r, health.OwnershipIndex{})
 	checkPVs(&r)
 	if len(r.Failed) != 2 {
 		t.Errorf("checkPVCs+PVs = %v, want 2 (Pending PVC + Failed PV)", r.Failed)
@@ -433,8 +433,8 @@ func TestCheckJobsAndWorkflows(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkJobs(&r, false)
-	checkWorkflows(&r, mustInventory(t), false)
+	checkJobs(&r, health.OwnershipIndex{}, false)
+	checkWorkflows(&r, mustInventory(t), health.OwnershipIndex{}, false)
 	if len(r.Failed) != 2 {
 		t.Errorf("jobs+workflows = %v, want 2", r.Failed)
 	}
@@ -451,8 +451,8 @@ func TestCheckPDBsAndIngresses(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkPDBs(&r, false)
-	checkIngresses(&r, false)
+	checkPDBs(&r, health.OwnershipIndex{}, false)
+	checkIngresses(&r, health.OwnershipIndex{}, false)
 	if len(r.Failed) != 2 {
 		t.Errorf("pdb+ingress = %v, want 2", r.Failed)
 	}
@@ -473,7 +473,7 @@ func TestCheckPods(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkPods(&r, false)
+	checkPods(&r, health.OwnershipIndex{}, false)
 	// 1 failed (bad) + 1 deferred (external-dns); the Job-owned nudger pod is skipped.
 	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
 		t.Errorf("checkPods = failed %v deferred %v, want 1 each (Job pod must be skipped)", r.Failed, r.Deferred)
@@ -530,13 +530,13 @@ func TestCheckReadyResources(t *testing.T) {
 	})
 	// phase1=false so platform-app-ca isn't excused => a failure.
 	var r health.Report
-	checkReadyResources(&r, false)
+	checkReadyResources(&r, health.OwnershipIndex{}, false)
 	if len(r.Failed) != 1 {
 		t.Errorf("checkReadyResources = %v, want 1 (issuer NotReady, not phase1)", r.Failed)
 	}
 	// phase1=true => the platform-app-ca issuer is pending, not failed.
 	var r2 health.Report
-	checkReadyResources(&r2, true)
+	checkReadyResources(&r2, health.OwnershipIndex{}, true)
 	if len(r2.Failed) != 0 || len(r2.Pending) != 1 {
 		t.Errorf("checkReadyResources phase1 = failed %v pending %v, want 0/1", r2.Failed, r2.Pending)
 	}
@@ -627,7 +627,7 @@ func TestExecErrText(t *testing.T) {
 func TestHealthExitCodePaths(t *testing.T) {
 	// Unreachable apiserver => 3 (infrastructure transient, not a hard strike).
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
-	if ec := healthExitCode(); ec != 3 {
+	if ec := healthExitCodeFor(ScopePlatform); ec != 3 {
 		t.Errorf("unreachable => exit %d, want 3", ec)
 	}
 	// Reachable but Phase 0 (applications CRD missing) => 2.
@@ -637,7 +637,7 @@ func TestHealthExitCodePaths(t *testing.T) {
 		}
 		return nil, errors.New("absent") // CRD/app missing => phase 0
 	})
-	if ec := healthExitCode(); ec != 2 {
+	if ec := healthExitCodeFor(ScopePlatform); ec != 2 {
 		t.Errorf("phase 0 => exit %d, want 2", ec)
 	}
 }
@@ -647,7 +647,7 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	// the unreachable branch — never the twice-in-a-row hard-fail abort. budget=0
 	// trips the deadline immediately; retry-delay=0 keeps it from sleeping.
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
-	if err := runConverge(0, 0, 0); err == nil {
+	if err := runConverge(0, 0, 0, ScopePlatform); err == nil {
 		t.Errorf("unreachable + exhausted budget => err %v, want non-nil", err)
 	}
 }
@@ -686,7 +686,7 @@ func TestRunConvergeHardFailRecheckConvergedStops(t *testing.T) {
 		healthResult{code: 1, nonOK: []string{"loki-0"}}, // hard fail — re-check
 		healthResult{code: 0},                            // re-check: converged
 	)
-	if err := runConverge(3600, 0, 0); err != nil {
+	if err := runConverge(3600, 0, 0, ScopePlatform); err != nil {
 		t.Fatalf("runConverge = %v, want nil (the re-check converged)", err)
 	}
 	if *calls != 3 {
@@ -698,7 +698,7 @@ func TestRunConvergeHardFailRecheckConvergedStops(t *testing.T) {
 // a re-check that is STILL hard is terminal, not another lap of the poll loop.
 func TestRunConvergeHardFailTwiceAborts(t *testing.T) {
 	withConvergePoll(t, healthResult{code: 1}, healthResult{code: 1})
-	err := runConverge(3600, 0, 0)
+	err := runConverge(3600, 0, 0, ScopePlatform)
 	if err == nil || !strings.Contains(err.Error(), "hard-failed twice in a row") {
 		t.Errorf("runConverge = %v, want the twice-in-a-row hard-fail abort", err)
 	}
@@ -706,17 +706,38 @@ func TestRunConvergeHardFailTwiceAborts(t *testing.T) {
 
 // A re-check that recovers only to IN-PROGRESS is not a verdict — the loop must
 // keep polling to the budget rather than reading "not hard any more" as converged.
+//
+// The budget here is REAL (3600s). It used to be 0, which quietly asserted the
+// opposite of the contract: with the budget already exhausted the loop still paid
+// the re-check scan and a third poll, because the hard-fail branch never consulted
+// the deadline. The test locked that in; a zero budget must now stop at one scan,
+// which the case below pins.
 func TestRunConvergeHardFailRecheckInProgressKeepsPolling(t *testing.T) {
 	calls := withConvergePoll(t,
 		healthResult{code: 1}, // hard fail
 		healthResult{code: 2}, // re-check: in-progress, not a verdict
-		healthResult{code: 2}, // …so the loop polls on, and this one exhausts the budget
+		healthResult{code: 0}, // …so the loop polls on, and THIS is the verdict
 	)
-	if err := runConverge(0, 0, 0); err == nil {
-		t.Error("runConverge = nil, want the exhausted-budget error")
+	if err := runConverge(3600, 0, 0, ScopePlatform); err != nil {
+		t.Errorf("runConverge = %v, want nil — the loop polled on and converged", err)
 	}
 	if *calls != 3 {
 		t.Errorf("health scans = %d, want 3 (hard-fail, in-progress re-check, one more poll)", *calls)
+	}
+}
+
+// The re-check is a whole cluster scan (35-58s measured), so an exhausted budget
+// must stop before it. Report-only passes --budget 0 for a single-poll snapshot,
+// and paid two or three scans instead on exactly the runs where something was
+// broken — the one shape the mode was tuned for.
+func TestRunConvergeHardFailDoesNotRecheckPastTheBudget(t *testing.T) {
+	calls := withConvergePoll(t, healthResult{code: 1}, healthResult{code: 0})
+	err := runConverge(0, 0, 0, ScopePlatform)
+	if err == nil || !strings.Contains(err.Error(), "budget exhausted") {
+		t.Errorf("runConverge = %v, want the budget-exhausted hard-fail error", err)
+	}
+	if *calls != 1 {
+		t.Errorf("health scans = %d, want 1 — an exhausted budget buys no re-check scan", *calls)
 	}
 }
 
@@ -774,7 +795,7 @@ func TestPrintHealthSummaryAndRecord(t *testing.T) {
 	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
 		t.Fatalf("record routing wrong: %+v", r)
 	}
-	printHealthSummary(&r) // exercises the summary formatting (HardFailed branch)
+	printHealthSummary(&r, health.OwnershipIndex{}) // exercises the summary formatting (HardFailed branch)
 }
 
 func TestLongPoleCandidatesAndReport(t *testing.T) {
@@ -826,7 +847,7 @@ func TestCheckArgoAppsGitAuthFailure(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkArgoApps(&r, true) // phase1 — the state the real run was in
+	checkArgoApps(&r, mustArgoApps(t), true, true) // phase1 — the state the real run was in
 	if !r.GitAuthFailure {
 		t.Error("checkArgoApps did not set GitAuthFailure on a git-auth ComparisonError")
 	}
@@ -841,4 +862,16 @@ func TestCheckArgoAppsGitAuthFailure(t *testing.T) {
 	if got := health.PhaseAwareExitCode(1, true && !r.GitAuthFailure); got != 1 {
 		t.Errorf("phase1 downgraded a git-auth hard fail to %d; want it to stay 1 (terminal)", got)
 	}
+}
+
+// mustArgoApps runs the real fetch against the test's kubectl stub and fails the
+// test if the list could not be read — the tests below are about CLASSIFICATION,
+// so an unreadable corpus is a broken fixture, not a case.
+func mustArgoApps(t *testing.T) []health.ArgoApp {
+	t.Helper()
+	apps, ok := fetchArgoApps()
+	if !ok {
+		t.Fatal("fetchArgoApps could not read the Applications list from the stub")
+	}
+	return apps
 }

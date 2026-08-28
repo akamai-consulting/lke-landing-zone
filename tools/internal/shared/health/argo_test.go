@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+// classifyApp runs one Application through the SHIPPING funnel and returns what
+// it recorded. It replaces the exported ClassifyArgoApp these tests used to call:
+// that function classified and demoted WITHOUT recording, so a test passing over
+// it proved the label was right while saying nothing about whether the app scope
+// still had a gate. Report.RouteApp is the only path production takes.
+func classifyApp(a ArgoApp, phase1 bool) (Category, string) {
+	var r Report
+	return r.RouteApp(a, phase1)
+}
+
 func TestMatchPrefix(t *testing.T) {
 	items := []string{"openbao/platform-openbao", "harbor/harbor-core"}
 	if !MatchPrefix("harbor/harbor-core", items) {
@@ -80,9 +90,9 @@ func TestClassifyArgoApp(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := ClassifyArgoApp(c.app, c.phase1)
+			got, _ := classifyApp(c.app, c.phase1)
 			if got != c.want {
-				t.Errorf("ClassifyArgoApp = %v, want %v", got, c.want)
+				t.Errorf("classifyApp = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -169,7 +179,7 @@ func TestSummarizeDrifted(t *testing.T) {
 // The DRIFT line is the one an operator is trained to skip past; it earns
 // attention only by naming what actually differs (#394).
 func TestClassifyArgoApp_DriftNamesTheResource(t *testing.T) {
-	_, msg := ClassifyArgoApp(ArgoApp{
+	_, msg := classifyApp(ArgoApp{
 		Name: "llz-observability", Sync: "OutOfSync", Health: "Healthy", Automated: true,
 		Drifted: []string{"OpenTelemetryCollector/llz-observability/platform"},
 	}, false)
@@ -177,7 +187,7 @@ func TestClassifyArgoApp_DriftNamesTheResource(t *testing.T) {
 		t.Errorf("drift message must name the drifted resource, got %q", msg)
 	}
 	// A drifting App Argo cannot attribute still reads cleanly.
-	if _, msg := ClassifyArgoApp(ArgoApp{Name: "platform-eso", Sync: "OutOfSync", Health: "Healthy", Automated: true}, false); strings.Contains(msg, "OutOfSync:") {
+	if _, msg := classifyApp(ArgoApp{Name: "platform-eso", Sync: "OutOfSync", Health: "Healthy", Automated: true}, false); strings.Contains(msg, "OutOfSync:") {
 		t.Errorf("no drifted resources must leave the line unchanged, got %q", msg)
 	}
 }
@@ -254,7 +264,7 @@ func TestClassifyArgoApp_GitAuthIsTerminal(t *testing.T) {
 	}
 	// phase1 must not soften it — the phase says nothing about credentials.
 	for _, phase1 := range []bool{false, true} {
-		cat, msg := ClassifyArgoApp(a, phase1)
+		cat, msg := classifyApp(a, phase1)
 		if cat != CatFail {
 			t.Errorf("phase1=%v: category = %v, want CatFail", phase1, cat)
 		}
@@ -275,7 +285,7 @@ func TestClassifyArgoApp_RedisSplitStillPolls(t *testing.T) {
 		Name: "llz-harbor", Sync: "Unknown", Health: "Healthy", Automated: true,
 		SpecErr: "failed to list refs: NOAUTH Authentication required.",
 	}
-	if cat, msg := ClassifyArgoApp(a, false); cat != CatPending {
+	if cat, msg := classifyApp(a, false); cat != CatPending {
 		t.Errorf("category = %v (%s), want CatPending — the redis split self-heals", cat, msg)
 	}
 }

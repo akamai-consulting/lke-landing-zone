@@ -36,6 +36,37 @@ import (
 // actually create (platform-apl/components/*, kubernetes-charts/*). A rename
 // here fails open, so it is worth checking against the tree rather than
 // assuming.
+// scannedNamespaces is healthNamespaces plus the APP ESTATE — the namespaces
+// instance-owned Applications declare into that the platform does not occupy.
+//
+// WITHOUT THE SECOND HALF THE APP SCOPE CANNOT SEE THE APP ESTATE. These sections
+// list per namespace, not -A, so an instance app in a team namespace was examined
+// by neither scope: its Deployment, its StatefulSet and — the one nothing else
+// catches — its Service's endpoints. A Service whose selector matches nothing is
+// reported by no other check, and Argo calls a ClusterIP Service Healthy
+// unconditionally, so `--scope=apps` exited 0 over an unreachable app.
+//
+// InstanceNamespaces, NOT Namespaces. An instance app that declares a single
+// ServiceMonitor into monitoring would otherwise pull that whole namespace into
+// the per-namespace scan, and apl-core's loki Deployments — platform-owned, never
+// scanned here before, and gating — would start deciding the platform verdict on
+// the strength of one instance-owned side-car resource. The app estate is what
+// this widening is for; the platform's namespaces are already in the list above
+// or already judged by the -A sections.
+func scannedNamespaces(owned health.OwnershipIndex) []string {
+	out := append([]string(nil), healthNamespaces...)
+	seen := make(map[string]bool, len(out))
+	for _, ns := range out {
+		seen[ns] = true
+	}
+	for _, ns := range owned.InstanceNamespaces() {
+		if !seen[ns] {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 var healthNamespaces = []string{
 	"argocd", "kube-system", "cert-manager", "llz-cert-automation", "external-secrets",
 	OpenbaoNamespace, "llz-observability", "harbor", "istio-system",
@@ -82,13 +113,30 @@ func convergeSleep(interval, elapsed time.Duration) time.Duration {
 	return 0
 }
 
-// longPoleCandidates returns the labels keeping a report in-progress (Pending +
-// Failed). Pure — the report's tolerated categories (Drift/Deferred/Instance) are
-// excluded because they do not hold up convergence.
+// longPoleCandidates returns the labels keeping the PLATFORM in-progress (Pending
+// + Failed). Pure — the tolerated categories (Drift/Deferred/Instance) are
+// excluded because they do not hold up platform convergence.
+//
+// AN EARLIER PASS ADDED Instance HERE, reasoning that an instance-owned Deployment
+// pulling an image for fifteen minutes is still the last thing to go healthy. It
+// is — for the APP scope. Mixed into the platform list it named content that never
+// gated as the cause of a platform timeout, and on the cluster this boundary was
+// measured against (37 instance findings) it could push the one item that DID gate
+// past the report's 25-line cap. Each scope reports what it was waiting on; see
+// appLongPoleCandidates.
 func longPoleCandidates(r *health.Report) []string {
 	out := make([]string, 0, len(r.Pending)+len(r.Failed))
 	out = append(out, r.Pending...)
 	out = append(out, r.Failed...)
+	return out
+}
+
+// appLongPoleCandidates is longPoleCandidates for the app scope: the demoted
+// severities, which are exactly what AppVerdict gates on.
+func appLongPoleCandidates(r *health.Report) []string {
+	out := make([]string, 0, len(r.InstanceFailed)+len(r.InstancePending))
+	out = append(out, r.InstanceFailed...)
+	out = append(out, r.InstancePending...)
 	return out
 }
 
@@ -120,7 +168,7 @@ func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
 // ::error:: annotations stay direct stderr writes: GitHub parses an annotation
 // only at the start of a line, and a returned error is printed behind main.go's
 // "llz: " prefix.
-func runConverge(budget, interval, retryDelay int) error {
+func runConverge(budget, interval, retryDelay int, scope string) error {
 	deadline := time.Now().Add(time.Duration(budget) * time.Second)
 	st := newConvergeState()
 	// The converge loop itself is the retry for the cluster probes — a transient
@@ -143,6 +191,30 @@ func runConverge(budget, interval, retryDelay int) error {
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's
 	// identity across runs instead of assuming it.
+	// scoped picks WHICH verdict of the one poll this loop is polling on. It is a
+	// closure and not an inline branch because the loop reads a verdict in two
+	// places — the poll and the hard-fail re-check — and scoping only the first is
+	// not a partial fix but an inverted one: an apps-scope run whose app content
+	// hard-failed re-checked the PLATFORM code, found it healthy, and returned
+	// success on exactly the state the gate exists to catch.
+	scoped := func(res healthResult) int {
+		if scope == ScopeApps {
+			return res.appCode
+		}
+		return res.code
+	}
+	scopedNonOK := func(res healthResult) []string {
+		if scope == ScopeApps {
+			return res.nonOKApps
+		}
+		return res.nonOK
+	}
+	// subject names what this run is judging, so a red apps-scope step does not
+	// report that "the cluster hard-failed" for content the cluster does not own.
+	subject := "cluster"
+	if scope == ScopeApps {
+		subject = "apps scope (instance-owned content)"
+	}
 	var prevNonOK []string
 	var prevAttempt int
 	redisRealigned := false
@@ -151,7 +223,7 @@ func runConverge(budget, interval, retryDelay int) error {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
 		res := convergePoll(st)
-		step := health.ConvergeStep(res.code)
+		step := health.ConvergeStep(scoped(res))
 		pollDur := time.Since(pollStart)
 		// Self-heal a repo-server↔argocd-redis auth split. The redis pod bakes its
 		// --requirepass from the argocd-redis Secret at pod start and never re-reads
@@ -164,7 +236,19 @@ func runConverge(budget, interval, retryDelay int) error {
 		// budget still bounds the poll and we fail as before (no worse than not trying).
 		// This complements the bootstrap workflow's one-shot pre-converge realign,
 		// which misses a split that only surfaces during this wait.
-		if res.redisAuthSplit && !redisRealigned {
+		// PLATFORM SCOPE ONLY, both of them. These are repairs — a Deployment
+		// restart and a CRD annotation strip — on platform infrastructure. An
+		// apps-scope run is gating an app team's content on behalf of an app team;
+		// letting it mutate the platform inverts the boundary the scope exists to
+		// draw.
+		//
+		// THE TRADE: a split that first surfaces while only the apps lane is running
+		// is observed and not repaired. The apps lane polls its budget and fails
+		// (every Application ComparisonErrors under a redis split, instance-owned
+		// ones included), and the repair waits for the next platform run. That is
+		// the right way round — a lane that cannot fix a fault should report it
+		// rather than reach into the platform — but it is a delay, not a no-op.
+		if scope == ScopePlatform && res.redisAuthSplit && !redisRealigned {
 			redisRealigned = true
 			realignArgocdRedis()
 		}
@@ -176,7 +260,7 @@ func runConverge(budget, interval, retryDelay int) error {
 		// (SSA never writes it) unwedges the apply. Once per run; if it doesn't clear,
 		// the budget still bounds the poll. Mirrors the bootstrap's proactive step 1b
 		// for a wedge that only surfaces during this wait.
-		if res.annotationWedge && !crdAnnotationsStripped {
+		if scope == ScopePlatform && res.annotationWedge && !crdAnnotationsStripped {
 			crdAnnotationsStripped = true
 			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
 			deps.StripOversizedCRDLastApplied()
@@ -188,7 +272,7 @@ func runConverge(budget, interval, retryDelay int) error {
 			reportConvergeLongPole(prevNonOK, prevAttempt)
 			return nil
 		case health.ConvergePoll:
-			prevNonOK, prevAttempt = res.nonOK, attempt
+			prevNonOK, prevAttempt = scopedNonOK(res), attempt
 			if time.Now().After(deadline) {
 				// NAME WHAT WAS STILL PENDING. Deferring a verdict to the budget is
 				// only honest if the budget's report says what it was waiting for —
@@ -196,12 +280,20 @@ func runConverge(budget, interval, retryDelay int) error {
 				// Service whose pods have no IP yet) trade a precise CatFail for a
 				// timeout that names nothing, which is a worse answer, not a kinder
 				// one. This is the other half of those classifier changes.
-				reportConvergePending(res.nonOK)
-				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
-				return fmt.Errorf("budget of %ds exhausted with the cluster still in-progress", budget)
+				reportConvergePending(scopedNonOK(res))
+				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the %s still in-progress.\n", budget, subject)
+				return fmt.Errorf("budget of %ds exhausted with the %s still in-progress", budget, subject)
 			}
 			time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
 		case health.ConvergeRetryHard:
+			// The re-check is a whole scan (35-58s measured), so the deadline has to
+			// bound it like every other branch. It did not, which made `--budget 0`
+			// — the report-only snapshot — pay two and sometimes three full scans on
+			// exactly the runs where something was broken.
+			if time.Now().After(deadline) {
+				fmt.Fprintf(os.Stderr, "::error::%s hard-failed and the %ds budget is exhausted — not re-checking.\n", subject, budget)
+				return fmt.Errorf("%s hard-failed with the %ds budget exhausted", subject, budget)
+			}
 			fmt.Fprintf(os.Stderr, "::warning::hard failure reported — re-checking after %ds to absorb transients.\n", retryDelay)
 			time.Sleep(time.Duration(retryDelay) * time.Second)
 			// The re-check is a FULL health scan, so its verdict is worth exactly as
@@ -213,10 +305,10 @@ func runConverge(budget, interval, retryDelay int) error {
 			// another scan to be told the same thing. Same reasoning that retired the
 			// confirm-on-DONE pass (see convergeState).
 			recheck := convergePoll(st)
-			switch health.ConvergeStep(recheck.code) {
+			switch health.ConvergeStep(scoped(recheck)) {
 			case health.ConvergeRetryHard:
-				fmt.Fprintln(os.Stderr, "::error::cluster hard-failed twice in a row — operator intervention required.")
-				return fmt.Errorf("cluster hard-failed twice in a row — operator intervention required")
+				fmt.Fprintf(os.Stderr, "::error::%s hard-failed twice in a row — operator intervention required.\n", subject)
+				return fmt.Errorf("%s hard-failed twice in a row — operator intervention required", subject)
 			case health.ConvergeDone:
 				reportConvergeLongPole(prevNonOK, prevAttempt)
 				return nil
@@ -270,19 +362,56 @@ func realignArgocdRedis() {
 // every return builds a complete result.
 type healthResult struct {
 	code int
-	// nonOK is the scan's Pending+Failed labels — the convergence long pole.
-	nonOK []string
+	// nonOK is the scan's Pending+Failed labels — the platform convergence long
+	// pole. nonOKApps is the same measurement for the app scope: the demoted
+	// severities AppVerdict gates on. Carried separately so a run reports the items
+	// ITS scope was waiting on, rather than leading a red app step with platform
+	// findings it does not gate.
+	nonOK     []string
+	nonOKApps []string
 	// redisAuthSplit: a repo-server↔argocd-redis auth split (WRONGPASS/NOAUTH) was
 	// seen; runConverge self-heals by restarting argocd-redis once.
 	redisAuthSplit bool
 	// annotationWedge: an Argo app sync failed on the 256KB metadata.annotations
 	// limit; runConverge self-heals by stripping the oversized CRD annotation once.
 	annotationWedge bool
+	// appCode is the SAME report judged over its instance-owned half — the
+	// content the platform contract deliberately does not gate on. Carried
+	// alongside rather than instead of `code` so one scan answers both scopes and
+	// the two can never disagree about what they saw.
+	appCode int
 }
 
-// healthExitCode runs every check against $KUBECONFIG, prints the report, and
-// returns the convergence-contract exit code (0/2/1).
-func healthExitCode() int { return healthExitCodeState(nil).code }
+// ScopePlatform / ScopeApps name the two halves of one report. The platform scope
+// is the convergence contract as it has always been; the apps scope gates the
+// instance-owned content the boundary excludes from it.
+//
+// SEPARATING THEM IS NOT DROPPING ONE. An instance's apps stop blocking a
+// platform release, and in exchange they get a gate of their own — run as its own
+// step, with its own owner. Without the second half, "does not gate the platform"
+// quietly means "nothing goes red", which is how eight unseeded per-app
+// credentials survived eight days on akamai/gsap-apl.
+const (
+	ScopePlatform = "platform"
+	ScopeApps     = "apps"
+)
+
+// healthExitCodeFor runs the checks once and returns the exit code for one scope.
+func healthExitCodeFor(scope string) int {
+	res := healthExitCodeState(nil)
+	if scope == ScopeApps {
+		return res.appCode
+	}
+	return res.code
+}
+
+// bothScopes is the exit code for a state neither scope could look past — an
+// unreachable apiserver, a cluster that has not bootstrapped, a namespace list
+// that failed. BOTH codes are set because healthResult.appCode's zero value is 0,
+// which means Converged: an early return that fills in only `code` reports the app
+// scope green for a cluster it never read, and that is indistinguishable from the
+// outage it exists to catch.
+func bothScopes(code int) healthResult { return healthResult{code: code, appCode: code} }
 
 // healthExitCodeState is healthExitCode with optional converge state: nil for a
 // one-shot `llz ci health`, non-nil inside `llz ci converge`, where the only
@@ -294,7 +423,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 		// not a cluster hard-failure. The converge loop retries it against the
 		// budget instead of counting it as a hard strike (see runConverge).
 		fmt.Fprintln(os.Stderr, "::error::kubectl cannot reach the apiserver — check KUBECONFIG and cluster reachability.")
-		return healthResult{code: 3}
+		return bothScopes(3)
 	}
 
 	inv := scanCRDs()
@@ -308,7 +437,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 		!kubectlprobe.Exists("-n", "argocd", "get", "application", "platform-bootstrap") {
 		fmt.Println(color.Bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
 		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", color.Cyan("PENDING"))
-		return healthResult{code: 2}
+		return bothScopes(2)
 	}
 
 	if !inv.addNamespaces() {
@@ -317,7 +446,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 		// it as "no namespaces exist" would skip every per-namespace section and
 		// report a broken cluster as converged.
 		fmt.Fprintln(os.Stderr, "::error::kubectl could not list namespaces — treating as an apiserver transient, not an empty cluster.")
-		return healthResult{code: 3}
+		return bothScopes(3)
 	}
 	// Phase 1: cluster-bootstrap ran but bootstrap-openbao has not completed yet.
 	// Historically this was keyed only on cert-manager/platform-app-ca being absent,
@@ -344,25 +473,27 @@ func healthExitCodeState(st *convergeState) healthResult {
 	checkLokiObjStorage(&r, phase1)
 	checkFirewallBootstrap(&r)
 	checkOpenBao(&r, phase1)
-	checkReadyResources(&r, phase1)
+	argoApps, argoOK := fetchArgoApps()
+	owned := health.NewOwnershipIndex(argoApps).WithPlatformNamespaces(healthNamespaces)
+	checkReadyResources(&r, owned, phase1)
 	checkWebhooks(&r)
 	checkAppProjects(&r, inv)
 	checkLeases(&r, inv)
-	checkArgoApps(&r, phase1)
-	checkWorkloads(&r, inv, phase1)
-	checkPVCs(&r)
+	checkArgoApps(&r, argoApps, argoOK, phase1)
+	checkWorkloads(&r, inv, owned, phase1)
+	checkPVCs(&r, owned)
 	checkPVs(&r)
 	checkNetworkPolicies(&r, inv)
-	checkJobs(&r, phase1)
-	checkCronWorkflows(&r, inv)
-	checkServices(&r, inv, phase1)
-	checkPDBs(&r, phase1)
-	checkIngresses(&r, phase1)
-	checkWorkflows(&r, inv, phase1)
-	checkStuckFinalizers(&r, inv)
-	checkPods(&r, phase1)
+	checkJobs(&r, owned, phase1)
+	checkCronWorkflows(&r, inv, owned)
+	checkServices(&r, inv, owned, phase1)
+	checkPDBs(&r, owned, phase1)
+	checkIngresses(&r, owned, phase1)
+	checkWorkflows(&r, inv, owned, phase1)
+	checkStuckFinalizers(&r, inv, owned)
+	checkPods(&r, owned, phase1)
 
-	printHealthSummary(&r)
+	printHealthSummary(&r, owned)
 
 	// In phase1 the support plane is still installing (apl-core's CRDs, webhook
 	// Services, and endpoints land in later helmfile phases), so a hard-fail here
@@ -387,17 +518,23 @@ func healthExitCodeState(st *convergeState) healthResult {
 	}
 	return healthResult{
 		code: code,
+		// NOT PhaseAwareExitCode. phase1's premise is "apl-core's support plane is
+		// still installing", and apl-core installs no instance-owned content — an
+		// app's missing credential is no less terminal for being early. Its own
+		// still-settling states already classify as Pending, which is exit 2 here.
+		appCode: r.AppVerdict().ExitCode(),
 		// The still-converging set for the converge long-pole report (Tier-3
 		// instrumentation): Pending + Failed are the categories that keep the
 		// cluster in-progress (Drift/Deferred are tolerated-as-converged), so they
 		// are the candidates for "last thing to go healthy".
 		nonOK:           longPoleCandidates(&r),
+		nonOKApps:       appLongPoleCandidates(&r),
 		redisAuthSplit:  r.RedisAuthSplit,
 		annotationWedge: r.AnnotationLimitWedge,
 	}
 }
 
-func printHealthSummary(r *health.Report) {
+func printHealthSummary(r *health.Report, owned health.OwnershipIndex) {
 	fmt.Println()
 	for _, c := range r.Drift {
 		fmt.Println("  " + color.Yellow("drift:   ") + " " + c)
@@ -422,6 +559,49 @@ func printHealthSummary(r *health.Report) {
 			"depend on it are inconclusive, not failed. konnectivity-agent reporting Ready does not " +
 			"prove the tunnel: its readiness probe does not exercise the dial-out."))
 	}
+	// THE APP SCOPE IS NAMED EVEN WHEN THE PLATFORM PASSES, because the whole risk
+	// of this boundary is that excluded content becomes invisible. A reader of a
+	// green platform report must still be told, in the summary and not only in the
+	// INSTANCE lines above, that app-owned content is broken and which lane owns it.
+	//
+	// AND IT IS AN ANNOTATION, not just a printed line. A green job's log is not
+	// read: the whole failure this boundary exists to fix was eight credentials
+	// nobody looked at for eight days. ::warning:: surfaces on the job summary
+	// where a passing platform run is still visibly carrying broken app content.
+	if n := len(r.InstanceFailed); n > 0 {
+		msg := fmt.Sprintf("%d instance-owned check(s) hard-failed — reported here, gated by `llz ci converge --scope=apps`, NOT by the platform contract.", n)
+		fmt.Printf("%s %s\n", color.Magenta("!"), msg)
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", msg)
+	} else if n := len(r.InstancePending); n > 0 {
+		msg := fmt.Sprintf("%d instance-owned check(s) still converging — gated by `llz ci converge --scope=apps`.", n)
+		fmt.Printf("%s %s\n", color.Magenta("!"), msg)
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", msg)
+	}
+	// The index answers from Argo's .status.resources, and there are exactly two
+	// states where that answer is incomplete. Both are reported rather than
+	// silently absorbed: a reader who sees the platform gate on app content needs
+	// to know the boundary could not resolve it, not conclude the boundary is off.
+	if n := owned.Contested(); n > 0 {
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d resource(s) an instance-owned Application declares are ALSO declared by a platform Application — kept gating the platform.", n))
+	}
+	if u := owned.PlatformUnresolved(); len(u) > 0 {
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d platform Application(s) declare no resources yet (%s) — the boundary cannot tell what they own, so nothing in a platform namespace is demotable on this poll.", len(u), strings.Join(u, ", ")))
+	}
+	// NAMED BEFORE THE OTHER BOUNDARY LINES, because it is the only one an
+	// operator can act on in a minute. Every other state here is the boundary
+	// working; this one is the boundary being bypassed by a missing field.
+	if m := owned.Misprojected(); len(m) > 0 {
+		msg := fmt.Sprintf("%d Application(s) deploy only into the app estate but are NOT in the `%s` AppProject (%s) — so they and everything they declare GATE THE PLATFORM. Set `spec.project: %s` to move them to the apps scope.",
+			len(m), health.InstanceCustomProject, strings.Join(m, ", "), health.InstanceCustomProject)
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), msg)
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", msg)
+	}
+	if ns := owned.InstanceNamespaces(); len(ns) > 0 {
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("app estate scanned for the apps scope: %s — a resource in one of these that no Application declares is treated as instance-owned.", strings.Join(ns, ", ")))
+	}
+	if u := owned.Unresolved(); len(u) > 0 {
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d instance-owned Application(s) declare no resources yet (%s) — Argo has not compared them, so THEIR content still gates the platform on this poll.", len(u), strings.Join(u, ", ")))
+	}
 	switch r.Verdict() {
 	case health.HardFailed:
 		fmt.Printf("%s\n", color.Red(fmt.Sprintf("%d check(s) hard-failed.", len(r.Failed))))
@@ -437,6 +617,24 @@ func printHealthSummary(r *health.Report) {
 			fmt.Printf("%s %s\n", color.Green("✓"), fmt.Sprintf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.", len(r.Deferred)))
 		default:
 			fmt.Printf("%s Cluster converged.\n", color.Green("✓"))
+		}
+	}
+
+	// Both verdicts, every time. The scope flag decides the exit code, not what the
+	// reader is told: a run that exits 1 on the app scope must not end with a green
+	// platform line as its last word.
+	if len(r.Instance) > 0 || r.AppVerdict() != health.Converged {
+		switch r.AppVerdict() {
+		case health.HardFailed:
+			fmt.Println(color.Magenta(fmt.Sprintf("apps scope: %d instance-owned check(s) hard-failed.", len(r.InstanceFailed))))
+		case health.InProgress:
+			if r.Inconclusive && len(r.InstancePending) == 0 {
+				fmt.Println(color.Magenta("apps scope: INCONCLUSIVE — a corpus could not be read, so the app estate was not fully examined."))
+				break
+			}
+			fmt.Println(color.Magenta("apps scope: instance-owned content still converging."))
+		default:
+			fmt.Println(color.Magenta("apps scope: converged (instance-owned findings are informational only)."))
 		}
 	}
 }
@@ -487,7 +685,7 @@ func openBaoClusterSecretStoreReady() bool {
 func sectionItems[T any](r *health.Report, kind string, args ...string) []T {
 	items, ok := kubectlprobe.ListOK[T](args...)
 	if !ok {
-		record(r, health.CatPending, "could not list "+kind+" — cluster read failed after retries; treating as inconclusive rather than 'none found'")
+		printFinding(r.RouteInconclusive(kind))
 		return nil
 	}
 	return items
@@ -575,19 +773,49 @@ var catStyles = map[health.Category]struct {
 	health.CatInstance: {"INSTANCE", color.Magenta},
 }
 
-// record prints a labeled line for a finding and routes it into the report
-// (CatOK/CatWarn print but never affect the verdict).
+// record, recordRes, recordPod and recordApp are PRINTERS. Every rule about what
+// a finding means — the konnectivity downgrade, the platform/instance boundary,
+// which bucket it lands in — lives in health/routing.go, which each of these
+// hands the finding to and then prints whatever category comes back.
+//
+// It used to be the other way round: recordRes/recordPod decided ownership here
+// and returned before reaching record(), which is where the konnectivity
+// downgrade lives — so a tunnel outage on an instance-owned resource was banked
+// as a hard failure for the app lane and never raised TunnelDown. Keeping the
+// decisions in one package and the printing in another is what stops the next
+// invariant from having to be remembered at three call sites.
+
+// record is for a cluster-wide fact — a node, a webhook, a lease — with no
+// resource identity to attribute to an owner.
 func record(r *health.Report, cat health.Category, msg string) {
-	// A hard failure whose text is the konnectivity signature is an apiserver→pod
-	// transport outage, not a verdict on the component — downgrade it to Pending so
-	// converge polls its budget instead of spending a hard strike. Done here, at the
-	// single funnel every check routes through, so it covers each apiserver→pod
-	// surface (APIService discovery, exec-based probes) without touching them
-	// individually. See health.IsTunnelBlocked.
-	if cat == health.CatFail && health.IsTunnelBlocked(msg) {
-		r.TunnelDown = true
-		cat = health.CatPending
-	}
+	printFinding(r.Route(cat, msg))
+}
+
+// recordRes is for a finding that names one identifiable resource. Every check
+// that judges a resource calls this, so the ownership boundary cannot be applied
+// in some sections and forgotten in others.
+func recordRes(r *health.Report, owned health.OwnershipIndex, cat health.Category, ref health.ResourceRef, msg string) {
+	printFinding(owned.Route(r, cat, ref, msg))
+}
+
+// recordOwned is for a resource a controller generated, which therefore appears
+// in no Application's declared set under that name: a Pod, a Workflow spawned by a
+// CronWorkflow, a CertificateRequest cert-manager made for a Certificate, a Job a
+// CronJob created. Ownership resolves through the controller that IS declared.
+func recordOwned(r *health.Report, owned health.OwnershipIndex, cat health.Category, owners []health.OwnerRef, self health.ResourceRef, msg string) {
+	printFinding(owned.RouteOwned(r, cat, owners, self, msg))
+}
+
+// recordApp is for one Argo Application's own finding — the Application-level half
+// of the boundary, which records the demoted severity so the app scope gates on it.
+func recordApp(r *health.Report, a health.ArgoApp, phase1 bool) {
+	printFinding(r.RouteApp(a, phase1))
+}
+
+// printFinding renders one categorized line. Split out of record() so the
+// ownership-aware funnels above print identically instead of re-rolling the
+// column/paint logic.
+func printFinding(cat health.Category, msg string) {
 	style := catStyles[cat]
 	// Pad to the fixed column on the PLAIN label, then color — the ANSI escapes are
 	// zero-width, so the columns stay aligned (color.go).
@@ -596,7 +824,6 @@ func record(r *health.Report, cat health.Category, msg string) {
 		label = style.paint(label)
 	}
 	fmt.Printf("  %s %s\n", label, msg)
-	r.Add(cat, msg)
 }
 
 func hdr(s string) { fmt.Printf("\n%s\n", color.Bold("== "+s+" ==")) }
@@ -606,9 +833,15 @@ type meta struct {
 	Metadata struct {
 		Namespace         string            `json:"namespace"`
 		Name              string            `json:"name"`
+		Labels            map[string]string `json:"labels"`
 		Annotations       map[string]string `json:"annotations"`
 		DeletionTimestamp string            `json:"deletionTimestamp"`
 		Finalizers        []string          `json:"finalizers"`
+		// OwnerReferences is read by the ownership boundary: a controller-generated
+		// resource (a CertificateRequest, a CronWorkflow's Workflow, a CronJob's Job)
+		// appears in no Application's declared set under its generated name, so it is
+		// only ever reachable through the controller that IS declared.
+		OwnerReferences []health.OwnerRef `json:"ownerReferences"`
 	} `json:"metadata"`
 }
 
@@ -858,18 +1091,18 @@ func checkFirewallBootstrap(r *health.Report) {
 	}
 }
 
-func checkReadyResources(r *health.Report, phase1 bool) {
+func checkReadyResources(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	// cert-manager ClusterIssuers / Certificates / CertificateRequests + ESO.
-	readyKind(r, "ClusterIssuer", []string{"get", "clusterissuers.cert-manager.io"}, false,
+	readyKind(r, owned, "cert-manager.io", "ClusterIssuer", []string{"get", "clusterissuers.cert-manager.io"}, false,
 		func(key string) bool { return phase1 && health.MatchPrefix(key, health.Phase1PendingIssuers()) },
 		health.ExternalDepIssuers())
-	readyKind(r, "Certificate", []string{"get", "certificates.cert-manager.io", "-A"}, true,
+	readyKind(r, owned, "cert-manager.io", "Certificate", []string{"get", "certificates.cert-manager.io", "-A"}, true,
 		func(key string) bool { return phase1 && health.MatchPrefix(key, health.Phase1PendingCerts()) },
 		health.ExternalDepCerts())
-	certRequests(r, phase1)
-	readyKind(r, "ClusterSecretStore", []string{"get", "clustersecretstores.external-secrets.io"}, false,
+	certRequests(r, owned, phase1)
+	readyKind(r, owned, "external-secrets.io", "ClusterSecretStore", []string{"get", "clustersecretstores.external-secrets.io"}, false,
 		func(string) bool { return phase1 }, nil)
-	readyKind(r, "ExternalSecret", []string{"get", "externalsecrets.external-secrets.io", "-A"}, true,
+	readyKind(r, owned, "external-secrets.io", "ExternalSecret", []string{"get", "externalsecrets.external-secrets.io", "-A"}, true,
 		func(string) bool { return phase1 }, health.ExternalDepExternalSecrets())
 }
 
@@ -881,7 +1114,7 @@ type readyResourceItem struct {
 	} `json:"status"`
 }
 
-func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool, phase1Pending func(key string) bool, extDep []health.DepEntry) {
+func readyKind(r *health.Report, owned health.OwnershipIndex, group, kind string, getArgs []string, namespaced bool, phase1Pending func(key string) bool, extDep []health.DepEntry) {
 	hdr(kind + "s")
 	for _, it := range sectionItems[readyResourceItem](r, kind+"s", getArgs...) {
 		key := it.Metadata.Name
@@ -890,18 +1123,22 @@ func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool,
 		}
 		status, reason, msg := health.FindReady(it.Status.Conditions)
 		cat, line := health.ClassifyReady(kind, key, status, reason, msg, phase1Pending(key), extDep)
-		record(r, cat, line)
+		recordRes(r, owned, cat, health.ResourceRef{Group: group, Kind: kind, Namespace: it.Metadata.Namespace, Name: it.Metadata.Name}, line)
 	}
 }
 
-func certRequests(r *health.Report, phase1 bool) {
+func certRequests(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	hdr("CertificateRequests")
 	for _, it := range sectionItems[readyResourceItem](r, "CertificateRequests", "get", "certificaterequests.cert-manager.io", "-A") {
 		key := it.Metadata.Namespace + "/" + it.Metadata.Name
 		status, reason, msg := health.FindReady(it.Status.Conditions)
 		p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingCerts())
 		cat, line := health.ClassifyCertificateRequest(key, status, reason, msg, p1, health.ExternalDepCerts())
-		record(r, cat, line)
+		// cert-manager generates the CertificateRequest, so no Application declares
+		// it — but the Certificate above it is declared, and demoting one without the
+		// other reported a single logical failure on both sides of the boundary.
+		recordOwned(r, owned, cat, it.Metadata.OwnerReferences,
+			health.ResourceRef{Group: "cert-manager.io", Kind: "CertificateRequest", Namespace: it.Metadata.Namespace, Name: it.Metadata.Name}, line)
 	}
 }
 
@@ -1125,15 +1362,41 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 	}
 }
 
-func checkArgoApps(r *health.Report, phase1 bool) {
-	hdr("ArgoCD Applications")
-	for _, raw := range sectionItems[json.RawMessage](r, "ArgoCD Applications", "-n", "argocd", "get", "applications.argoproj.io") {
+// fetchArgoApps reads and parses every Application ONCE, before any check runs.
+//
+// The ownership index has to exist before the FIRST section that judges a
+// resource (ExternalSecrets, in checkReadyResources), while the Applications
+// section prints much later — so the fetch is split from the classification
+// rather than reordering the report. One list, one parse, two consumers.
+// fetchArgoApps reads the Applications the ownership index is built from. It runs
+// EARLY — the index has to exist before the sections that consult it — but reports
+// nothing, because a finding printed here would land under whatever section header
+// was last written, ten sections above the one it belongs to. It returns the
+// read's success so checkArgoApps can record the inconclusive line under its own
+// header, where a reader will look for it.
+func fetchArgoApps() ([]health.ArgoApp, bool) {
+	raws, ok := kubectlprobe.ListOK[json.RawMessage]("-n", "argocd", "get", "applications.argoproj.io")
+	if !ok {
+		return nil, false
+	}
+	var apps []health.ArgoApp
+	for _, raw := range raws {
 		a, err := health.ParseArgoApp(raw)
 		if err != nil {
 			continue
 		}
-		cat, msg := health.ClassifyArgoApp(a, phase1)
-		record(r, cat, msg)
+		apps = append(apps, a)
+	}
+	return apps, true
+}
+
+func checkArgoApps(r *health.Report, apps []health.ArgoApp, fetched bool, phase1 bool) {
+	hdr("ArgoCD Applications")
+	if !fetched {
+		printFinding(r.RouteInconclusive("ArgoCD Applications"))
+	}
+	for _, a := range apps {
+		recordApp(r, a, phase1)
 		// A repo-server↔argocd-redis auth split (WRONGPASS/NOAUTH) makes every app
 		// ComparisonError at once; flag it so the converge loop can restart redis
 		// once rather than poll to budget exhaustion on a self-inflicted deadlock.
@@ -1143,7 +1406,17 @@ func checkArgoApps(r *health.Report, phase1 bool) {
 		// The git remote refusing Argo's credential is the opposite case: terminal,
 		// not transient. Flag it so phase1 can't downgrade it to in-progress and
 		// send the gate off to poll a question the remote has already answered.
-		if health.IsGitAuthError(a.SpecErr) {
+		//
+		// PLATFORM APPLICATIONS ONLY. This flag vetoes the phase1 downgrade for the
+		// WHOLE report and prints an ::error:: naming APL_VALUES_REPO_TOKEN, so an
+		// app team's unseeded per-app PAT would abort the platform bootstrap and send
+		// the operator to the wrong credential — the precise coupling this boundary
+		// exists to break, arriving through a flag instead of through a verdict. The
+		// two flags below are NOT gated the same way: a repo-server↔redis auth split
+		// and an oversized CRD annotation are platform faults that merely happen to be
+		// VISIBLE through whichever app noticed first, and both trigger a platform
+		// repair rather than a verdict.
+		if !health.IsInstanceOwnedApp(a) && health.IsGitAuthError(a.SpecErr) {
 			r.GitAuthFailure = true
 		}
 		// A sync that failed on the 256KB metadata.annotations limit (an oversized
@@ -1188,24 +1461,31 @@ type daemonSetItem struct {
 	} `json:"status"`
 }
 
-func checkWorkloads(r *health.Report, inv *clusterInventory, phase1 bool) {
+func checkWorkloads(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex, phase1 bool) {
 	hdr("Deployments / StatefulSets / DaemonSets")
-	for _, ns := range healthNamespaces {
+	checkWorkloadsIn(r, inv, owned, scannedNamespaces(owned), phase1)
+}
+
+// checkWorkloadsIn is checkWorkloads over an explicit namespace list — a seam, so
+// a test can drive the widened scan over the two namespaces it is about instead of
+// stubbing all twelve platform ones to prove a fact about neither.
+func checkWorkloadsIn(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex, namespaces []string, phase1 bool) {
+	for _, ns := range namespaces {
 		if !inv.nsExists[ns] {
 			continue
 		}
 		for _, d := range sectionItems[deploymentItem](r, "Deployments in "+ns, "-n", ns, "get", "deploy") {
 			preason, pmsg := progressingCondition(d.Status.Conditions)
 			cat, msg := health.ClassifyWorkload("Deployment", ns, d.Metadata.Name, d.Spec.Replicas, d.Status.ReadyReplicas, preason, pmsg, phase1)
-			record(r, cat, msg)
+			recordRes(r, owned, cat, health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: ns, Name: d.Metadata.Name}, msg)
 		}
 		for _, s := range sectionItems[statefulSetItem](r, "StatefulSets in "+ns, "-n", ns, "get", "sts") {
 			cat, msg := health.ClassifyWorkload("StatefulSet", ns, s.Metadata.Name, s.Spec.Replicas, s.Status.ReadyReplicas, "", "", phase1)
-			record(r, cat, msg)
+			recordRes(r, owned, cat, health.ResourceRef{Group: "apps", Kind: "StatefulSet", Namespace: ns, Name: s.Metadata.Name}, msg)
 		}
 		for _, ds := range sectionItems[daemonSetItem](r, "DaemonSets in "+ns, "-n", ns, "get", "ds") {
 			cat, msg := health.ClassifyDaemonSet(ns, ds.Metadata.Name, ds.Status.DesiredNumberScheduled, ds.Status.NumberReady, ds.Status.UpdatedNumberScheduled, ds.Status.NumberMisscheduled)
-			record(r, cat, msg)
+			recordRes(r, owned, cat, health.ResourceRef{Group: "apps", Kind: "DaemonSet", Namespace: ns, Name: ds.Metadata.Name}, msg)
 		}
 	}
 }
@@ -1229,11 +1509,12 @@ type pvItem struct {
 	} `json:"status"`
 }
 
-func checkPVCs(r *health.Report) {
+func checkPVCs(r *health.Report, owned health.OwnershipIndex) {
 	hdr("PersistentVolumeClaim binding")
 	for _, p := range sectionItems[pvcItem](r, "PVCs", "get", "pvc", "-A") {
 		cat, msg := health.ClassifyPVC(p.Metadata.Namespace, p.Metadata.Name, p.Status.Phase, p.Spec.StorageClassName)
-		record(r, cat, msg)
+		recordOwned(r, owned, cat, p.Metadata.OwnerReferences,
+			health.ResourceRef{Kind: "PersistentVolumeClaim", Namespace: p.Metadata.Namespace, Name: p.Metadata.Name}, msg)
 	}
 }
 
@@ -1340,7 +1621,7 @@ type jobItem struct {
 	} `json:"status"`
 }
 
-func checkJobs(r *health.Report, phase1 bool) {
+func checkJobs(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	hdr("Jobs (failed or stuck)")
 	var items []jobItem
 	var runs []health.JobRun
@@ -1384,7 +1665,11 @@ func checkJobs(r *health.Report, phase1 bool) {
 		}
 		p1 := phase1 && health.MatchPrefix(run.Key, health.Phase1PendingWorkloads())
 		cat, msg := health.ClassifyJob(run.Key, run.Complete, run.Failed, j.Status.Active, j.Status.Succeeded, j.Status.Failed, p1)
-		record(r, cat, msg)
+		// checkPods skips Job-controlled pods and defers to this section, so if the
+		// boundary is not applied here an app team's failed migration Job gates the
+		// platform with nothing else able to catch it.
+		recordOwned(r, owned, cat, j.Metadata.OwnerReferences,
+			health.ResourceRef{Group: "batch", Kind: "Job", Namespace: j.Metadata.Namespace, Name: j.Metadata.Name}, msg)
 	}
 }
 
@@ -1401,7 +1686,7 @@ type cronWorkflowItem struct {
 	} `json:"status"`
 }
 
-func checkCronWorkflows(r *health.Report, inv *clusterInventory) {
+func checkCronWorkflows(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex) {
 	hdr("CronWorkflows")
 	if !inv.crds["cronworkflows.argoproj.io"] {
 		return
@@ -1422,7 +1707,7 @@ func checkCronWorkflows(r *health.Report, inv *clusterInventory) {
 			}
 		}
 		cat, msg := health.ClassifyCronWorkflow(key, submissionErr, cw.Spec.Suspend, ageDays, 30)
-		record(r, cat, msg)
+		recordRes(r, owned, cat, health.ResourceRef{Group: "argoproj.io", Kind: "CronWorkflow", Namespace: cw.Metadata.Namespace, Name: cw.Metadata.Name}, msg)
 	}
 }
 
@@ -1436,9 +1721,9 @@ type serviceItem struct {
 	} `json:"spec"`
 }
 
-func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
-	hdr("Service endpoints (repo namespaces)")
-	for _, ns := range healthNamespaces {
+func checkServices(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex, phase1 bool) {
+	hdr("Service endpoints (repo + instance namespaces)")
+	for _, ns := range scannedNamespaces(owned) {
 		if !inv.nsExists[ns] {
 			continue
 		}
@@ -1451,7 +1736,7 @@ func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
 			ready, total := endpointCounts(ns, s.Metadata.Name)
 			cat, msg := health.ClassifyServiceEndpoints(key, ready, total, p1)
 			if cat != health.CatOK { // only surface non-OK to cut noise (matches script's VERBOSE-gated pass)
-				record(r, cat, msg)
+				recordRes(r, owned, cat, health.ResourceRef{Kind: "Service", Namespace: ns, Name: s.Metadata.Name}, msg)
 			}
 		}
 	}
@@ -1468,13 +1753,13 @@ type pdbItem struct {
 	} `json:"status"`
 }
 
-func checkPDBs(r *health.Report, phase1 bool) {
+func checkPDBs(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	hdr("PodDisruptionBudgets")
 	for _, p := range sectionItems[pdbItem](r, "PDBs", "get", "pdb", "-A") {
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name
 		cat, msg := health.ClassifyPDB(key, p.Status.CurrentHealthy, p.Status.DesiredHealthy, p.Status.DisruptionsAllowed, p.Status.ExpectedPods, phase1)
 		if cat != health.CatOK {
-			record(r, cat, msg)
+			recordRes(r, owned, cat, health.ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: p.Metadata.Namespace, Name: p.Metadata.Name}, msg)
 		}
 	}
 }
@@ -1489,37 +1774,58 @@ type ingressItem struct {
 	} `json:"status"`
 }
 
-func checkIngresses(r *health.Report, phase1 bool) {
+func checkIngresses(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	hdr("Ingress addresses")
 	for _, ing := range sectionItems[ingressItem](r, "Ingresses", "get", "ingress", "-A") {
 		key := ing.Metadata.Namespace + "/" + ing.Metadata.Name
 		cat, msg := health.ClassifyIngress(key, len(ing.Status.LoadBalancer.Ingress), phase1)
-		record(r, cat, msg)
+		recordRes(r, owned, cat, health.ResourceRef{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Metadata.Namespace, Name: ing.Metadata.Name}, msg)
 	}
 }
 
-// workflowItem is an Argo Workflow reduced to its phase.
+// workflowItem is an Argo Workflow reduced to its phase and the two fields that
+// say which declared resource it came from — see health.WorkflowDeclaredOwner.
 type workflowItem struct {
 	meta
+	Spec struct {
+		WorkflowTemplateRef struct {
+			Name         string `json:"name"`
+			ClusterScope bool   `json:"clusterScope"`
+		} `json:"workflowTemplateRef"`
+	} `json:"spec"`
 	Status struct {
 		Phase string `json:"phase"`
 	} `json:"status"`
 }
 
-func checkWorkflows(r *health.Report, inv *clusterInventory, phase1 bool) {
+func checkWorkflows(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex, phase1 bool) {
 	hdr("Argo Workflows (recent Failed / Error)")
 	if !inv.crds["workflows.argoproj.io"] {
 		return
 	}
 	for _, wf := range sectionItems[workflowItem](r, "Workflows", "get", "workflows.argoproj.io", "-A") {
+		self := health.ResourceRef{Group: health.WorkflowsGroup, Kind: "Workflow", Namespace: wf.Metadata.Namespace, Name: wf.Metadata.Name}
+		// Record the generated Workflow -> declared parent link BEFORE anything
+		// consults it, for this section and for the ones that run after. A Workflow
+		// carries a generated name no Application declares, and its PODS resolve no
+		// further than that name — so without the link both the Workflow and its
+		// pods gate the platform. The parent is the CronWorkflow that spawned it or
+		// the WorkflowTemplate it was submitted from; either one IS declared.
+		if parent, ok := health.WorkflowDeclaredOwner(wf.Metadata.OwnerReferences, wf.Spec.WorkflowTemplateRef.Name,
+			wf.Spec.WorkflowTemplateRef.ClusterScope, wf.Metadata.Labels, wf.Metadata.Namespace); ok {
+			owned.RecordGenerated(self, parent)
+		}
 		key := wf.Metadata.Namespace + "/" + wf.Metadata.Name
 		if cat, msg := health.ClassifyWorkflowPhase(key, wf.Status.Phase, phase1); cat != health.CatOK {
-			record(r, cat, msg)
+			// Route on the Workflow itself: Owns resolves the hop just recorded, and
+			// a Workflow applied straight from a manifest is declared under this very
+			// name, so one ref answers both shapes.
+			recordRes(r, owned, cat, self, msg)
 		}
 	}
 }
 
-func checkStuckFinalizers(r *health.Report, inv *clusterInventory) {
+func checkStuckFinalizers(r *health.Report, inv *clusterInventory, owned health.OwnershipIndex) {
 	hdr("stuck-finalizer deletions")
 	now := time.Now()
 	found := false
@@ -1547,7 +1853,14 @@ func checkStuckFinalizers(r *health.Report, inv *clusterInventory) {
 				if ns == "" {
 					ns = "<cluster>"
 				}
-				record(r, health.CatFail, fmt.Sprintf("%s %s/%s stuck Terminating (finalizers: %s)", kind, ns, m.Metadata.Name, strings.Join(m.Metadata.Finalizers, ",")))
+				msg := fmt.Sprintf("%s %s/%s stuck Terminating (finalizers: %s)", kind, ns, m.Metadata.Name, strings.Join(m.Metadata.Finalizers, ","))
+				// This sweep names a resource of exactly the kinds the boundary
+				// covers, so it asks the boundary. A plural with no mapping gates.
+				if ref, ok := health.StuckResourceRef(kind, m.Metadata.Namespace, m.Metadata.Name); ok {
+					recordOwned(r, owned, health.CatFail, m.Metadata.OwnerReferences, ref, msg)
+				} else {
+					record(r, health.CatFail, msg)
+				}
 				found = true
 			}
 		}
@@ -1568,7 +1881,7 @@ type podItem struct {
 	Status health.PodStatus `json:"status"`
 }
 
-func checkPods(r *health.Report, phase1 bool) {
+func checkPods(r *health.Report, owned health.OwnershipIndex, phase1 bool) {
 	hdr("unhealthy pods (all namespaces)")
 	bad := false
 	for _, p := range sectionItems[podItem](r, "Pods", "get", "pods", "-A") {
@@ -1591,10 +1904,10 @@ func checkPods(r *health.Report, phase1 bool) {
 			detail := fmt.Sprintf("Pod %s phase=%s ready=%s state=%s", key, p.Status.Phase, health.ReadyRatio(p.Status), health.SummarizeStates(p.Status))
 			switch {
 			case phase1 && health.MatchPrefix(key, health.Phase1PendingWorkloads()):
-				record(r, health.CatPending, detail+" — waiting on OpenBao bootstrap")
+				recordOwned(r, owned, health.CatPending, p.Metadata.OwnerReferences, health.ResourceRef{Namespace: p.Metadata.Namespace}, detail+" — waiting on OpenBao bootstrap")
 			case extDepMatch(key):
 				reason, _ := health.MatchExternalDep(key, health.ExternalDepWorkloads())
-				record(r, health.CatDeferred, detail+" — "+reason)
+				recordOwned(r, owned, health.CatDeferred, p.Metadata.OwnerReferences, health.ResourceRef{Namespace: p.Metadata.Namespace}, detail+" — "+reason)
 			// Gated on health.Budgeted for the same reason the Service branches are:
 			// a pod wedged in ContainerCreating by a FailedMount or
 			// FailedAttachVolume never leaves that state, and calling it "still
@@ -1610,9 +1923,9 @@ func checkPods(r *health.Report, phase1 bool) {
 				// two differ exactly here. The budget still bounds it — a pod
 				// that never starts exhausts the budget and is reported as the
 				// timeout it is.
-				record(r, health.CatPending, detail+" — still starting")
+				recordOwned(r, owned, health.CatPending, p.Metadata.OwnerReferences, health.ResourceRef{Namespace: p.Metadata.Namespace}, detail+" — still starting")
 			default:
-				record(r, health.CatFail, detail)
+				recordOwned(r, owned, health.CatFail, p.Metadata.OwnerReferences, health.ResourceRef{Namespace: p.Metadata.Namespace}, detail)
 			}
 			bad = true
 		}

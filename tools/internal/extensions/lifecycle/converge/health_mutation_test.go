@@ -61,7 +61,7 @@ func TestRunConvergeBudgetIsSecondsAndPollsCountUp(t *testing.T) {
 
 	var err error
 	// budget=3600s is nowhere near spent; interval/retry-delay 0 keep it instant.
-	stderr := captureStderr(t, func() { err = runConverge(3600, 0, 0) })
+	stderr := captureStderr(t, func() { err = runConverge(3600, 0, 0, ScopePlatform) })
 
 	if err == nil {
 		t.Fatalf("runConverge = nil, want the hard-fail verdict (polls seen: %d)", poll)
@@ -470,7 +470,7 @@ func TestCheckJobsReadsCompleteCondition(t *testing.T) {
 			`"status":{"succeeded":1,"conditions":[{"type":"Complete","status":"True"}]}}`), nil
 	})
 	var r health.Report
-	out := captureStdout(t, func() { checkJobs(&r, false) })
+	out := captureStdout(t, func() { checkJobs(&r, health.OwnershipIndex{}, false) })
 	if !strings.Contains(out, "Job llz-openbao/bootstrap-openbao Complete (1 succeeded)") {
 		t.Errorf("a Complete=True Job must read as Complete, got:\n%s", out)
 	}
@@ -498,7 +498,7 @@ func TestCheckStuckFinalizersKindGateAndScope(t *testing.T) {
 		return items(), nil
 	})
 	var r health.Report
-	checkStuckFinalizers(&r, mustInventory(t))
+	checkStuckFinalizers(&r, mustInventory(t), health.OwnershipIndex{})
 
 	want := []string{"get pv -o json", "get -A pvc -o json"}
 	if strings.Join(calls, "|") != strings.Join(want, "|") {
@@ -522,7 +522,7 @@ func TestCheckPodsFlappingWarning(t *testing.T) {
 	// Well under the threshold: no warning, and none with an empty container list.
 	withKubectl(t, serve(0))
 	var calm health.Report
-	out := captureStdout(t, func() { checkPods(&calm, false) })
+	out := captureStdout(t, func() { checkPods(&calm, health.OwnershipIndex{}, false) })
 	if strings.Contains(out, "flapping containers") {
 		t.Errorf("a stable pod was reported as flapping:\n%s", out)
 	}
@@ -530,7 +530,7 @@ func TestCheckPodsFlappingWarning(t *testing.T) {
 	// Over the threshold: the warning must name the container and its count.
 	withKubectl(t, serve(9))
 	var hot health.Report
-	out = captureStdout(t, func() { checkPods(&hot, false) })
+	out = captureStdout(t, func() { checkPods(&hot, health.OwnershipIndex{}, false) })
 	if !strings.Contains(out, "flapping containers: core=9") {
 		t.Errorf("a restart-looping container went unreported:\n%s", out)
 	}

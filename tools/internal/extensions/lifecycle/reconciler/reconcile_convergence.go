@@ -2,7 +2,7 @@
 // converged?", surfaced as a metric (see docs/designs/kube-native-reconciler.md).
 //
 // It reuses the SAME tested predicate `llz ci health` uses — internal/health's
-// ParseArgoApp + ClassifyArgoApp — over Argo CD Application status, which is the
+// ParseArgoApp + Report.RouteApp — over Argo CD Application status, which is the
 // canonical convergence signal (the convergence contract's readiness gate waits on
 // the bootstrap Application being Synced+Healthy). The exit-code CLI stays the
 // source of truth for the Terraform gate; this publishes the same 0/1/2
@@ -40,11 +40,11 @@ func sampleConvergence(ctx context.Context, client nodeGetter, reg *metrics.Regi
 		// never expires a sample), so returning early left the PREVIOUS run's
 		// failed/pending/observed counts on the endpoint indefinitely — a dashboard
 		// reading "3 apps observed" for a cluster whose Application CRD is gone.
-		setConvergenceCounts(reg, 0, 0, 0)
+		setConvergenceCounts(reg, 0, 0, 0, 0, 0)
 		return nil
 	}
 	reg.SetGauge("llz_convergence_state", convergenceStateHelp, nil, float64(r.ExitCode()))
-	setConvergenceCounts(reg, len(r.Failed), len(r.Pending), s.observed)
+	setConvergenceCounts(reg, len(r.Failed), len(r.Pending), s.observed, len(r.InstanceFailed), len(r.InstancePending))
 	return nil
 }
 
@@ -52,13 +52,28 @@ func sampleConvergence(ctx context.Context, client nodeGetter, reg *metrics.Regi
 // is what lets an alert tell "state 0 because everything is healthy" from "state 0
 // because nothing was read" — see LLZConvergenceNoApps in the reconciler
 // PrometheusRule. Without it llz_convergence_state==0 is unfalsifiable.
-func setConvergenceCounts(reg *metrics.Registry, failed, pending, observed int) {
+func setConvergenceCounts(reg *metrics.Registry, failed, pending, observed, instanceFailed, instancePending int) {
 	reg.SetGauge("llz_convergence_apps_failed",
 		"count of Argo Applications classified hard-failed", nil, float64(failed))
 	reg.SetGauge("llz_convergence_apps_pending",
 		"count of Argo Applications still reconciling (in-progress)", nil, float64(pending))
 	reg.SetGauge("llz_convergence_apps_observed",
 		"count of Argo Applications successfully parsed and classified this sample", nil, float64(observed))
+	// The app scope's own series. Instance-owned Applications are excluded from
+	// llz_convergence_state by design, so without this the only continuously
+	// running detector for an operator's broken app publishes nothing at all and
+	// no alert can be written against it.
+	reg.SetGauge("llz_convergence_apps_instance_failed",
+		"count of instance-owned Argo Applications classified hard-failed (reported, excluded from llz_convergence_state)", nil, float64(instanceFailed))
+	// The in-progress half needs a series of its own. An unseeded credential
+	// produces content that never progresses AND never hard-fails, so an alert
+	// written only against the failed count cannot see the shape the boundary was
+	// built for. APPLICATION-LEVEL, like its sibling: this lane classifies Argo
+	// Applications and builds no ownership index, so a Synced+Healthy app whose
+	// ExternalSecrets are broken moves neither gauge — `llz ci converge
+	// --scope=apps` is what sees those, and the alert says so.
+	reg.SetGauge("llz_convergence_apps_instance_pending",
+		"count of instance-owned Argo Applications still reconciling (reported, excluded from llz_convergence_state)", nil, float64(instancePending))
 }
 
 // ConvergenceReport classifies Argo CD Application health into the convergence
@@ -66,7 +81,7 @@ func setConvergenceCounts(reg *metrics.Registry, failed, pending, observed int) 
 // reconciler's gauge (sampleConvergence) and the `llz ci health-incluster`
 // exit-code verb. Argo Application status is the canonical convergence signal (the
 // convergence contract's readiness gate waits on it), classified through the same
-// unit-tested health.ClassifyArgoApp predicate `llz ci health` uses. crdPresent is
+// unit-tested health.Report.RouteApp funnel `llz ci health` uses. crdPresent is
 // false when the Application CRD is not yet registered — pre-bootstrap, which is
 // in-progress (not converged).
 func ConvergenceReport(ctx context.Context, client nodeGetter) (health.Report, bool, error) {
@@ -132,8 +147,12 @@ func convergenceSample(ctx context.Context, client nodeGetter) (convergenceSampl
 			continue
 		}
 		s.observed++
-		cat, msg := health.ClassifyArgoApp(app, false) // day-2: not phase-1 bootstrap
-		s.report.Add(cat, msg)
+		// RouteApp, not classify-then-Add: Add(CatInstance, …) records the
+		// finding for DISPLAY only, so an instance-owned Application that is failing
+		// left Failed empty, ExitCode 0, the gauge at "converged" and
+		// LLZClusterNotConverged unable to fire. This lane is the only continuously
+		// running detector for that content — it has to keep the severity.
+		s.report.RouteApp(app, false) // day-2: not phase-1 bootstrap
 	}
 	if s.unparsed > 0 {
 		s.report.AddPending(fmt.Sprintf(
