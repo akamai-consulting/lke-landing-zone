@@ -62,8 +62,15 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	p := &fakeProbe{
 		seal: openbao.SealInfo{Sealed: false, Initialized: true},
 		updated: map[string]time.Time{
+			// secret/loki/object-store and secret/harbor/registry-s3 are seeded here
+			// DELIBERATELY, and asserted ABSENT from the output below: they were
+			// retired from credpaths when their ExternalSecrets turned out to have
+			// been deleted, and the sampler must publish nothing for a path it no
+			// longer declares even when OpenBao still holds one. An instance that
+			// bootstrapped before the retirement still has both in its KV store.
 			"secret/loki/object-store":  now.Add(-100 * 24 * time.Hour),
 			"secret/harbor/registry-s3": now.Add(-10 * 24 * time.Hour),
+			"secret/obj/platform":       now.Add(-3 * 24 * time.Hour),
 			// The platform credentials the gauge set was widened to cover. They
 			// had no age visibility at all before, and each carries a class that
 			// is NOT "automated" — which is what keeps them off the SLA alert.
@@ -95,8 +102,7 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	for _, want := range []string{
 		"llz_openbao_sealed 0",
 		"llz_openbao_initialized 1",
-		`llz_credential_age_days{class="automated",cred="loki-object-store"} 100`,
-		`llz_credential_age_days{class="automated",cred="harbor-registry-s3"} 10`,
+		`llz_credential_age_days{class="automated",cred="obj-platform"} 3`,
 		`llz_credential_age_days{class="generate-once",cred="grafana-admin"} 400`,
 		`llz_credential_age_days{class="generate-once",cred="otel-ingress"} 400`,
 		`llz_credential_age_days{class="tracks-source",cred="harbor-admin"} 5`,
@@ -109,6 +115,19 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+
+	// A PATH OPENBAO STILL HOLDS BUT credpaths NO LONGER DECLARES PUBLISHES
+	// NOTHING. Both were seeded in the fixture above: an instance that bootstrapped
+	// before they were retired still has them in its KV store, and the sampler must
+	// not resurrect a series for a credential nothing consumes — an aging gauge
+	// would page for a key no cluster reads.
+	for _, gone := range []string{"loki-object-store", "harbor-registry-s3"} {
+		if strings.Contains(out, `cred="`+gone+`"`) {
+			t.Errorf("the sampler published a series for retired credential %q — it is in the "+
+				"fixture's KV store but not in credpaths.CredPaths, and the declaration is what "+
+				"decides:\n%s", gone, out)
 		}
 	}
 }

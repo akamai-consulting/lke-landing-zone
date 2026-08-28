@@ -1,14 +1,16 @@
 package seedspecial
 
 import (
+	"github.com/spf13/cobra"
+
 	"errors"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 )
 
@@ -38,20 +40,6 @@ unquoted = bare
 }
 
 // ── seed-harbor-registry-s3 ───────────────────────────────────────────────────
-
-func TestHarborRegistryS3Fields(t *testing.T) {
-	got := credrotate.HarborRegistryS3Fields("acme", "primary", "us-ord-1", "AK", "SK")
-	want := map[string]string{
-		"access_key_id":     "AK",
-		"secret_access_key": "SK",
-		"bucket_name":       "acme-harbor-registry-primary",
-		"endpoint":          "https://us-ord-1.linodeobjects.com",
-		"region":            "us-ord-1",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("credrotate.HarborRegistryS3Fields = %v, want %v", got, want)
-	}
-}
 
 // chdirTempDir moves the test into a fresh temp dir (the commands resolve tfvars
 // relative to the workflow's checkout root).
@@ -322,10 +310,53 @@ spec:
 // exists to close for delivered files. It read the policy off disk on every run and
 // could not tell that no cluster ever received it.
 
-func pvcNames(rows []pvcRow) []string {
-	var out []string
-	for _, r := range rows {
-		out = append(out, r.Name)
+// The cobra surfaces and the extension declaration, which nothing exercised: the
+// tests removed with the retired Kyverno scope-split had been carrying this
+// package's coverage floor, and their absence exposed that the flag wiring and the
+// declaration were never asserted at all.
+//
+// Cheap, but not nothing — the extension's grants are the capability fence, and a
+// command whose flags do not bind is one an operator cannot steer.
+func TestCommandSurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   *cobra.Command
+		use   string
+		flags []string
+	}{
+		{ResolveHarborURLCmd(), "resolve-harbor-url", nil},
+		{AuditPVCStorageClassCmd(), "audit-pvc-storageclass", nil},
+	} {
+		if tc.cmd.Use != tc.use {
+			t.Errorf("Use = %q, want %q", tc.cmd.Use, tc.use)
+		}
+		if tc.cmd.RunE == nil {
+			t.Errorf("%s has no RunE", tc.use)
+		}
+		for _, f := range tc.flags {
+			if tc.cmd.Flags().Lookup(f) == nil {
+				t.Errorf("%s is missing flag --%s", tc.use, f)
+			}
+		}
 	}
-	return out
+}
+
+// A GATE'S BINDING IS ITS FENCE. seed-special reads the cluster and writes only
+// GitHub step output, so cluster-read is the whole grant — anything wider would be
+// a capability nothing in the package uses.
+func TestExtensionDeclaresOnlyClusterRead(t *testing.T) {
+	e := Extension()
+	if e.Name == "" {
+		t.Fatal("extension has no name")
+	}
+	if len(e.Bindings) == 0 {
+		t.Fatal("extension declares no bindings")
+	}
+	for _, b := range e.Bindings {
+		for _, g := range b.Grants {
+			if g != extension.ClusterRead {
+				t.Errorf("binding %q declares %q — every call in this package is a `kubectl get`, "+
+					"and the only writes are GitHub step outputs describing its own findings", b.Name, g)
+			}
+		}
+	}
 }

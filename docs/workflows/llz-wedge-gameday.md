@@ -40,8 +40,15 @@ after an e2e provision with `keep_cluster=true`.
 ### Defaults
 
 `target-app` defaults to `llz-observability` and `externalsecret` to
-`monitoring/loki-object-store` — the carved App and the secret it owns, i.e. the
-pairing the containment claim was first demonstrated with.
+`apl-secrets/obj-secrets` — the carved App and a secret it owns.
+
+The default used to be `monitoring/loki-object-store`, which is the pairing the
+containment claim was first demonstrated with and stopped existing when object
+storage went apl-core-native: that ExternalSecret was deleted, so a default-args
+run broke nothing and proved nothing. A fault-injection drill whose fault cannot
+be injected is worse than no drill, because it reports a clean containment result.
+`obj-secrets` carries the object-storage secret half apl-core reads, so breaking
+it produces the real wedge.
 
 ---
 

@@ -156,13 +156,26 @@ func TestBaoConfigureJWTBoundClaimsIsMap(t *testing.T) {
 
 func TestPolicyDocuments(t *testing.T) {
 	// Spot-check load-bearing paths so an accidental edit trips a test.
+	//
+	// THE THREE PATHS THIS USED TO CHECK ARE GONE, and it is worth saying which:
+	// secret/{data,metadata}/loki/object-store and secret/data/harbor/registry-s3.
+	// They were grants for two per-app object-storage keys whose ExternalSecrets
+	// 52465691 deleted — so this test asserted that a policy granted read on paths
+	// nothing read, and would have failed anyone who tried to clean them up.
+	// secret/obj/platform is the key that replaced both.
 	for _, p := range []string{
-		`path "secret/data/loki/object-store"`,
-		`path "secret/metadata/loki/object-store"`,
-		`path "secret/data/harbor/registry-s3"`,
+		`path "secret/data/obj/platform"`,
+		`path "secret/metadata/obj/platform"`,
 	} {
 		if !strings.Contains(policyPlatformCI, p) {
 			t.Errorf("platform-ci policy missing %s", p)
+		}
+	}
+	// …and the retired grants must not come back with a copy-paste.
+	for _, p := range []string{"loki/object-store", "harbor/registry-s3"} {
+		if strings.Contains(policyPlatformCI, p) || strings.Contains(policyLinodeRotator, p) ||
+			strings.Contains(policyReconcilerRead, p) {
+			t.Errorf("a policy grants %s again — that path has no consumer; see credpaths.go", p)
 		}
 	}
 	if !strings.Contains(policySecretPropagator, `path "secret/data/linode/api-token"`) {

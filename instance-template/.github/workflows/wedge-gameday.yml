@@ -27,7 +27,7 @@ on:
         description: 'ExternalSecret to break, as <namespace>/<name>'
         required: false
         type: string
-        default: monitoring/loki-object-store
+        default: apl-secrets/obj-secrets
 
 permissions:
   contents: read

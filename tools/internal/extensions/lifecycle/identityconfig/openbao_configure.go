@@ -30,14 +30,12 @@ path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
 path "secret/data/harbor/pull-robot"            { capabilities = ["read"] }
-path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }
 path "secret/data/infra/apl-values-repo-token"  { capabilities = ["read"] }
 path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
 path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
-path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/obj/platform"                 { capabilities = ["read"] }
 path "secret/data/obj/ssec"                     { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
@@ -48,14 +46,12 @@ path "secret/metadata/grafana/admin"                { capabilities = ["read", "l
 path "secret/metadata/harbor/admin"                 { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/docker-config"         { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/pull-robot"            { capabilities = ["read", "list"] }
-path "secret/metadata/harbor/registry-s3"           { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/robot"                 { capabilities = ["read", "list"] }
 path "secret/metadata/infra/apl-values-repo-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
-path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
 path "secret/metadata/obj/platform"                 { capabilities = ["read", "list"] }
 path "secret/metadata/obj/ssec"                     { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
@@ -98,11 +94,7 @@ path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read
 // keys (Loki, Harbor registry) — never the provisioning
 // PAT or any read-only consumer path. Mapped to the `linode-rotator`
 // Kubernetes-auth role below. See docs/designs/linode-credential-rotator.md.
-const policyLinodeRotator = `path "secret/data/loki/object-store"  { capabilities = ["create", "update", "read"] }
-path "secret/data/harbor/registry-s3" { capabilities = ["create", "update", "read"] }
-path "secret/data/obj/platform"       { capabilities = ["create", "update", "read"] }
-path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
-path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
+const policyLinodeRotator = `path "secret/data/obj/platform"       { capabilities = ["create", "update", "read"] }
 path "secret/metadata/obj/platform"       { capabilities = ["read"] }
 `
 
@@ -137,9 +129,7 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 // the secret value — so widening this list to cover the static bootstrap seeds
 // and the Managed Postgres admin paths does NOT give the reconciler the Harbor
 // robot password, either GitHub PAT, or any database credential.
-const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
-path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
-path "secret/data/obj/platform"     { capabilities = ["read"] }
+const policyReconcilerRead = `path "secret/data/obj/platform"     { capabilities = ["read"] }
 path "secret/metadata/obj/platform" { capabilities = ["read"] }
 path "secret/metadata/grafana/admin" { capabilities = ["read"] }
 path "secret/metadata/otel/ingress"  { capabilities = ["read"] }

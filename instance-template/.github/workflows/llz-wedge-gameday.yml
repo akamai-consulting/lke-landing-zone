@@ -24,7 +24,7 @@ on:
         description: 'ExternalSecret to break, as <namespace>/<name>'
         required: false
         type: string
-        default: monitoring/loki-object-store
+        default: apl-secrets/obj-secrets
       timeout:
         description: 'Seconds to watch for the fault to surface'
         required: false

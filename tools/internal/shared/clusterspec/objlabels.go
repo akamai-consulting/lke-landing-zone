@@ -204,6 +204,17 @@ func ObjKeyLabels(prefix, env string) []string {
 	if prefix == "" || env == "" {
 		return nil
 	}
+	// THREE LABELS, THOUGH ONLY `obj` IS STILL MINTED. The per-app loki and
+	// harbor-registry keys were retired — their ExternalSecrets had been deleted,
+	// so nothing consumed them — but every cluster bootstrapped before that still
+	// has both keys in the Linode account, and teardown is the only thing that
+	// removes them. Dropping them here would leak two keys per destroyed
+	// deployment against an account that caps at 100 (76 once piled up, which is
+	// the incident this reaper exists for).
+	//
+	// So this list is the REAP set, which is a superset of the mint set by design.
+	// TestEnvObjKeyLabelsMatchRotationTable holds that relation: everything minted
+	// must be reaped, and anything reaped-but-not-minted must be named as retired.
 	return []string{
 		objLabel(prefix, "loki", env),
 		objLabel(prefix, "harbor-registry", env),

@@ -80,35 +80,28 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := BuildRotationTable("acme", "primary", "us-ord-1")
-	if len(table) != 3 {
-		t.Fatalf("table has %d entries, want 3", len(table))
+	if len(table) != 1 {
+		t.Fatalf("table has %d entries, want 1 (obj-platform; the two per-app keys were retired)", len(table))
 	}
 	byName := map[string]CredEntry{}
 	for _, e := range table {
 		byName[e.Name] = e
 	}
 
-	loki := byName["loki-object-store"]
-	// The Loki key spans the three REAL bucket names (chunks/ruler/admin) — the
-	// grant set the llz-object-storage module's bootstrap key carries. An earlier
-	// revision minted against the nonexistent "acme-loki-<region>" bucket.
-	wantLokiBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary"
-	if loki.Kind != CredKindObjKey || strings.Join(loki.Buckets, ",") != wantLokiBuckets || loki.ObjCluster != "us-ord-1" {
-		t.Errorf("loki entry = %+v (want buckets %s)", loki, wantLokiBuckets)
-	}
-	if f := loki.Fields("AK", "SK"); f["AWS_ACCESS_KEY_ID"] != "AK" || f["AWS_SECRET_ACCESS_KEY"] != "SK" {
-		t.Errorf("loki fields = %v", f)
-	}
-
-	harbor := byName["harbor-registry-s3"]
-	if harbor.Kind != CredKindObjKey || harbor.BaoPath != "secret/harbor/registry-s3" {
-		t.Errorf("harbor entry = %+v", harbor)
-	}
-	// Harbor rewrites the COMPLETE field set (incl. static bucket/endpoint/region).
-	f := harbor.Fields("AK", "SK")
-	for _, k := range []string{"access_key_id", "secret_access_key", "bucket_name", "endpoint", "region"} {
-		if f[k] == "" {
-			t.Errorf("harbor fields missing %s: %v", k, f)
+	// THE TWO PER-APP ENTRIES ARE GONE, and this test used to assert their bucket
+	// scopes and field sets in detail — correctly, about credentials nothing
+	// consumed. The Loki key's read_write grant spanned chunks/ruler/admin (which
+	// hold the OpenBao audit stream) and its ExternalSecret had been deleted by
+	// 52465691. A precise test over a dead credential is still a dead credential.
+	//
+	// Their absence is asserted rather than merely implied by the count above: a
+	// re-add would otherwise only trip the length check, which reads as an
+	// off-by-one rather than as the retirement being undone.
+	for _, gone := range []string{"loki-object-store", "harbor-registry-s3"} {
+		if _, back := byName[gone]; back {
+			t.Errorf("%s is in the rotation table again — it has no consumer (its ExternalSecret "+
+				"was deleted when object storage went apl-core-native), so minting and rotating it "+
+				"writes a read_write Linode key into a path nothing reads. See credpaths.go", gone)
 		}
 	}
 
@@ -190,20 +183,28 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 	t.Run("all due -> mint+write both, drain old", func(t *testing.T) {
 		lc := &stubLinode{
 			// pre-existing older resources to drain (keep-newest default 2)
-			objkeys: []map[string]any{{"id": jn(10), "label": "acme-loki-primary"}, {"id": jn(11), "label": "acme-loki-primary"}, {"id": jn(201), "label": "acme-loki-primary"}},
+			// Three old keys under the label the rotator still mints, so the
+			// keep-newest drain has something to delete. (These were
+			// "acme-loki-primary" until that per-app key was retired.)
+			objkeys: []map[string]any{{"id": jn(10), "label": "acme-obj-primary"}, {"id": jn(11), "label": "acme-obj-primary"}, {"id": jn(201), "label": "acme-obj-primary"}},
 		}
 		bao := &stubBao{data: map[string]map[string]string{}} // empty -> all due
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range []string{"secret/loki/object-store", "secret/harbor/registry-s3"} {
-			if bao.data[p]["rotated_at"] == "" {
-				t.Errorf("%s not written with rotated_at: %v", p, bao.data[p])
-			}
+		if bao.data["secret/obj/platform"]["rotated_at"] == "" {
+			t.Errorf("secret/obj/platform not written with rotated_at: %v", bao.data["secret/obj/platform"])
 		}
-		if bao.data["secret/loki/object-store"]["AWS_ACCESS_KEY_ID"] != "AK" {
-			t.Errorf("loki key not written: %v", bao.data["secret/loki/object-store"])
+		if bao.data["secret/obj/platform"]["AWS_ACCESS_KEY_ID"] != "AK" {
+			t.Errorf("obj-platform key not written: %v", bao.data["secret/obj/platform"])
+		}
+		// The retired per-app paths must not be written again: the rotator writes
+		// what the table declares, and a write here would mean the entries came back.
+		for _, gone := range []string{"secret/loki/object-store", "secret/harbor/registry-s3"} {
+			if len(bao.data[gone]) != 0 {
+				t.Errorf("rotator wrote retired path %s: %v", gone, bao.data[gone])
+			}
 		}
 		if len(lc.deleted) == 0 {
 			t.Error("expected old resources to be drained")
@@ -214,6 +215,10 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		recent := strconvI(now.Unix() - 1*86400)
 		lc := &stubLinode{}
 		bao := &stubBao{data: map[string]map[string]string{
+			// The retired paths are present and recent, which is the state an
+			// instance bootstrapped before the retirement is actually in — the
+			// rotator must ignore them because the TABLE no longer names them, not
+			// because they look fresh.
 			"secret/loki/object-store":  {"rotated_at": recent},
 			"secret/harbor/registry-s3": {"rotated_at": recent},
 			"secret/obj/platform":       {"rotated_at": recent},
