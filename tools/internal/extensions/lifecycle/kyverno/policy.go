@@ -248,9 +248,13 @@ func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
 // moment it started addressing the API, because no manifest's filename equals the
 // name it declares:
 //
-//	kyverno-pvc-encrypted-storage-class.yaml        → pvc-force-encrypted-storage-class
-//	kyverno-pvc-redirect-untagged-storage-class.yaml → pvc-redirect-untagged-storage-class
-//	kyverno-sc-default-demote.yaml                  → sc-default-demote
+//	kyverno-verify-llz-image-signature.yaml → verify-llz-image-signature
+//	kyverno-harbor-ca.yaml                  → harbor-obj-proxy-ca
+//
+// (The three PVC/StorageClass policies this list used to cite are gone — they had
+// not been applied since LLZ went managed-only, and their manifests were deleted
+// as orphans. The mismatch they illustrated is the same one, and it is the reason
+// this function exists rather than trusting a basename.)
 //
 // So the readiness wait always addressed a nonexistent object, always failed, and
 // always degraded to the "applied but did not report Ready" warning. The one check

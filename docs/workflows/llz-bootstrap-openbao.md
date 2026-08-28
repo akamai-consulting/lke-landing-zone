@@ -601,19 +601,31 @@ anti-pattern #3.
 
 ### Step: Audit PVCs against encrypted-Retain StorageClass
 
-The Kyverno ClusterPolicy at
-`terraform-iac-bootstrap/cluster-bootstrap/manifests/kyverno-pvc-encrypted-storage-class.yaml`
-rewrites `linode-block-storage(-retain)` → `block-storage-retain` at admission. The TF
-install (`wait_for_kyverno_crd` → `kubectl_manifest`) races apl-core's helmfile that
-creates harbor/gitea/keycloak/CNPG PVCs; the policy's mutating webhook has a 30–90s
-readiness lag after CRD registration. Any PVC admitted during that window lands on
-`linode-block-storage` (unencrypted, Delete reclaim) and persists silently — Kyverno
-does NOT background-migrate existing resources.
+**There is no admission policy in this path**, and this section described one for a
+long time after it stopped existing. A Kyverno ClusterPolicy used to rewrite
+`linode-block-storage(-retain)` → `block-storage-retain` at admission, installed by a
+Terraform root that no longer exists; the whole story about its webhook's 30–90s
+readiness lag racing apl-core's helmfile is unreachable, because the policy has not
+been applied since LLZ went managed-only.
 
-This step lists every PVC not on `block-storage-retain` and emits `::warning::` lines so
-the operator can decide whether to delete+recreate the affected workloads (forcing PVC
-re-admission with the policy now active). Does NOT fail the workflow — the cluster is
-still functional, just less secure than intended.
+What runs instead lands EARLIER and needs no webhook: `llz ci bootstrap-cluster`
+delete+recreates LKE's stock StorageClasses with encryption and the `lke<id>`
+volumeTag before apl-core creates any PVC. StorageClass parameters are immutable, so
+recreate is the only lever — and it is why a PVC that does land on a stock class is
+still encrypted.
+
+A PVC can still miss `block-storage-retain` through StorageClass ORDERING: on a
+managed cluster Linode installs apl-core during provisioning, before bootstrap
+promotes `block-storage-retain` to default, so charts that consult the default take
+whatever was default then. Two charts (gitea-valkey, oauth2-proxy redis) hardcode the
+stock class and never consult the default at all.
+
+This step lists every PVC not on `block-storage-retain` and emits `::warning::` lines
+so the operator can decide whether to delete+recreate the affected workloads
+(`storageClassName` is immutable once bound, so there is no in-place fix). Does NOT
+fail the workflow — the reclaim policy is the residual exposure, and whether the data
+is encrypted depends on the class it landed on, which `llz ci health` reports from the
+live parameters.
 
 ### Step: Revoke root token
 

@@ -328,17 +328,24 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 // policy assets across two packages for the convenience of one test, which is
 // worse than a relative path that says what it means. manifestDir is the single
 // place to fix if either side ever moves.
-// manifestDir is where the shipped policy manifests live, relative to this
-// package. They stay in cmd/llz because ci_bootstrap_cluster.go embeds three of
-// them and //go:embed cannot reach outside its own package directory.
-const manifestDir = "../bootstrapcluster/manifests"
+// manifestDir is the SHIPPED Kyverno policies, relative to this package.
+//
+// IT USED TO POINT AT bootstrapcluster/manifests, and the fixtures there were four
+// PVC/StorageClass policies that had not been applied since LLZ went managed-only
+// — their //go:embed lines went with the self-install flow and were never
+// restored. This test kept passing against them, which is the shape worth noticing:
+// a filename-vs-metadata.name regression test does not care whether the manifest
+// is live, so it went on proving a property of assets nobody deployed.
+//
+// It now reads the two policies that actually ship. Both still have a filename
+// differing from their metadata.name, so the regression it exists to catch is
+// still catchable — and now on files a cluster receives.
+const manifestDir = "../../../../../platform-apl/components"
 
 func TestPolicyName(t *testing.T) {
 	for manifest, want := range map[string]string{
-		manifestDir + "/kyverno-pvc-encrypted-storage-class.yaml":         "pvc-force-encrypted-storage-class",
-		manifestDir + "/kyverno-pvc-redirect-untagged-storage-class.yaml": "pvc-redirect-untagged-storage-class",
-		manifestDir + "/kyverno-sc-default-demote.yaml":                   "sc-default-demote",
-		manifestDir + "/kyverno-pvc-deny-untaggable-clone.yaml":           "pvc-deny-untaggable-clone",
+		manifestDir + "/objProxy/obj-proxy/kyverno-harbor-ca.yaml":              "harbor-obj-proxy-ca",
+		manifestDir + "/imageSignature/kyverno-verify-llz-image-signature.yaml": "verify-llz-image-signature",
 	} {
 		got := policyName(manifest)
 		if got != want {
