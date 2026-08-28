@@ -56,3 +56,22 @@ delete   .template-workflows.lock
 # committed *.tf declare. That is the state `tofu init` handles by design, and the
 # same one an operator chooses by deleting a lock they no longer want to carry.
 untrack  terraform-iac-bootstrap/*/.terraform.lock.hcl
+
+# The apl-core values BASE, and the per-env values.yaml `llz render` used to
+# produce from it. Both stopped being rendered at the managed App Platform pivot
+# (ADR 0005) — Linode owns apl-core's values there — and the template no longer
+# ships either. Without these rules an already-onboarded instance keeps them
+# forever: `copier update` leaves an orphan behind, so the file that reached no
+# cluster would go on being carried, now with nothing in the docs explaining what
+# it is. That is strictly worse than before this release, when at least the
+# (wrong) documentation pointed at it.
+#
+# `delete`, not `untrack`: these are not regenerated build artifacts. Nothing
+# writes them any more, so leaving them on disk would preserve exactly the
+# believable-looking dead file the whole change is about.
+#
+# THE PER-ENV GLOB IS SEPARATE because filepath.Match's `*` does not span '/'.
+# One pattern cannot cover both the base at apl-values/values.yaml and the
+# rendered copies at apl-values/<env>/values.yaml.
+delete   apl-values/values.yaml
+delete   apl-values/*/values.yaml

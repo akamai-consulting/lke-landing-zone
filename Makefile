@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		setup-go-sole-site dependabot-coverage mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard summary-secret-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
+		setup-go-sole-site dependabot-coverage mutable-tag-guard provider-lock-guard tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard summary-secret-guard wave-health-guard  mesh-egress-guard default-deny-egress  untestable-loc-check core-surface-check version-pins-check k8s-minor-coherence actions-lint  template-manifest-check delivered-consumer-guard docs-guard source-ref-guard symbol-ref-guard coverage-bank lint lint-k8s lint-tf \
         test coverage clean \
         instance-test upgrade-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -71,6 +71,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/runinjection=92 \
 	internal/extensions/guards/secretscope=85 \
 	internal/extensions/guards/defaultdeny=82 \
+	internal/extensions/guards/deliveredconsumer=80 \
 	internal/extensions/guards/budget=87 \
 	internal/extensions/guards/chartguard=71 \
 	internal/extensions/guards/k8sminorcoherence=99 \
@@ -130,7 +131,7 @@ COVERAGE_MINS := \
 	internal/extensions/guards/plaintext=90 \
 	internal/extensions/guards/summarysecret=85 \
 	internal/extensions/lifecycle/chartpublish=55 \
-	internal/extensions/assertions/manifestguard=73 \
+	internal/extensions/guards/manifestguard=73 \
 	internal/extensions/lifecycle/assertobjstore=23 \
 	internal/extensions/lifecycle/gameday=26 \
 	internal/verbs/recondiag=60 \
@@ -227,6 +228,7 @@ help:
 	@echo "  tf-validate     terraform validate — syntax + type checking (inits each module first)"
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
 	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007 (state encryption))"
+	@echo "  delivered-consumer-guard  every delivered \`managed\` file names a consumer that still exists"
 	@echo "  docs-guard      doc drift: llz FLAGS, gh workflow-run inputs, and links resolve"
 	@echo "  source-ref-guard  stale tools/ path literals in prose, comments and error strings"
 	@echo "  symbol-ref-guard  stale pkg.Symbol references in prose and Go comments"
@@ -580,7 +582,8 @@ externalsecret-paths-check: render-charts
 # negative wave that can be not-Ready on a fresh cluster wedges the
 # platform-bootstrap sync before OpenBao (wave 0). Every negative-wave kind in
 # platform-apl/manifest/ + platform-apl/components/ must be health-inert or
-# backed by a resource.customizations.health override in apl-values/values.yaml.
+# backed by a resource.customizations.health override in the apl-overlay
+# (apl-values/_shared/apl-overlay/appvalues.yaml).
 wave-health-guard:
 	$(call LLZ_CI,gates --only wave-health-guard,)
 
@@ -893,6 +896,27 @@ lint-tf: $(LINT_TF) tf-fmt-check template-manifest-check managed-lock-check
 template-manifest-check: export LLZ_FORCE_SOURCE := 1
 template-manifest-check:
 	$(call LLZ_CI,gates --only template-manifest,)
+
+# delivered-consumer-guard: `llz ci delivered-consumer-guard` — every file the
+# template DELIVERS as `managed` must name something that reads it, and that
+# consumer must still exist.
+#
+# apl-values/values.yaml was a 425-line `managed` file whose consumer — the
+# clusterspec values-render pipeline — was retired at the managed App Platform
+# pivot (see clusterspec/values.go, which records what went). The
+# renderer went; the delivered file stayed. For a year it shipped to every
+# instance, `llz upgrade` overwrote local edits to it, four docs sent operators
+# there, and its own header said `llz render` consumed it — while it reached no
+# cluster. An instance carried a Loki WAL-replay fix in it, believed it applied,
+# and ran an OOM-crashlooping ingester for 16 days with log ingestion down.
+# Deleting the renderer now fails this gate in the same commit.
+#
+# FROM SOURCE, like its sibling above: it compares the working tree's manifest
+# against the working tree's Go sources, and the prebuilt image binary is built
+# from the merge-base — so on the PR that introduces this verb it does not have it.
+delivered-consumer-guard: export LLZ_FORCE_SOURCE := 1
+delivered-consumer-guard:
+	$(call LLZ_CI,gates --only delivered-consumer-guard,)
 
 # Assert instance-template/.template-managed.lock still matches the template-owned
 # .github/ files it covers. Editing a llz-*.yml body without re-running
@@ -1414,6 +1438,18 @@ fuzz:
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 
+# MEASURE UNDER THE TOOLCHAIN CI USES, or this target lies to you in both
+# directions. Coverage accounting differs between Go releases: on one branch this
+# package set read 86.0% under go1.25 (what CI resolves from tools/go.mod) and
+# 88.6% under a local go1.27 — enough to hide a real drop below a floor, and, in
+# the same run, enough to invent five failures in packages nobody had touched. An
+# hour went into "pre-existing debt" that did not exist.
+#
+#   GOTOOLCHAIN=go1.25.0 make coverage      # or whatever tools/go.mod pins
+#
+# Not forced here: pinning it in the recipe would silently stop tracking go.mod
+# the day it moves, which is the same class of stale restatement version-pins
+# exists to catch. Read the `go` line in tools/go.mod and pass it.
 coverage:
 	@mkdir -p coverage
 	cd $(GO_DIR) && go test -covermode=atomic \

@@ -1,20 +1,29 @@
-# apl-values — apl-core values base + thin per-env overlays
+# apl-values — the apl-core inputs LLZ owns
 
-The apl-core values your clusters run are **shared, DRY, and single-sourced**
-here. An environment is **not** a clone of a reference overlay — it is a thin
+apl-core's own `values.yaml` is **Linode's** on the managed App Platform. What
+lives here is the much smaller set of inputs LLZ owns: the per-env Argo CD
+`manifest/` tree, and the **apl-overlay** — object storage, app toggles, and the
+per-app chart values LLZ asserts — which the in-cluster reconciler merges onto
+apl-core's machine-owned `apl-<env>` branch.
+
+An environment is **not** a clone of a reference overlay — it is a thin
 kustomization that references the shared platform tree and toggles components
 on/off.
 
-Consumed by `llz ci bootstrap-cluster`, which reads the per-env
-`<env>/values.yaml` (written by `llz render`) and installs apl-core, and by
-Argo CD, which syncs the manifest tree. There is no longer a `cluster-bootstrap`
-Terraform root — Terraform owns day-0 infrastructure only (ADR 0002).
+Consumed by Argo CD, which syncs the `manifest/` tree, and by the in-cluster
+apl-overlay reconciler. There is no longer a `cluster-bootstrap` Terraform root —
+Terraform owns day-0 infrastructure only (ADR 0002).
 
 ## What lives here
 
+> **There is no `values.yaml` here, and that is the point.** On the managed App
+> Platform Linode owns apl-core's values; `llz render` emits none, and the scaffold
+> check fails the build if one ever appears. The single channel LLZ has into an
+> apl-core app's chart values is `_shared/apl-overlay/appvalues.yaml` — see below.
+
 ```
 apl-values/
-  values.yaml               # the apl-core values BASE (identity/secrets tokenized)
+  _shared/apl-overlay/      # the obj + app-toggle + app-values overlay (managed)
   <env>/                    # GENERATED per env by `llz render` — a THIN overlay
     manifest/
       kustomization.yaml    #   remote-refs the shared base + enabled components
@@ -24,7 +33,6 @@ apl-values/
     apps/<carved-app>/              # that component's self-contained per-env source root
       kustomization.yaml            #   remote-refs the shared Component
       <name>-env-patch.yaml         #   its per-env patch (e.g. llz-reconciler-env-patch.yaml)
-    values.yaml             #   the base + apps.<key>.enabled toggles
 ```
 
 Your own Kubernetes manifests do **not** live here — they live at
@@ -74,8 +82,9 @@ llz env add <env>            # scaffolds environments/<env>.yaml, then renders
    `apps/llz-reconciler/llz-reconciler-env-patch.yaml` (`REGION_SHORT` for volume
    labels plus `REGION`/`OBJ_CLUSTER` for linode-creds), emitted only when that
    component is enabled.
-5. `values.yaml` — the `apl-values/values.yaml` base with `apps.<key>.enabled` set
-   from the component toggles and the spec-owned identity/platform keys patched in.
+5. `apl-overlay/` — the per-env obj + app-toggle layers that merge onto the
+   `_shared` base (`llz render` writes both; the reconciler merges them onto
+   apl-core's machine branch).
 
 An upstream fix lands **once** in `platform-apl/` and every environment inherits
 it on the next `llz upgrade` (which re-pins the ref) — no per-env reconciliation,
@@ -83,9 +92,13 @@ no drift between clones.
 
 ## Placeholders
 
-Identity values (`${cluster_name}`, `${cluster_domain}`) and the other `${...}`
-tokens (secrets + infra outputs: repo creds, dns token, loki/harbor object-store,
-coredns IP) are substituted by `llz ci bootstrap-cluster` at install time.
+The overlay carries exactly one placeholder — `${obj_access_key_id}` in
+`_shared/apl-overlay/obj.yaml` — which the in-cluster apl-overlay reconciler fills
+from OpenBao (`secret/obj/platform`) before it writes to the machine branch. It
+never resolves on `main`, so nothing but a placeholder is committed here. The
+paired secret never transits git at all: ESO writes it straight into the
+`obj-secrets` Secret.
+
 `spec.dns.acmeEmail`, being instance-wide, is applied by a JSON6902 patch in the
 per-env overlay onto the shared `llz-letsencrypt-*` ClusterIssuers. Any remaining
 `REPLACE_PER_ENV` / `REPLACE_ME` placeholder is yours to fill — `llz doctor --env

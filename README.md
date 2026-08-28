@@ -308,6 +308,7 @@ failure mode the default already prevents.
 | Bootstrap "done" contract (4 exit codes) | [docs/architecture/convergence-contract.md](docs/architecture/convergence-contract.md) |
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
+| What apl-core owns and we cannot fix here | [docs/upstream-asks.md](docs/upstream-asks.md) |
 | apl-core cutover (operational procedure) | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
 | Linode account request + InfoSec checklist | [docs/infosec/linode-account-request-checklist.md](docs/infosec/linode-account-request-checklist.md) |
 

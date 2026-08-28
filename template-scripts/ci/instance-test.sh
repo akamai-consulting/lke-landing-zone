@@ -110,7 +110,14 @@ require ".copier-answers.yml"
 require "renovate.json"
 require ".github/workflows/terraform.yml"
 require ".github/workflows/cluster-health.yml"
-require "apl-values/values.yaml"
+# The apl-OVERLAY, which is what LLZ actually owns in an instance's apl-values
+# tree. appvalues.yaml is named individually because it is the ONLY channel that
+# can set an apl-core app's chart values on the managed platform — an instance
+# rendered without it silently loses the Argo CD health customizations that keep a
+# fresh bootstrap from wedging, and Loki's WAL-replay headroom.
+require "apl-values/_shared/apl-overlay/obj.yaml"
+require "apl-values/_shared/apl-overlay/apps.yaml"
+require "apl-values/_shared/apl-overlay/appvalues.yaml"
 # The operator escape hatch ships as an empty namespaces/ + global/ skeleton at the
 # REPO ROOT (not under apl-values/ — see .template-manifest). Assert the skeleton
 # lands: an instance that never receives it silently loses the documented layout.
@@ -139,6 +146,12 @@ else
   fail "docs/README.md is missing the version-pinned reference URL"
 fi
 absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (referenced/template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
+# apl-core's own values are Linode's on the managed App Platform. This file used
+# to be `managed` and shipped to every instance while reaching no cluster: its
+# renderer was retired at the pivot, four docs kept pointing operators at it, and
+# an instance's Loki OOM fix sat in it doing nothing for 16 days. If it ever
+# reappears in a rendered instance, something re-added it to the scaffold.
+absent "apl-values/values.yaml"
 absent "templatization-plan.md"   # template-build
 absent "docs/agents.md"                # template-build
 absent "docs/adopter-guide.md"         # referenced (in the template repo)

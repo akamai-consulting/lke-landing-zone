@@ -34,7 +34,7 @@ the release notes.
 | **ESO API versions LLZ writes** — `external-secrets.io/v1` (ExternalSecret/SecretStore/ClusterSecretStore) and `v1alpha1` (PushSecret) | ESO 2.4.1 → 2.7.0; `v1` is served+storage, `v1beta1` is served:false (already was), PushSecret stays `v1alpha1` | **unchanged** |
 | **PushSecret reconciliation** (the eso-pusher path) | `values/external-secrets/external-secrets.gotmpl` dropped its explicit `processPushSecret: true` — but `true` is the chart default in 2.7.0, so the override was redundant | **unchanged** — reads as a break in the diff, is not one |
 | **Object-storage credential handoff** — LLZ delivers `apl-secrets/obj-secrets`, apl-core derives `loki-s3-linode-credentials` | `values/loki/loki.gotmpl` `$s3SecretName` unchanged; the only edit is `gateway.metrics.enabled: false` | **unchanged** |
-| **apl chart values schema** (`llz ci validate-apl-values` runs `helm template apl/apl`) | published `values.schema.json` byte-identical between `6.0.0` and `v6.1.0` | **unchanged** |
+| **apl chart values schema** (checked at the time by validate-apl-values, since retired — LLZ renders no apl-core values.yaml on managed) | published `values.schema.json` byte-identical between `6.0.0` and `v6.1.0` | **unchanged** |
 
 ## What DID change, and what we did about it
 

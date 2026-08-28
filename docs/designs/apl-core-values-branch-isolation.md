@@ -9,8 +9,10 @@ for this change (see Lab-validation).
 
 **Relates to:** [apl-core-v6-migration.md](apl-core-v6-migration.md),
 [blast-radius-decomposition.md](blast-radius-decomposition.md),
-`tools/internal/shared/clusterspec/values.go` (the default),
-`instance-template/apl-values/values.yaml` (the `otomi.git` block),
+`tools/internal/shared/clusterspec/values.go` (the default). The `otomi.git`
+block this design was written against lived in the apl-core values base, which
+has since been deleted — `llz ci bootstrap-cluster` repoints apl-core at the
+branch directly via `patchAplGitConfig`.
 `.github/workflows/release-e2e.yml` (the retired `e2e-apps` mirror).
 
 ## Context

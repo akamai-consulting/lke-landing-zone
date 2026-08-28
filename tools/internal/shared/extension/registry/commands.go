@@ -39,7 +39,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
@@ -52,9 +51,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/deliveredconsumer"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/manifestguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/meshegress"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/monitoringlabel"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/mtlsguard"
@@ -202,7 +203,6 @@ var commands = []Command{
 	{"identityconfig", identityconfig.PinKeycloakGatewayAliasCmd},
 	{"identityconfig", identityconfig.UsersAddCmd},
 	{"kyverno", kyverno.ApplyKyvernoPolicyCmd},
-	{"manifestguard", manifestguard.AplSchemaValidateCmd},
 	{"manifestguard", manifestguard.ArgoCDRenderedAppsCmd},
 	{"manifestguard", manifestguard.DroppedAPIVersionsCmd},
 	{"manifestguard", manifestguard.PlaceholderGuardCmd},
@@ -269,6 +269,7 @@ var commands = []Command{
 	{"upgradeplan", upgradeplan.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"defaultdeny", defaultdeny.Cmd},
+	{"deliveredconsumer", deliveredconsumer.Cmd},
 	{"runinjection", runinjection.Cmd},
 	{"secretscope", secretscope.Cmd},
 	{"upstreamupdates", upstreamupdates.UpgradePRCmd},

@@ -325,11 +325,21 @@ surface LLZ deliberately does not drive is still described.
 `llz reconcile` — and no `dns` component. `Validate` rejects unknown keys, so
 naming either is a hard spec error.)
 
-**Per-component sizing (config in the spec, mechanism in the base).** A few
-components take capacity knobs alongside `enabled`, rendered into the env's
-`values.yaml` so prod can differ from the defaults without hand-editing the
-overlay — everything else (chart mechanism, secrets) stays in the shared
-`apl-values/values.yaml` base. `observability` takes `retention` (→
+**Per-component sizing.** A few components take capacity knobs alongside `enabled`.
+
+> ⚠️ **These four knobs currently reach no cluster.** They are parsed, merged,
+> validated and shown by `llz apl app list`, but nothing renders them: their only
+> render target was the per-env `apl-values/<env>/values.yaml`, which `llz render`
+> stopped emitting when LLZ moved to the managed App Platform (ADR
+> [0005](adr/0005-managed-app-platform.md)) — apl-core owns its own values there.
+> Setting them changes the spec and nothing else; the cluster runs apl-core's
+> defaults. `llz doctor` reports it when an instance sets one. Wiring them means
+> carrying them through the apl-overlay's per-app channel
+> (`apl-values/_shared/apl-overlay/appvalues.yaml`), which needs apl-core's AplApp
+> schema for these first-class keys confirmed against a live cluster first — see
+> [upstream-asks.md](upstream-asks.md).
+
+`observability` takes `retention` (→
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
 image-store PVC, default `20Gi`); `broadPatRotator` takes `broadPATLabel` +

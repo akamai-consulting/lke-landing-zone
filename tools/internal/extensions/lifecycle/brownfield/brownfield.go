@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 )
 
 const (
@@ -1028,34 +1029,16 @@ func dedupeSorted(in []string) []string {
 }
 
 // parseQuantityBytes converts a Kubernetes storage quantity (e.g. "8Gi", "500Mi",
-// "1.5Ti", "1000000") into bytes. Binary (Ki/Mi/Gi/Ti/Pi) and decimal (k/M/G/T/P)
-// suffixes are supported; an unparseable value contributes 0.
+// "1.5Ti", "1000000") into bytes, folding an unparseable value into 0.
+//
+// The parsing lives in health.QuantityBytes, which reports parse failure as a
+// second return value. THIS caller deliberately discards it: brownfield sums
+// reported disk sizes for a capacity estimate, where an unreadable size
+// contributing 0 is the conservative answer. A GATE must not make that trade —
+// see health.QuantityBytes for why the two-value form exists.
 func parseQuantityBytes(s string) int64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	units := []struct {
-		suf string
-		mul float64
-	}{
-		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50},
-		{"k", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15},
-	}
-	for _, u := range units {
-		if strings.HasSuffix(s, u.suf) {
-			f, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, u.suf)), 64)
-			if err != nil {
-				return 0
-			}
-			return int64(f * u.mul)
-		}
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0
-	}
-	return int64(f)
+	b, _ := health.QuantityBytes(s)
+	return b
 }
 
 // formatStorage renders a byte count back to the largest whole binary unit (e.g.

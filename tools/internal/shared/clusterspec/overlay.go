@@ -43,8 +43,15 @@ const ObjAccessKeyIDPlaceholder = "${obj_access_key_id}"
 
 // Owned overlay file basenames (relative to an apl-overlay/ dir). The reconciler
 // maps each onto a path in the apl-<env> values tree (aplOverlayTargets, in
-// cmd/llz). Kept minimal — the obj block and the enabled map only — so the
-// blast radius of overlaying onto a file apl-operator co-writes stays small.
+// shared/apl/overlay). Kept minimal — the obj block, the enabled map, and the
+// per-app values LLZ asserts — so the blast radius of overlaying onto a file
+// apl-operator co-writes stays small.
+//
+// appvalues.yaml is the newest and the one to be careful with: it is the only
+// channel that can set an apl-core app's CHART values on managed, which is
+// exactly why it must stay a narrow, gated list rather than a general escape
+// hatch. Its contents and the rule for adding to them are in
+// overlay_appvalues.go (OverlayAppValuesFile is declared there, beside them).
 const (
 	OverlayObjFile  = "obj.yaml"
 	OverlayAppsFile = "apps.yaml"
@@ -304,29 +311,6 @@ func AppToggles(mergedApps []byte) (map[string]bool, error) {
 		}
 	}
 	return out, nil
-}
-
-// SetAppEnabled key-level-merges spec.enabled onto apl-operator's existing AplApp CR
-// (env/apps/<name>.yaml), preserving every other field it owns (resources,
-// autoscaling, _rawValues — lab-confirmed: apl-operator re-populates its defaults and
-// keeps whatever `enabled` we set). Returns changed=false when spec.enabled ALREADY
-// equals want — the SEMANTIC skip (compare the value, never the bytes) that stops the
-// reconciler churning against apl-operator's re-formatted (4-space, re-sorted) file.
-func SetAppEnabled(current []byte, want bool) (updated []byte, changed bool, err error) {
-	m, err := unmarshalMap(current)
-	if err != nil {
-		return nil, false, err
-	}
-	spec, ok := m["spec"].(map[string]any)
-	if !ok {
-		spec = map[string]any{}
-		m["spec"] = spec
-	}
-	if cur, ok := spec["enabled"].(bool); ok && cur == want {
-		return current, false, nil // already correct — no push, no re-marshal
-	}
-	spec["enabled"] = want
-	return marshalMap(m), true, nil
 }
 
 // mergeMaps recursively merges over onto base (over wins). Nested maps merge;

@@ -1582,7 +1582,21 @@ categories:
     #                       layer cannot hold, so the decision moved to the package
     #                       that owns it and this layer kept the one line that calls
     #                       it. Net, the layer lands BELOW where it started (1,953).
-    budget: 1951
+    #   1,949 / 129 files  -2 net: -3 for the `apl values validate` leaf and its
+    #                       `manifestguard` import, +1 for the `deliveredconsumer`
+    #                       import backing `llz ci delivered-consumer-guard`.
+    #                       A PURE PAYDOWN AND A REPLACEMENT IN ONE. The leaf
+    #                       surfaced validate-apl-values, whose two checks
+    #                       both took a rendered apl-core values.yaml as input — a
+    #                       file LLZ stopped rendering at the managed App Platform
+    #                       pivot, so the verb had no input and nothing had called it
+    #                       since. Its whole extension binding went with it.
+    #                       The +1 is IRREDUCIBLE and the same shape as every +1
+    #                       above: the new gate's command folded onto an existing
+    #                       AddCommand call, and the manifest parsing, the symbol
+    #                       corpus and the consumer registry all live in
+    #                       extensions/guards/deliveredconsumer.
+    budget: 1949
     exact: true
     include:
       - "tools/internal/cli/*.go"

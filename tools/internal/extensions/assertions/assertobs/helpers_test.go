@@ -72,8 +72,27 @@ func contains(ss []string, s string) bool {
 // package reads the cluster three ways and the readiness lanes use the
 // string-returning one — stubbing only Exec left deploymentRolledOut reading a
 // real cluster, which showed up as "a clean 2/2 read must count as rolled out".
+// walPVCClassArgs is the jsonpath read the durability check makes for the WAL
+// PVC's StorageClass. Named here because every assert-loki fixture has to answer
+// it: the check fails closed on an unreadable PVC, so a stub that does not
+// recognise this call turns every happy-path fixture red for the wrong reason.
+const walPVCClassArgs = "storageClassName"
+
+// answerWALPVCClass wraps a fixture handler so the PVC lookup resolves to the
+// class the overlay asserts, leaving the fixture to describe only what it is
+// actually about.
+func answerWALPVCClass(h func(args string) ([]byte, error)) func(string) ([]byte, error) {
+	return func(args string) ([]byte, error) {
+		if strings.Contains(args, walPVCClassArgs) {
+			return []byte(healthyLokiWALClass), nil
+		}
+		return h(args)
+	}
+}
+
 func withKubectl(t *testing.T, h func(args string) ([]byte, error)) {
 	t.Helper()
+	h = answerWALPVCClass(h)
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "kubectl" {
 			return nil, fmt.Errorf("unexpected command %q", name)
@@ -118,3 +137,19 @@ func containsString(hay []string, want string) bool {
 	}
 	return false
 }
+
+// healthyLokiIngesterPod is the pod every assert-loki happy-path fixture returns.
+//
+// IT IS AN INGESTER, not a generic `loki-0`, because the lane now asks a question
+// only an ingester can answer: does it have the WAL-replay headroom and the PVC
+// that keep it out of a self-perpetuating OOM crashloop. The old fixture — one
+// container named `loki`, no volumes — described the SINGLE-BINARY topology LLZ
+// stopped running, so a fixture built on it would have proved the check passes on
+// a shape no cluster has.
+// healthyLokiWALClass is the StorageClass the overlay asserts for the WAL PVC.
+const healthyLokiWALClass = "block-storage-retain"
+
+const healthyLokiIngesterPod = `{"metadata":{"namespace":"monitoring","name":"loki-ingester-0"},
+	"spec":{"containers":[{"name":"ingester","resources":{"limits":{"memory":"3Gi"}}}],
+	 "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data-loki-ingester-0"}}]},
+	"status":{"phase":"Running","containerStatuses":[{"name":"ingester","ready":true}]}}`

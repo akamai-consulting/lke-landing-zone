@@ -76,7 +76,7 @@ var (
 // REASONS about them is that package's read classifier — which has to tell "the
 // pod answered: no such path" from "nothing answered at all". The fact lives once,
 // next to the code that decides on it, and this file imports it. Same resolution
-// as platform.DeliveredDocs and manifestguard.BootstrapValuePlaceholders.
+// as platform.DeliveredDocs and the bootstrap placeholder set (retired with validate-apl-values).
 
 func isTransientExecErr(stderr string) bool {
 	// Pod-state answers win: the kubelet phrases them with the

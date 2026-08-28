@@ -19,7 +19,8 @@ package sustain
 //
 // SCOPE IS THE MANIFEST, NOT A PREFIX: this guard used to cover only `.github/`,
 // which left 16 of the 31 lockable `managed` files (.tflintrc.hcl, .checkov.yaml,
-// .gitleaks.toml, apl-values/values.yaml, …) overwritten by `llz upgrade` with no
+// .gitleaks.toml, apl-values/_shared/apl-overlay/appvalues.yaml, …) overwritten by
+// `llz upgrade` with no
 // drift warning at all — the exact failure this exists to prevent, on more than
 // half the surface. The lock is now a projection of .template-manifest's
 // digestLocked classes, so the two cannot drift apart.

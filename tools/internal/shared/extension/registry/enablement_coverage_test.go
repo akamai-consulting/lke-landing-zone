@@ -62,7 +62,13 @@ import (
 // spec component, and which an instance therefore cannot turn off. MEASURED, not
 // chosen.
 var componentless = map[string]bool{
-	"assert-identity": true,
+	// No component: it judges .template-manifest against the Go sources under
+	// tools/, and every instance carries the whole delivered scaffold regardless
+	// of which spec components it turned on. A component gate here would mean a
+	// delivered file could lose its consumer unnoticed on any instance that
+	// happened to disable that component.
+	"delivered-consumer-guard": true,
+	"assert-identity":          true,
 	// No component: the injection class is a property of the WORKFLOW FILES, which
 	// every instance carries regardless of which spec components it turned on.
 	"workflow-injection": true,

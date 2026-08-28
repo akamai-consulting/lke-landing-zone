@@ -419,6 +419,30 @@ jobs:
       - name: Read cluster credential alert status
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"
+
+      # THE SUPPORT-PLANE ALERTS WERE EVALUATED BY NOTHING. The step above filters
+      # to `^LLZ(Token|Certificate|Credential)`, which is correct for what it is —
+      # the credential single pane — but it meant no scheduled job ever ran
+      # alert-eval over the Loki / Harbor / Grafana / OTel rules at all. They were
+      # syntax-checked at PR time by check-prom-rules and never executed again.
+      #
+      # `LokiStatefulSetUnavailable` shipped selecting a StatefulSet name that does
+      # not exist on this platform. It could not fire, nothing asked it to, and
+      # log ingestion was down for 16 days before a promote surfaced it. This step
+      # is what asks.
+      #
+      # NOT --strict, and that is the honest setting rather than the timid one.
+      # These rules are mostly ARMED on a healthy cluster, and several legitimately
+      # select metrics that a quiet cluster never emits — `--strict` would fail
+      # DEAD? on those and turn a weekly job red for being healthy, which ends with
+      # the job muted. The value here is the SUMMARY: the NOMATCH annotations name
+      # every rule that reads armed while selecting zero series, which is exactly
+      # the signature this step exists to surface. `continue-on-error` keeps a
+      # diagnostic from failing the credential job it rides along with.
+      - name: Read support-plane alert status
+        if: steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci alert-eval --match '^(Loki|Harbor|Grafana|OTel|SupportPlane)' --summary "Support-plane alerts (${REGION})"
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

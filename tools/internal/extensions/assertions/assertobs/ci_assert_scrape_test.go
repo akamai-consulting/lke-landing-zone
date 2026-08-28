@@ -105,6 +105,10 @@ func TestDefaultScrapeSetsCoverTrackedTemplateMonitoringSurface(t *testing.T) {
 
 	// OpenBao is chart-rendered, not a raw instance-template ServiceMonitor; keep it
 	// explicit so a typo in the defaults does not look like an intentional extra.
+	//
+	// Harbor's ServiceMonitor is chart-rendered too and is deliberately NOT in the
+	// defaults — it is conditional on an opt-in app, and listing it made the gating
+	// lane red on every instance without Harbor. scrape.go carries the argument.
 	knownChartMonitors := map[string]bool{"llz-openbao/platform-openbao": true}
 	for _, monitor := range defaultScrapeMonitors {
 		if !surface.monitorSet[monitor] && !knownChartMonitors[monitor] {

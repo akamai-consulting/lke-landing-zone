@@ -1,8 +1,20 @@
 # Loki Access — Playbook
 
-**Applies to:** Loki (`<release>-loki` SingleBinary deployment in the `monitoring` namespace) on every cluster. Backed by Linode Object Storage per cluster.
+**Applies to:** Loki on every cluster, backed by Linode Object Storage. apl-core runs
+the chart in its **distributed** topology — a `loki-ingester` StatefulSet plus separate
+`loki-querier` / `loki-distributor` / `loki-compactor` / `loki-gateway` workloads, all in
+the `monitoring` namespace. Confirm before acting on any of it:
 
-**Related:** your observability configuration, [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml), [`grafana-access.md`](grafana-access.md).
+```bash
+kubectl -n monitoring get statefulset,deploy -l app.kubernetes.io/name=loki
+```
+
+(This page described a `SingleBinary` deployment for as long as apl-core has not run
+one. The distinction is not cosmetic — chart values under `singleBinary.*` are ignored
+outside single-binary mode, which is how a Loki OOM fix sat in the tree for months
+applying to nothing.)
+
+**Related:** [`grafana-access.md`](grafana-access.md).
 
 ---
 
@@ -132,7 +144,15 @@ namespace routed to its own tenant by the collector, with no Loki-side change. R
 for the steps below only for a tenant that is **not** an APL team:
 
 1. Set its writers to send `X-Scope-OrgID: <new-tenant>`.
-2. Add a per-tenant `limits_config` block in [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
+2. Add a per-tenant `limits_config` block to Loki's chart values — see Loki's
+   [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/)
+   for ingestion-rate / retention overrides. **Where**: `apps.loki._rawValues` in
+   `apl-values/_shared/apl-overlay/appvalues.yaml`, which is rendered — edit
+   `argoHealthCustomizations`'s sibling `lokiIngesterValues` in
+   `tools/internal/shared/clusterspec/overlay_appvalues.go` and re-run `llz render`.
+   That overlay is the only channel that reaches apl-core's values on the managed
+   platform; anything you put in `apl-values/values.yaml` reaches no cluster (that file
+   no longer exists, for exactly this reason).
 3. Add a second Loki data source in Grafana for that tenant (header value differs).
 
 Don't reuse `admins` as a catch-all for workload logs — once they are mixed into the

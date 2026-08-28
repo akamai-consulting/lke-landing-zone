@@ -148,6 +148,35 @@ func lokiBootstrapped(nameMatch, region string, allowFlush bool) (bool, []string
 	if failed {
 		ok = false
 	}
+
+	// 4. The ingesters can survive their own WAL.
+	//
+	// Checks 1-3 all describe Loki NOW: pods Ready, config on S3, a byte written.
+	// Every one was true of a cluster whose ingesters were days from an OOM
+	// crashloop, because none of them asks what happens on the next restart. An
+	// ingester whose memory limit is under the WAL-replay floor dies mid-replay,
+	// and an emptyDir WAL makes that death repeat forever on identical input —
+	// 104,337 BackOff events over 16 days, ingestion down throughout, while this
+	// lane had nothing to say.
+	//
+	// INSIDE THE POLL, and it was briefly moved OUT on the reasoning that a pod
+	// spec is declared state that polling cannot change. That reasoning was wrong
+	// about this repo specifically: the limit is delivered by the apl-overlay
+	// reconciler → apl-operator → StatefulSet rollout, which is asynchronous and
+	// exactly what the rest of this lane's settle budget exists to wait for. A
+	// gating check placed after the poll would hard-fail a cluster that was still
+	// converging — on the one delivery path this PR builds.
+	//
+	// The cost that prompted the move is gone with the gating split: the volume
+	// half no longer fails the lane (health.WALFindingsGate), so a converged
+	// cluster satisfies `ok` on the first pass and never re-probes.
+	for _, m := range lokiDurabilityFindings(nameMatch) {
+		msgs = append(msgs, "  "+m.text)
+		if m.fatal {
+			ok = false
+		}
+	}
+
 	return ok, msgs
 }
 

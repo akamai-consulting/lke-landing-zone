@@ -60,3 +60,62 @@ func TestCredentialAlertsMatchTheSinglePaneFilter(t *testing.T) {
 		t.Fatal("matched no credential alerts to check — the name heuristic has drifted")
 	}
 }
+
+// supportPlaneRuleCRD is the other PrometheusRule this repo ships. Its alerts
+// were evaluated by NOTHING until the support-plane alert-eval step was added:
+// the credential single pane filters to `^LLZ…`, so the Loki/Harbor/Grafana/OTel
+// rules were syntax-checked at PR time and never executed again.
+const supportPlaneRuleCRD = "../../../platform-apl/components/observability/prometheus-rules/support-plane-alerts.yaml"
+
+// THE FILTER IS THE COVERAGE, and that is the whole reason this test exists.
+//
+// An alert name is not cosmetic when a job selects rules by regex: a rule the
+// filter misses is a rule nobody ever evaluates, and it looks identical to a rule
+// that is fine. `LokiStatefulSetUnavailable` spent its life in that state for a
+// different reason (a selector matching nothing) — this pins the OTHER way the
+// same silence is produced.
+//
+// Derived from the shipped CRD, never a hand-written list, so a new support-plane
+// alert named outside the filter fails here instead of being quietly unwatched.
+func TestSupportPlaneAlertsMatchTheScheduledFilter(t *testing.T) {
+	wf, err := os.ReadFile("../../../instance-template/.github/workflows/llz-scheduled-checks.yml")
+	if err != nil {
+		t.Fatalf("read scheduled-checks workflow: %v", err)
+	}
+	// The SECOND alert-eval filter in the workflow — the first is the credential
+	// single pane. Matching all of them and requiring one to accept each alert is
+	// what keeps this from breaking when a third job is added.
+	ms := regexp.MustCompile(`alert-eval --match '([^']+)'`).FindAllSubmatch(wf, -1)
+	if len(ms) < 2 {
+		t.Fatal("fewer than two alert-eval --match filters in the workflow — the support-plane " +
+			"step is gone, so nothing evaluates the Loki/Harbor/Grafana/OTel rules and this " +
+			"guard would pass vacuously")
+	}
+	var filters []*regexp.Regexp
+	for _, m := range ms {
+		filters = append(filters, regexp.MustCompile(string(m[1])))
+	}
+
+	crd, err := os.ReadFile(supportPlaneRuleCRD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := regexp.MustCompile(`(?m)^\s*-\s*alert:\s*(\S+)`).FindAllStringSubmatch(string(crd), -1)
+	if len(names) == 0 {
+		t.Fatal("found no alert names in the support-plane PrometheusRule")
+	}
+	for _, n := range names {
+		name := n[1]
+		matched := false
+		for _, f := range filters {
+			if f.MatchString(name) {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("alert %q is shipped but matches NO alert-eval filter in llz-scheduled-checks.yml — "+
+				"no scheduled job will ever evaluate it, which is indistinguishable from it being "+
+				"healthy. Either name it inside an existing filter or widen one.", name)
+		}
+	}
+}

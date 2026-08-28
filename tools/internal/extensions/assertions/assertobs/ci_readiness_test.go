@@ -33,7 +33,7 @@ func TestRunCIAssertLoki(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch a {
 		case "get pods -A -l app.kubernetes.io/name=loki -o json":
-			return items(`{"metadata":{"namespace":"observability","name":"loki-0"},"status":{"phase":"Running","containerStatuses":[{"name":"loki","ready":true}]}}`), nil
+			return items(healthyLokiIngesterPod), nil
 		case "get configmap -A -o json":
 			return items(`{"metadata":{"name":"loki-config"},"data":{"config.yaml":"storage_config:\n  aws:\n    s3: s3://bucket\n  object_store: s3\n"}}`), nil
 		case "get crd applications.argoproj.io":
@@ -75,7 +75,7 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 		}
 		switch a { // attempt 2 onward: healthy + S3-backed
 		case "get pods -A -l app.kubernetes.io/name=loki -o json":
-			return items(`{"metadata":{"namespace":"observability","name":"loki-0"},"status":{"phase":"Running","containerStatuses":[{"name":"loki","ready":true}]}}`), nil
+			return items(healthyLokiIngesterPod), nil
 		case "get configmap -A -o json":
 			return items(`{"metadata":{"name":"loki-config"},"data":{"config.yaml":"object_store: s3\n"}}`), nil
 		}

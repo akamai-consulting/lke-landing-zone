@@ -1,8 +1,8 @@
 package manifestguard
 
-// cobra_manifestguard.go — the three `guard-manifests` flag sets.
+// cobra_manifestguard.go — the `guard-manifests` flag sets.
 //
-// The guards are tools/internal/extensions/assertions/manifestguard, which declares the extension.
+// The guards are tools/internal/extensions/guards/manifestguard, which declares the extension.
 // The wiring travels with the capability rather than sitting in main.
 
 import (
@@ -33,32 +33,6 @@ func ArgoCDRenderedAppsCmd() *cobra.Command {
 	c.Flags().StringVar(&root, "root", ".", "repository root")
 	c.Flags().StringVar(&renderDir, "render-dir", "rendered", "rendered-manifests directory (relative to --root)")
 	return c
-}
-
-func AplSchemaValidateCmd() *cobra.Command {
-	var valuesPath, chartVersion string
-	var skipSchema bool
-	cmd := &cobra.Command{
-		Use:   "validate-apl-values",
-		Short: "check a rendered apl-values file's runtime-placeholder contract + apl-core schema (no cluster)",
-		Long: "Two offline checks on a rendered apl-values values.yaml, shifted left from\n" +
-			"Release-E2E: (1) every unescaped ${...} still in the file is one of the\n" +
-			"secrets-only runtime placeholders `llz ci bootstrap-cluster` fills (else the\n" +
-			"bootstrap can't fill it — the ${apl_values_repo_url} class); (2) the values\n" +
-			"pass apl-core's chart schema via `helm template apl/apl`, pinned to\n" +
-			"--chart-version — or, when that is omitted, to the baseline an unpinned env\n" +
-			"actually deploys. The schema check self-skips only on --skip-schema or no helm\n" +
-			"on PATH; the var-contract check always runs.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return RunValidateAplValues(valuesPath, chartVersion, skipSchema)
-		},
-	}
-	cmd.Flags().StringVar(&valuesPath, "values", "", "path to the rendered apl-values values.yaml (required)")
-	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "apl-core chart version to pin the schema check (from spec.cluster.bootstrap.aplChartVersion)")
-	cmd.Flags().BoolVar(&skipSchema, "skip-schema", false, "skip the helm schema check (var-contract only)")
-	_ = cmd.MarkFlagRequired("values")
-	return cmd
 }
 
 func PlaceholderGuardCmd() *cobra.Command {

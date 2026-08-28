@@ -16,6 +16,14 @@ package assertobs
 //            live metric set — the silent-never-fires signature. Investigate.
 //   BROKEN   Prometheus rejected the expr (bad PromQL / label that errors).
 //
+// ARMED rules additionally get a SELECTOR probe (alertselectors.go), because ARMED
+// is where the expensive bug hides: `LokiStatefulSetUnavailable` selected
+// `statefulset="loki"` on a cluster whose StatefulSet is `loki-ingester`, so the
+// metric NAME existed, DEAD? did not trigger, and the rule graded ARMED — the
+// healthy verdict — through a 16-day log-ingestion outage. An ARMED rule whose
+// every label selector matches zero series is annotated NOMATCH: reported, never
+// gating, for the reason given in alertselectors.go.
+//
 // Reaches Prometheus via an ephemeral kubectl port-forward (see prom_query.go —
 // the apiserver Service proxy is webhook-denied on LKE-Enterprise), same as
 // `llz ci prom-metrics`. The `for:` duration is not part of the expr, so this
@@ -42,6 +50,11 @@ type evalVerdict struct {
 	verdict string // FIRING | ARMED | DEAD? | BROKEN
 	value   string // first sample value when FIRING, else ""
 	detail  string // error text for BROKEN
+	// deadSelectors names every label selector in the expr when ALL of them match
+	// zero series — the signature of a rule pointed at a renamed workload, which
+	// the name-level DEAD? check grades ARMED. Reported, never gating; see
+	// alertselectors.go for why.
+	deadSelectors []string
 }
 
 // vacuous reports a check that could not actually be performed. Report-only mode
@@ -96,9 +109,29 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 		for _, n := range parsePromLabelValues(nameJSON) {
 			known[n] = true
 		}
+		// A tiny cache: sibling alerts in one group routinely share a selector
+		// (every Loki rule scopes to namespace="monitoring"), and each probe is a
+		// port-forwarded round trip.
+		seen := map[string][2]bool{}
+		matcher := func(sel string) (matches, answered bool) {
+			if v, ok := seen[sel]; ok {
+				return v[0], v[1]
+			}
+			raw, err := get("/api/v1/query?query=" + url.QueryEscape("count("+sel+")"))
+			m, a := selectorHasSeries(raw, err)
+			seen[sel] = [2]bool{m, a}
+			return m, a
+		}
 		for _, r := range rules {
 			raw, qerr := get("/api/v1/query?query=" + url.QueryEscape(r.Expr))
-			out = append(out, classifyAlertEval(r, raw, qerr, known))
+			v := classifyAlertEval(r, raw, qerr, known)
+			// Only ARMED rules are worth asking about. FIRING matched something by
+			// definition, DEAD? is already the louder finding, and BROKEN means the
+			// expr does not run at all.
+			if v.verdict == "ARMED" {
+				v.deadSelectors = unmatchedSelectors(r.Expr, matcher)
+			}
+			out = append(out, v)
 		}
 		return nil
 	})
@@ -215,6 +248,7 @@ func classifyAlertEval(r evalRule, raw []byte, qerr error, known map[string]bool
 
 func printAlertEval(out []evalVerdict, summary string, strict bool) error {
 	counts := map[string]int{}
+	nomatch := 0
 	lines := make([]string, 0, len(out))
 	for _, v := range out {
 		counts[v.verdict]++
@@ -227,12 +261,29 @@ func printAlertEval(out []evalVerdict, summary string, strict bool) error {
 		}
 		lines = append(lines, line)
 		fmt.Println(line)
+		if len(v.deadSelectors) > 0 {
+			nomatch++
+			note := "  " + selectorFinding(v.rule.Namespace+"/"+v.rule.Alert, v.deadSelectors)
+			lines = append(lines, note)
+			fmt.Println(note)
+		}
 	}
-	tally := fmt.Sprintf("alert-eval: %d alerts — FIRING=%d ARMED=%d DEAD?=%d BROKEN=%d",
-		len(out), counts["FIRING"], counts["ARMED"], counts["DEAD?"], counts["BROKEN"])
+	tally := fmt.Sprintf("alert-eval: %d alerts — FIRING=%d ARMED=%d DEAD?=%d BROKEN=%d NOMATCH=%d",
+		len(out), counts["FIRING"], counts["ARMED"], counts["DEAD?"], counts["BROKEN"], nomatch)
 	fmt.Fprintf(os.Stderr, "\n%s\n", tally)
-	if counts["DEAD?"] > 0 || counts["FIRING"] > 0 {
+	if counts["DEAD?"] > 0 || counts["FIRING"] > 0 || nomatch > 0 {
 		fmt.Fprintln(os.Stderr, "alert-eval: DEAD? = named metrics all absent (silent never-fire); FIRING on a healthy cluster = check the threshold.")
+	}
+	if nomatch > 0 {
+		// NOT part of the exit status, and said out loud so nobody has to read the
+		// source to find out. A selector matching nothing is often healthy (a
+		// counter that never incremented), so gating would make this job red on
+		// good clusters and it would stop being read — which is how the outage it
+		// is named for went unnoticed in the first place.
+		fmt.Fprintf(os.Stderr, "alert-eval: %d alert(s) read ARMED but select ZERO series (NOMATCH). "+
+			"Reported, not gating. Each is either a rule pointed at a renamed workload or a metric "+
+			"that has legitimately never been emitted — the two look identical from here, so a human "+
+			"has to look.\n", nomatch)
 	}
 	failed := strict && (counts["DEAD?"] > 0 || counts["BROKEN"] > 0)
 

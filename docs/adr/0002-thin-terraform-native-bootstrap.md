@@ -89,9 +89,10 @@ Supporting decisions (see the PR's plan for the full rationale):
 - **Removed:** `terraform-iac-bootstrap/cluster-bootstrap`,
   `llz-cluster-bootstrap`, the embedded `cluster-bootstrap`
   tfroot, and the now-dead `tf-untrack` + `internal/terraform/untrack.go`.
-  The offline apl-values var-contract guard (`llz ci validate-apl-values`) now
-  checks against the Go `bootstrapValuePlaceholders` constant instead of parsing
-  the deleted `main.tf`.
+  The offline apl-values var-contract guard (validate-apl-values) checked against
+  a Go constant instead of parsing the deleted `main.tf`. It has since been
+  retired too: LLZ renders no apl-core values.yaml on the managed platform, so the
+  guard had no input left.
 - **The `apl-<env>` values branch is bootstrap-owned when absent, operator-owned
   once populated.** apl-core v6's operator does NOT self-create
   `otomi.git.branch` — it deadlocks pulling a missing ref, and once its

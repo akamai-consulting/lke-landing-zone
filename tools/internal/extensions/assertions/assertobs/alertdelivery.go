@@ -25,6 +25,17 @@ package assertobs
 // a firing alert reaches something whose job is to route it, which is exactly the
 // link that silently disappears.
 //
+// "SHIPS NONE" IS STRONGER THAN IT SOUNDS, and it is worth saying plainly rather
+// than leaving as a scope note. `spec.alerting` exists, validates, and renders
+// NOWHERE: apl-core builds its receiver config from a top-level `alerts:` values
+// block, and LLZ's only channel into apl-core's values is per-app
+// (apps.<name>._rawValues on an AplApp CR), which cannot reach a top-level key. So
+// the receiver set is `[none]` on every managed cluster no matter what the spec
+// says, and every alert this repo ships pages nobody by default. That is tracked
+// in docs/upstream-asks.md §4 and reported per-instance by
+// clusterspec.InertSpecFields via `llz doctor` — the gap is named in three places
+// on purpose, because a caveat inside one gate's header is where it hid before.
+//
 // Two assertions:
 //
 //   1. Prometheus has at least one ACTIVE Alertmanager in /api/v1/alertmanagers.

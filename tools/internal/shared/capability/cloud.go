@@ -4,7 +4,7 @@ package capability
 //
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
 //
-// 21 declarations of `cloud-read` and 22 of `cloud-mutate`, and `cloud-mutate` is
+// 20 declarations of `cloud-read` and 22 of `cloud-mutate`, and `cloud-mutate` is
 // the most destructive grant in the model — its holders delete clusters, detach
 // and delete Volumes, tear down NodeBalancers and VPCs, and revoke tokens. Without
 // these handles the only thing standing between the two is the word in the

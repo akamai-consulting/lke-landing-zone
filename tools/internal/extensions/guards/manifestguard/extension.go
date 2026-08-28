@@ -25,16 +25,19 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `guard-manifests` declaration.
 //
-//	gate:scaffolded      "rendered-manifests" [read-repo]
-//	assertion:configured "apl-schema"         [read-repo, cloud-read]
+//	gate:scaffolded "rendered-manifests" [read-repo]
 //
-// TWO BINDINGS, AND THE SPLIT WAS FOUND BY A TEST RATHER THAN BY READING. The
-// first cut declared all three lanes as one `gate:scaffolded[read-repo]`, on the
-// rule `guard-charts` settled — a split needs divergent CAPABILITY, not divergent
-// subject matter. TestPackageStaysFilesOnly then failed on `apl_schema.go reaches
-// os/exec`, and it was right: that lane shells out to `helm` to resolve the
-// apl-core chart before validating committed values against its schema, so it
-// needs a chart the registry has to serve.
+// ONE BINDING NOW, and the history is worth keeping because it argues for the
+// rule rather than against it. There were two: this gate, and an
+// `assertion:configured "apl-schema" [read-repo, cloud-read]` that shelled out to
+// `helm` to resolve the apl-core chart and validate committed values against its
+// schema. The split was found by a test rather than by reading —
+// TestPackageStaysFilesOnly failed on `apl_schema.go reaches os/exec`, and it was
+// right, because that lane needed a chart the registry had to serve.
+//
+// The assertion is gone because its INPUT is: a rendered apl-core values.yaml,
+// which LLZ stopped emitting on the managed App Platform. The package is
+// files-only again, which is what makes the gate kind legal for it.
 //
 // A gate is DEFINED by cost and reach — fast, local, files only, findings out —
 // and `posture-credential-coverage` and `posture-plaintext` both earn it. This
@@ -71,7 +74,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "guard-manifests",
-		Short:  "rendered manifests say what we meant — no duplicate Helm params, no leftover placeholders, apl-values valid against the chart",
+		Short:  "rendered manifests say what we meant — no duplicate Helm params, no leftover placeholders, no dropped apiVersions",
 		Always: true,
 		Bindings: []extension.Binding{
 			{
@@ -79,12 +82,6 @@ func Extension() extension.Extension {
 				Name:   "rendered-manifests",
 				State:  extension.Scaffolded,
 				Grants: []extension.Grant{extension.ReadRepo},
-			},
-			{
-				Kind:   extension.Assertion,
-				Name:   "apl-schema",
-				State:  extension.Configured,
-				Grants: []extension.Grant{extension.ReadRepo, extension.CloudRead},
 			},
 		},
 	}
