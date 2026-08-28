@@ -55,9 +55,14 @@ func InertSpecFields() []InertSpecField {
 				"values block. The apl-overlay's only channel into apl-core is per-app " +
 				"(apps.<name>._rawValues on its AplApp CR), which cannot reach a top-level key, and " +
 				"the per-env values file that used to carry it is gone. So this setting reaches no " +
-				"cluster: alerts aggregate in Alertmanager and notify nobody. The webhook half DOES " +
-				"work (secret/alerts/webhooks is seeded and rotated) — it is the routing that is " +
-				"unwired. See docs/upstream-asks.md §4",
+				"cluster: alerts aggregate in Alertmanager and notify nobody. NEITHER HALF WORKS — " +
+				"secret/alerts/webhooks is seeded, age-tracked and rotated, but the " +
+				"kyverno-alertmanager-slack-webhook policy that repointed apl-core's " +
+				"alertmanager-credentials ExternalSecret at it was deleted with the rest of the " +
+				"shared Kyverno policy base when LLZ went managed-only, and nothing replaced it. " +
+				"Only two Kyverno policies ship now. So the " +
+				"secret is written to a path no cluster reads, exactly like the routing. " +
+				"See docs/upstream-asks.md §4",
 			Probe: func(lz *LandingZone) bool {
 				for _, r := range lz.Spec.Alerting.Receivers {
 					if r != "" && r != "none" {

@@ -49,7 +49,9 @@ Loki) is itself broken.
 > scheduled checks as the only alerting that reaches a person**, and plan on-call
 > around that.
 
-The intended flow, for when §4 closes — the secret half already works today:
+The intended flow, for when §4 closes. **Neither step works today** — see the note
+after step 2, which corrects an earlier version of this page that claimed the
+secret half did:
 
 1. **Spec** — in `landingzone.yaml`:
 
@@ -66,20 +68,25 @@ The intended flow, for when §4 closes — the secret half already works today:
    records the intent, `llz doctor` will tell you it is not being delivered, and it
    is what will be rendered once there is a channel to render it into.
 
-2. **Webhook secret — THIS HALF WORKS.** Seed the Slack webhook URL into each env's
-   OpenBao (dual-write on HA pairs):
+2. **Webhook secret — SEEDED, AND ALSO GOING NOWHERE.** Seed the Slack webhook URL
+   into each env's OpenBao (dual-write on HA pairs):
 
    ```bash
    llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/services/…
    ```
 
-   apl-core mounts the URL from the `alertmanager-credentials` Secret; the
-   `kyverno-alertmanager-slack-webhook` policy (Kyverno is owned by the managed
-   App Platform — LLZ no longer ships a `manifest/kyverno-policies/`
-   base) repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
-   the seed up within its 5m refresh. Rotation is the same `llz openbao set`
-   again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
-   failure, not silently-dead notifications.
+   apl-core mounts the URL from the `alertmanager-credentials` Secret, and the
+   `kyverno-alertmanager-slack-webhook` policy used to repoint that Secret's
+   ExternalSecret at the `openbao` store. **That policy no longer ships.** It went
+   with the whole `manifest/kyverno-policies/` base when LLZ became managed-only
+   (Kyverno itself is the managed App Platform's), and nothing replaced it — only
+   `verify-llz-image-signature` and `harbor-obj-proxy-ca` ship today.
+
+   So the seed lands in OpenBao, is age-tracked, rotates on schedule, and is read
+   by nothing. The parenthetical in the previous version of this page named the
+   very commit that removed the policy while still describing it as active, which
+   is worth recording: the sentence was edited, and the fact it asserted was not
+   re-checked.
 
 3. **Verify — and do not skip it.** Fire a test alert (e.g. `amtool alert add …`
    against the Alertmanager API, or temporarily scale a watched Deployment to 0)
