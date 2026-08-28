@@ -50,6 +50,24 @@ var defaultScrapeMonitors = []string{
 	"llz-openbao/platform-openbao",
 }
 
+// HARBOR IS DELIBERATELY NOT HERE, and it was here for one commit, which is the
+// note worth leaving. It was added as the consumer-side gate for the overlay's
+// apps.harbor._rawValues.metrics entry — a values key needs a gate that reads the
+// CLUSTER, or it can name nothing and be ignored in silence.
+//
+// But every entry above is an ALWAYS-ON component, and Harbor is not: its
+// component carries ManagedConditionalOn "harbor", so an instance whose
+// managedApps omit it runs no Harbor at all. Listing it here made the gating
+// scrape lane permanently red on those instances, with no --monitors override in
+// the delivered llz-cluster-health.yml to escape with. That is the same mistake
+// as gating the WAL PVC: a check nobody can turn green gets the whole lane turned
+// off, and takes the four real entries with it.
+//
+// So the harbor overlay entry's gate is the non-gating alert-eval step in
+// llz-scheduled-checks.yml, which reports harbor_* rules as DEAD?/NOMATCH when the
+// metrics never arrive. Weaker than this lane, and honest about being weaker.
+// Making it gating needs the scrape set to become component-aware first —
+// tracked in docs/upstream-asks.md alongside the other conditional-surface gaps.
 // defaultScrapeRuleGroups are the PrometheusRule GROUP names (spec.groups[].name,
 // not the CR name) apl-core's Prometheus must load. A group absent from
 // /api/v1/rules means its PrometheusRule was never picked up (ruleSelector miss).

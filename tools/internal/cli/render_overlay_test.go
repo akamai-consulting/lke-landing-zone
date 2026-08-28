@@ -22,6 +22,7 @@ func TestTemplateSharedOverlayMatchesRenderers(t *testing.T) {
 	}{
 		{clusterspec.OverlayObjFile, clusterspec.RenderObjOverlayShared()},
 		{clusterspec.OverlayAppsFile, clusterspec.RenderAppsOverlayShared()},
+		{clusterspec.OverlayAppValuesFile, clusterspec.RenderAppValuesOverlayShared()},
 	}
 	for _, c := range cases {
 		got, err := os.ReadFile(filepath.Join(dir, c.file))

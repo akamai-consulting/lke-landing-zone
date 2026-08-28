@@ -14,6 +14,113 @@ apps:
     enabled: false
   tekton:
     enabled: false
+=== apl-values/_shared/apl-overlay/appvalues.yaml
+apps:
+  argocd:
+    _rawValues:
+      configs:
+        cm:
+          resource.customizations.health.cert-manager.io_ClusterIssuer: |
+            local hs = {}
+            hs.status = "Healthy"
+            hs.message = "ClusterIssuer applied (readiness not sync-gating; llz ci health reports it — see apl-values/_shared/apl-overlay/appvalues.yaml)"
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  hs.message = "Ready=" .. c.status .. ": " .. (c.message or "")
+                end
+              end
+            end
+            return hs
+          resource.customizations.health.external-secrets.io_ClusterSecretStore: |
+            local hs = {}
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    -- OpenBao not yet reachable/unsealed or the eso role not yet configured:
+                    -- still converging, do not fail the sync.
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for ClusterSecretStore Ready condition"
+            return hs
+          resource.customizations.health.external-secrets.io_ExternalSecret: |
+            local hs = {}
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    -- ESO reconciles on refreshInterval; a not-yet-synced secret (e.g. an
+                    -- OpenBao path not seeded yet) self-heals. Progressing, never Degraded.
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for ExternalSecret to sync"
+            return hs
+          resource.customizations.health.external-secrets.io_PushSecret: |
+            local hs = {}
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for PushSecret to sync"
+            return hs
+          resource.customizations.health.networking.k8s.io_NetworkPolicy: |
+            local hs = {}
+            hs.status = "Healthy"
+            hs.message = "NetworkPolicy applied (no status on this CNI; health forced — see apl-values/_shared/apl-overlay/appvalues.yaml)"
+            return hs
+  harbor:
+    _rawValues:
+      metrics:
+        enabled: true
+        serviceMonitor:
+          additionalLabels:
+            prometheus: system
+          enabled: true
+  loki:
+    _rawValues:
+      ingester:
+        persistence:
+          claims:
+            - accessModes:
+                - ReadWriteOnce
+              name: data
+              size: 5Gi
+              storageClass: block-storage-retain
+          enabled: true
+        resources:
+          limits:
+            cpu: "1"
+            memory: 3Gi
+          requests:
+            cpu: 100m
+            memory: 512Mi
 === apl-values/_shared/apl-overlay/obj.yaml
 kind: AplObjectStorage
 metadata:

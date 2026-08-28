@@ -62,7 +62,7 @@ type Config struct {
 // apl-operator's "otomi commit" so the two writers' history stays legible.
 // maxAttempts bounds the fast-forward retry loop against concurrent pushes.
 const (
-	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + teams) [ci skip]"
+	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + app values + teams) [ci skip]"
 	maxAttempts   = 4
 )
 
@@ -301,31 +301,58 @@ func objOverlayIsWritable(merged []byte) bool {
 	return strings.TrimSpace(l.Region) != "" && len(l.Buckets) > 0
 }
 
-// appOverlayFiles reads LLZ's merged apps source (the desired {app: enabled} map)
-// and, for each app whose enabled differs from apl-operator's CURRENT
-// env/apps/<name>.yaml on the target branch, adds the key-level-merged AplApp CR to
-// files. Apps whose target file does not exist yet (apl-operator has not seeded
-// them) are skipped until it has — and an app already at the desired enabled is
-// skipped (SetAppEnabled's semantic no-op), so the reconciler never churns against
-// apl-operator's re-populated/re-formatted file.
+// appOverlayFiles reads LLZ's TWO per-app sources — the desired {app: enabled}
+// map (apps.yaml) and the per-app chart values LLZ asserts (appvalues.yaml) — and,
+// for each app whose current env/apps/<name>.yaml on the target branch differs
+// from either, adds the key-level-merged AplApp CR to files. Apps whose target
+// file does not exist yet (apl-operator has not seeded them) are skipped until it
+// has — and an app already at the desired state is skipped (SetAppSpec's semantic
+// no-op), so the reconciler never churns against apl-operator's
+// re-populated/re-formatted file.
+//
+// BOTH SOURCES WRITE THE SAME FILE, which is why they are composed into one
+// desired state (clusterspec.AppOverlays) before a single SetAppSpec call rather
+// than handled by two passes. Two passes would each read the branch copy, each
+// merge their own half onto it, and the second `files[target] = …` would silently
+// discard the first — an app with both a toggle and values would get whichever
+// half ran last, intermittently, depending on map order.
 func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string) (envFound bool, err error) {
 	merged, found, envFound, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayAppsFile)
 	if err != nil {
 		return false, err
 	}
-	if !found {
-		// Same rule as obj: no source means no opinion. An empty toggle map would
+	// appvalues.yaml is _shared-only (no per-env layer), so its envFound is not
+	// part of this function's answer — envFound reports on the per-env apps layer,
+	// which is what the caller's "is this env's overlay source present" gauge means.
+	mergedValues, valuesFound, _, err := readMergedOverlay(ctx, repo, cfg, clusterspec.OverlayAppValuesFile)
+	if err != nil {
+		return envFound, err
+	}
+	if !found && !valuesFound {
+		// Same rule as obj: no source means no opinion. An empty desired map would
 		// write no files either, so this changes no behaviour today — it is here
 		// so the two passes cannot drift into answering the question differently.
-		fmt.Println("apl-overlay: no apps.yaml overlay source for this env — leaving apl-core's app toggles alone")
+		fmt.Println("apl-overlay: no apps.yaml/appvalues.yaml overlay source for this env — leaving apl-core's app config alone")
 		return envFound, nil
 	}
-	toggles, err := clusterspec.AppToggles(merged)
-	if err != nil {
-		return envFound, fmt.Errorf("parse apps toggles: %w", err)
+	if !valuesFound {
+		// SAID OUT LOUD, because this is the state the whole appvalues channel
+		// exists to make impossible. An instance rendered before appvalues.yaml
+		// existed carries apps.yaml and not this one, so its Argo CD health
+		// customizations and Loki's WAL-replay headroom are asserted by nothing —
+		// which is indistinguishable, from the cluster, from the pre-fix world.
+		// `llz upgrade` re-renders it; until then this line is the only evidence.
+		fmt.Println("apl-overlay: no appvalues.yaml overlay source on the source branch — " +
+			"apl-core's own app values stand, INCLUDING the argocd health customizations " +
+			"and Loki's ingester resources LLZ normally asserts. Re-run `llz render` and commit " +
+			"apl-values/_shared/apl-overlay/appvalues.yaml")
 	}
-	apps := make([]string, 0, len(toggles))
-	for a := range toggles {
+	desired, err := clusterspec.AppOverlays(merged, mergedValues)
+	if err != nil {
+		return envFound, fmt.Errorf("parse app overlays: %w", err)
+	}
+	apps := make([]string, 0, len(desired))
+	for a := range desired {
 		apps = append(apps, a)
 	}
 	sort.Strings(apps) // deterministic push order
@@ -336,11 +363,28 @@ func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[strin
 			return envFound, fmt.Errorf("read target %s: %w", target, err)
 		}
 		if !found {
-			continue // apl-operator has not created this app's CR yet — next pass
+			// SILENT FOR A TOGGLE, LOUD FOR VALUES, and the asymmetry is the point.
+			// A missing CR is the ordinary first-boot state: apl-operator seeds
+			// env/apps/<name>.yaml on its own schedule and the next pass picks it
+			// up, so saying so every pass for every app would be noise.
+			//
+			// But an app LLZ has VALUES for is different. argocd is the case:
+			// nothing else in this repo delivers its health customizations, and if
+			// apl-operator never seeds that CR they are asserted by nothing — while
+			// wave-health-guard, which checks the SOURCE, stays green. That is the
+			// same shape as the wedge this whole channel was built for, so it gets a
+			// line naming the app and the file it is waiting on.
+			if len(desired[app].RawValues) > 0 {
+				fmt.Printf("apl-overlay: %s has values to assert but apl-operator has not created %s "+
+					"on %s yet — they are asserted by NOTHING until it does. Expected on a fresh "+
+					"cluster; if it persists, apl-core is not managing this app and the values need "+
+					"another home.\n", app, target, cfg.TargetBranch)
+			}
+			continue
 		}
-		updated, changed, err := clusterspec.SetAppEnabled([]byte(current), toggles[app])
+		updated, changed, err := clusterspec.SetAppSpec([]byte(current), desired[app])
 		if err != nil {
-			return envFound, fmt.Errorf("set enabled on %s: %w", target, err)
+			return envFound, fmt.Errorf("set spec on %s: %w", target, err)
 		}
 		if changed {
 			files[target] = string(updated)

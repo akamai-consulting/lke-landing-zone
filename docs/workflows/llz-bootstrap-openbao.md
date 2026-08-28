@@ -733,7 +733,16 @@ ANY GATING lane fails. Wall clock = slowest lane (typically a health-workflow ru
 Per-lane rationale (each verb is unit-tested; details in its Go file):
 
 * **loki** — Loki bootstrapped + S3-backed (the former `validate` job's one net-new
-  check, folded here to drop that job's container cycle).
+  check, folded here to drop that job's container cycle), plus a proven write and
+  **ingester WAL survivability**. That last one is a different kind of claim from the
+  others: not "is Loki working now" but "will it come back from a restart". An ingester
+  whose memory limit is under the WAL-replay floor is OOMKilled mid-replay, and with the
+  chart's default `emptyDir` WAL the next attempt replays the identical WAL and dies
+  identically — a loop that cannot self-heal. Measured live: 104,337 BackOff events over
+  16 days with ingestion down, while every other check here was green. It reads the
+  RUNNING pod's limits and volume, never the values that were supposed to set them,
+  because the override meant to prevent it named a chart key the live topology does not
+  read and was therefore correct everywhere except on the cluster.
 * **openbao-audit** — GATING round trip on OpenBao's audit-log pipeline: reads the audit
   stream back out of Loki and fails if nothing arrived in the lookback window. Separate
   from **loki** deliberately — that lane proves Loki is up, not that anything reaches it.

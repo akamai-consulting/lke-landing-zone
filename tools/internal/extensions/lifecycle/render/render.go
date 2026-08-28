@@ -526,6 +526,12 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	shared := filepath.Join(aplDir, "_shared", "apl-overlay")
 	targets[filepath.Join(shared, clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayShared()
 	targets[filepath.Join(shared, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayShared()
+	// appvalues.yaml — _shared ONLY, and deliberately so. Every entry is a
+	// platform decision with a stated reason (Argo CD health customizations that
+	// keep a fresh bootstrap from wedging; Loki's WAL-replay headroom), none of
+	// which an environment should be able to differ on. There is no per-env
+	// counterpart to render.
+	targets[filepath.Join(shared, clusterspec.OverlayAppValuesFile)] = clusterspec.RenderAppValuesOverlayShared()
 	overlay := filepath.Join(aplDir, env, "apl-overlay")
 	if obj := clusterspec.RenderObjOverlayEnv(id.ObjLabelPrefix, env, e.Cluster.ObjectStorage.Cluster); obj != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
