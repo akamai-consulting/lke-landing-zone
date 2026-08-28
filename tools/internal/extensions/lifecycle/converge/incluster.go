@@ -6,7 +6,7 @@ package converge
 // convergence verdict — the same 0/1/2/3 exit-code contract — over `internal/kube`
 // (the hand-rolled REST client authenticated by the pod ServiceAccount) instead of
 // shelling out to kubectl, reusing the reconciler's convergence classifier
-// (reconcile_convergence.go → convergenceReport, the same health.ClassifyArgoApp
+// (reconcile_convergence.go → convergenceReport, the same health.Report.RouteApp
 // predicate). This is what makes the clusterHealthWorkflow Argo WorkflowTemplate
 // runnable in-cluster with no GitHub secrets (docs/designs/day2-incluster-health.md).
 //
@@ -78,7 +78,17 @@ func ConvergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {
 }
 
 func printConvergenceReport(r health.Report) {
+	// Instance-owned Applications print FIRST and unconditionally. They do not gate
+	// this verb, and "convergence: OK — all Argo Applications converged" over a
+	// broken operator app is how a boundary becomes a blindfold.
+	for _, m := range r.Instance {
+		fmt.Printf("  INSTANCE %s\n", m)
+	}
 	if len(r.Failed) == 0 && len(r.Pending) == 0 {
+		if n := len(r.InstanceFailed); n > 0 {
+			fmt.Printf("convergence: platform OK — %d instance-owned Application(s) hard-failed (not gated here; see `llz ci health --scope=apps`)\n", n)
+			return
+		}
 		fmt.Println("convergence: OK — all Argo Applications converged")
 		return
 	}

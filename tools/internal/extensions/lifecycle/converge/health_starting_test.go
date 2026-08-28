@@ -38,7 +38,7 @@ func TestCheckPodsPendsAStartingPod(t *testing.T) {
 	defer func() { health.Budgeted = prev }()
 
 	var r health.Report
-	checkPods(&r, false)
+	checkPods(&r, health.OwnershipIndex{}, false)
 
 	if len(r.Failed) != 1 {
 		t.Errorf("failed = %v, want only the CrashLoopBackOff pod", r.Failed)
@@ -61,7 +61,7 @@ func TestCheckPodsPendsAStartingPod(t *testing.T) {
 	// And the steady-state answer, which is the one that alerts.
 	health.Budgeted = false
 	var steady health.Report
-	checkPods(&steady, false)
+	checkPods(&steady, health.OwnershipIndex{}, false)
 	var creatingFailed bool
 	for _, f := range steady.Failed {
 		if contains(f, "platform-logs-collector") {
@@ -113,7 +113,7 @@ func TestCheckServicesPendsAServiceWhoseEndpointsAreNotReadyYet(t *testing.T) {
 
 	inv := &clusterInventory{nsExists: map[string]bool{"llz-observability": true}}
 	var r health.Report
-	checkServices(&r, inv, false)
+	checkServices(&r, inv, health.OwnershipIndex{}, false)
 
 	for _, f := range r.Failed {
 		if contains(f, "otel-collector") {

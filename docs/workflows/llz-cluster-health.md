@@ -87,6 +87,33 @@ point-in-time diagnostic, not a gate.
 > loop are slated to move into the `llz` binary in a later phase. Keep inline
 > notes there short; the reasoning belongs in this document.
 
+### The app scope is NOT checked in this workflow
+
+`llz ci converge` here gates the **platform**. Instance-owned content — the
+operator escape hatch and the apps deployed through it — is reported by that step
+and excluded from its verdict, so an app team's missing credential cannot block a
+platform release.
+
+What gates that content is `llz ci converge --scope=apps`, and it deliberately
+does **not** live in this job:
+
+- **This workflow is `workflow_dispatch` only.** A gate placed here runs when a
+  human clicks it, which is not a gate. It runs unattended per region as the
+  `app-scope-health` **job** in `llz-scheduled-checks` — a job of its own, and
+  blocking: no `continue-on-error`. The in-cluster `LLZAppScopeNotConverged`
+  alert is the continuous detector in front of it, Application-level only.
+  See [llz-scheduled-checks.md](llz-scheduled-checks.md).
+- **A failing step here skips the platform's own assert lanes.** The `assert-loki`
+  steps below carry an implicit `success()`, so an app-scope failure in this job
+  silently skipped `llz ci assert-loki`, `assert-suite` and `alert-eval` — the
+  platform/instance coupling the boundary exists to remove, re-created one layer
+  up. Those steps now carry `always() &&` so an unrelated red step cannot skip
+  them either.
+- **converge, not health.** `health.Budgeted` is true only inside a budget, and
+  outside one a pod that is merely being created classifies as *failed* — a
+  routine app rollout would go red. Any operator instruction to inspect the app
+  scope should say `converge --scope=apps`.
+
 ### Step: Argo CD sync diagnostics (best-effort)
 
 Best-effort Argo CD sync diagnostics — the `operationState` / failed-resource

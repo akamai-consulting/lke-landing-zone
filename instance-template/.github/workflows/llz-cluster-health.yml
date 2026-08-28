@@ -72,6 +72,7 @@ jobs:
       # Kubeconfig + opens this runner's egress IP in the LKE-E control-plane
       # ACL (revoked by the always() step at job end) + installs llz.
       - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: cluster-access
         uses: ./.github/actions/cluster-access
         # Fails fast instead of hanging — see the action's own note. Normal is <1min.
         timeout-minutes: 6
@@ -126,6 +127,15 @@ jobs:
           fi
           exit 0   # Report-only: the summary is the deliverable.
 
+      # THE APP SCOPE IS NOT CHECKED HERE, deliberately. Instance-owned content —
+      # the operator escape hatch and the apps deployed through it — is reported by
+      # the step above and excluded from its verdict; what gates it is
+      # `llz ci converge --scope=apps`, which runs unattended and BLOCKING as the
+      # app-scope-health job in llz-scheduled-checks (and continuously, at
+      # Application level only, as the LLZAppScopeNotConverged alert). Putting it in THIS job re-created the coupling the boundary removes:
+      # the assert steps below carry an implicit success(), so a failing app step
+      # skipped every platform assertion lane.
+
       # Best-effort Argo CD sync diagnostics — the operationState / failed-resource
       # data `llz ci health` doesn't surface. Never alters the outcome.
       - name: Argo CD sync diagnostics (best-effort)
@@ -154,7 +164,11 @@ jobs:
           llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|vault_|llz_)' || true
 
       - name: Assert Loki is bootstrapped
-        if: ${{ inputs.assert-loki }}
+        # !cancelled(), not always() — an unrelated red step above must not silently
+        # skip a platform assertion lane, but a cancelled run must not keep issuing
+        # kubectl against a live cluster after the operator has pressed stop.
+        # always() runs on cancellation; !cancelled() is the same thing minus that.
+        if: ${{ !cancelled() && inputs.assert-loki && steps.cluster-access.outcome == 'success' }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"
@@ -182,7 +196,11 @@ jobs:
       # broad-pat forces a PAT rotation). Those are deliberate e2e exercises, not
       # things a scheduled health check should do to a live cluster on a timer.
       - name: Assert observability + reconciler + wave-health (E2E gate)
-        if: ${{ inputs.assert-loki }}
+        # !cancelled(), not always() — an unrelated red step above must not silently
+        # skip a platform assertion lane, but a cancelled run must not keep issuing
+        # kubectl against a live cluster after the operator has pressed stop.
+        # always() runs on cancellation; !cancelled() is the same thing minus that.
+        if: ${{ !cancelled() && inputs.assert-loki && steps.cluster-access.outcome == 'success' }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"

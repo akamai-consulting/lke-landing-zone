@@ -42,7 +42,7 @@ func TestAFailingSyncIsNotDrift(t *testing.T) {
 	}
 	var cat Category
 	var msg string
-	budgeted(t, func() { cat, msg = ClassifyArgoApp(a, false) })
+	budgeted(t, func() { cat, msg = classifyApp(a, false) })
 	if cat == CatDrift {
 		t.Errorf("an Application whose sync keeps failing was called drift-only; its Deployment may never "+
 			"have been created: %s", msg)
@@ -63,7 +63,7 @@ func TestAFailingSyncIsNotDrift(t *testing.T) {
 	// budget to convert pending back into a verdict, and LLZClusterNotConverged
 	// fires on llz_convergence_state == 1 — so softening there would leave a sync
 	// wedged on a policy denial reporting "still settling" forever, unalerted.
-	steady, smsg := ClassifyArgoApp(a, false)
+	steady, smsg := classifyApp(a, false)
 	if steady != CatFail {
 		t.Errorf("outside a convergence budget a permanently retrying sync must FAIL, got %v (%s)", steady, smsg)
 	}
@@ -78,7 +78,7 @@ func TestRealDriftIsStillDrift(t *testing.T) {
 	a := ArgoApp{Name: "x", Sync: "OutOfSync", Health: "Healthy", Automated: true,
 		Drifted: []string{"ConfigMap/x/y"}}
 	budgeted(t, func() {
-		if cat, msg := ClassifyArgoApp(a, false); cat != CatDrift {
+		if cat, msg := classifyApp(a, false); cat != CatDrift {
 			t.Errorf("an app with no sync error is drift, got %v (%s)", cat, msg)
 		}
 	})
@@ -131,8 +131,8 @@ func TestParseArgoAppCarriesARetryingSyncMessage(t *testing.T) {
 		t.Errorf("OpErr is for a FAILED/Error phase only, got %q", a.OpErr)
 	}
 	budgeted(t, func() {
-		if cat, msg := ClassifyArgoApp(a, false); cat != CatPending {
-			t.Errorf("ClassifyArgoApp = %v (%s), want CatPending for a failing-and-retrying sync", cat, msg)
+		if cat, msg := classifyApp(a, false); cat != CatPending {
+			t.Errorf("classifyApp = %v (%s), want CatPending for a failing-and-retrying sync", cat, msg)
 		}
 	})
 
@@ -142,7 +142,7 @@ func TestParseArgoAppCarriesARetryingSyncMessage(t *testing.T) {
 		t.Errorf("an in-flight sync was read as failing: %q", inFlight.SyncErr)
 	}
 	budgeted(t, func() {
-		if cat, _ := ClassifyArgoApp(inFlight, false); cat != CatDrift {
+		if cat, _ := classifyApp(inFlight, false); cat != CatDrift {
 			t.Errorf("an OutOfSync/Healthy app with a healthy in-flight sync is drift, got %v", cat)
 		}
 	})

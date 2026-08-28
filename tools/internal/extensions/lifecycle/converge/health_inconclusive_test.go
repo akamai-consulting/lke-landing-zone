@@ -36,14 +36,24 @@ func TestSectionsRefuseSilentGreen(t *testing.T) {
 		run  func(*health.Report)
 	}{
 		{"Nodes", checkNodes},
-		{"PVCs", checkPVCs},
+		{"PVCs", func(r *health.Report) { checkPVCs(r, health.OwnershipIndex{}) }},
 		{"PVs", checkPVs},
 		// phase1=false: the stricter reading, where a Job is expected to have
 		// completed rather than being excused as still-bootstrapping.
-		{"Jobs", func(r *health.Report) { checkJobs(r, false) }},
-		{"PDBs", func(r *health.Report) { checkPDBs(r, false) }},
-		{"Ingresses", func(r *health.Report) { checkIngresses(r, false) }},
-		{"Pods", func(r *health.Report) { checkPods(r, false) }},
+		{"Jobs", func(r *health.Report) { checkJobs(r, health.OwnershipIndex{}, false) }},
+		{"PDBs", func(r *health.Report) { checkPDBs(r, health.OwnershipIndex{}, false) }},
+		{"Ingresses", func(r *health.Report) { checkIngresses(r, health.OwnershipIndex{}, false) }},
+		{"Pods", func(r *health.Report) { checkPods(r, health.OwnershipIndex{}, false) }},
+		// The Applications fetch became its own section when the ownership index
+		// needed the list before the sections that consult it. A fetch that answers
+		// nothing must not read as "no Applications, nothing wrong".
+		// The fetch reports nothing by design (its findings would print under a
+		// header ten sections above), so the section is driven through the
+		// classifier that owns the header AND the inconclusive line.
+		{"ArgoCD Applications", func(r *health.Report) {
+			apps, ok := fetchArgoApps()
+			checkArgoApps(r, apps, ok, false)
+		}},
 	}
 
 	for _, s := range sections {
@@ -75,7 +85,7 @@ func TestAnsweredEmptyStaysGreen(t *testing.T) {
 	})
 
 	r := &health.Report{}
-	checkPVCs(r)
+	checkPVCs(r, health.OwnershipIndex{})
 	if v := r.Verdict(); v != health.Converged {
 		t.Fatalf("an empty-but-answered PVC list reported %v; a cluster with no PVCs is converged, "+
 			"not inconclusive (recorded %d failed, %d pending)", v, len(r.Failed), len(r.Pending))

@@ -75,7 +75,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/internal/extensions/lifecycle/reconciler/reconcile_convergence.go)):
   it lists Argo CD Applications and classifies each through the **same tested
   predicate `llz ci health` uses** (`internal/health.ParseArgoApp` +
-  `ClassifyArgoApp`), publishing the 0/1/2 verdict (+ failed/pending app counts).
+  `Report.RouteApp`), publishing the 0/1/2 verdict (+ failed/pending app counts).
   The exit-code CLI stays the source of truth for the Terraform gate; this is the
   day-2, continuously-observable, Alertmanager-routable form of the same
   classification (a `LLZClusterNotConverged` alert fires on a sustained hard-fail).

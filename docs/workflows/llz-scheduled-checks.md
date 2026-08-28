@@ -177,6 +177,60 @@ gate to it.
 
 ---
 
+## Job: `app-scope-health`
+
+The other half of the convergence boundary, and the only blocking gate the
+instance-owned estate has.
+
+`llz ci converge` gates the **platform**. Instance-owned content — the operator
+escape hatch and the apps deployed through it — is reported by that run and
+excluded from its verdict, so an app team's unseeded credential cannot block a
+platform release. That exclusion is only safe if something else says no. This
+job is that something: `llz ci converge --scope=apps`, weekly per region, with
+**no `continue-on-error`**.
+
+### Why a job and not a step
+
+It shipped first as a warn-only step inside `weekly-cluster-checks`, which made
+it the one check in that job that could never go red — the boundary removed app
+content from the platform gate and handed it a check that reported and passed.
+That is the failure mode the boundary was drawn to fix, not a smaller version of
+it: on akamai/gsap-apl eight per-app PATs went unseeded for eight days because
+nothing red ever appeared.
+
+It cannot be a *blocking* step there either. The steps in that job carry
+`if: always()` precisely because a red step otherwise skips its siblings, and a
+blocking app-scope step would put the platform's OpenBao and cert-manager probes
+downstream of an app team's deploy — the coupling this boundary exists to
+remove, re-created one layer up. A separate job has its own verdict, its own
+`cluster-access`, its own owner, and can skip nothing.
+
+### Why not `llz-cluster-health`
+
+That workflow is `workflow_dispatch`-only. A gate placed there runs when a human
+clicks it, which is not a gate.
+
+### Why `converge` and not `health`
+
+`health.Budgeted` is true only inside a budget. Outside one, a pod that is merely
+being created classifies as **failed**, so a one-shot `llz ci health --scope=apps`
+reports false hard failures on a routine app rollout. Every operator instruction
+to inspect the app scope should say `converge --scope=apps`; `health --scope=apps`
+exists for a caller that already knows the estate is settled.
+
+The budget is 300s rather than the bootstrap gate's 1200s — this is a
+steady-state sweep, not a wait for a cluster that is still coming up.
+
+### What it does NOT replace
+
+The continuous detector is the in-cluster `LLZAppScopeNotConverged` alert, which
+fires within the hour. That alert is **Application-level**: it classifies Argo
+Applications, so a `Synced`+`Healthy` app whose ExternalSecrets, Jobs or Pods are
+broken does not move its gauge. This job is what sees the resource level, and it
+sees it weekly. See [reconciler-alerts.md](../runbooks/reconciler-alerts.md).
+
+---
+
 ## Job: `lke-admin-rotation-health`
 
 ### Step: Cluster access (kubeconfig + runner ACL + llz)
