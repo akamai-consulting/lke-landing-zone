@@ -65,6 +65,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/cosignguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/deliveredconsumer"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
@@ -269,6 +270,10 @@ var gates = []Gate{
 	// whose corpus is one directory. The two scan roots are the gate's own
 	// business; handing it a subtree would silently halve what it checks.
 	{Extension: "setup-go-sole-site", New: setupgosite.Cmd},
+	// Takes --root, not a Subtree: its subject is the RELATION between
+	// instance-template/.template-manifest and the Go sources under tools/, so
+	// narrowing to either tree would hide half the comparison.
+	{Extension: "delivered-consumer-guard", New: deliveredconsumer.Cmd},
 	// Takes --root rather than a Subtree: its whole subject is the relation
 	// between .github/dependabot.yml and the manifests scattered across every
 	// other tree, so any narrowing would hide the directories it exists to find.

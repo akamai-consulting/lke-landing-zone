@@ -60,6 +60,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/deliveredconsumer"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
@@ -147,6 +148,7 @@ var declarations = []func() extension.Extension{
 	seedspecial.Extension,
 	bootstrapcluster.Extension,
 	defaultdeny.Extension,
+	deliveredconsumer.Extension,
 	meshegress.Extension,
 	coverageguard.Extension,
 	cosignguard.Extension,

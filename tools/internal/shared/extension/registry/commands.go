@@ -51,6 +51,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/deliveredconsumer"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
@@ -268,6 +269,7 @@ var commands = []Command{
 	{"upgradeplan", upgradeplan.Cmd},
 	{"callerperms", callerperms.Cmd},
 	{"defaultdeny", defaultdeny.Cmd},
+	{"deliveredconsumer", deliveredconsumer.Cmd},
 	{"runinjection", runinjection.Cmd},
 	{"secretscope", secretscope.Cmd},
 	{"upstreamupdates", upstreamupdates.UpgradePRCmd},

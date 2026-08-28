@@ -30,6 +30,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/coverageguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/credcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/defaultdeny"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/deliveredconsumer"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/dependabotcoverage"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/docsguard"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/guards/k8sminorcoherence"
@@ -402,6 +403,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(meshegress.Cmd())
 	c.AddCommand(pincoherence.Cmd())
 	c.AddCommand(manifestguard.PlaceholderGuardCmd())
+	c.AddCommand(deliveredconsumer.Cmd())
 	// Static guard for the #175 day-2-blind class: every ServiceMonitor/PodMonitor/
 	// PrometheusRule must carry `prometheus: system` or apl-core's Prometheus
 	// silently ignores it (metrics unscraped / rules unloaded) — Makefile
