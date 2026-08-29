@@ -54,27 +54,30 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	}
 	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
 
-	// Fresh bootstrap: all objkey paths absent → three mints + three seeds carrying
-	// the complete field sets + rotated_at (loki + harbor + the consolidated
-	// obj-platform key); the DNS PAT entry is never minted here.
+	// Fresh bootstrap: the objkey path absent → ONE mint and one seed carrying the
+	// complete field set + rotated_at; the DNS PAT entry is never minted here.
+	//
+	// ONE, NOT THREE. This used to assert loki + harbor + platform-obj. The two
+	// per-app keys were read_write credentials written to OpenBao paths whose
+	// ExternalSecrets 52465691 deleted — so every bootstrap minted two keys no
+	// cluster ever read, and this test pinned that as correct. The consolidated
+	// obj-platform key is what apl-core actually consumes, via obj-secrets.
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
 	if err := credrotate.RunMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)
 	}
-	if stub.objCreates != 3 {
-		t.Fatalf("objkey mints = %d, want 3 (loki + harbor + platform-obj; never the DNS PAT)", stub.objCreates)
+	if stub.objCreates != 1 {
+		t.Fatalf("objkey mints = %d, want 1 (platform-obj only; never the DNS PAT, never the "+
+			"retired per-app loki/harbor keys)", stub.objCreates)
 	}
 	if stub.patCreates != 0 {
 		t.Errorf("PAT mints = %d, want 0", stub.patCreates)
 	}
-	if len(*puts) != 3 {
-		t.Fatalf("want three kv puts, got %d: %v", len(*puts), *puts)
+	if len(*puts) != 1 {
+		t.Fatalf("want one kv put, got %d: %v", len(*puts), *puts)
 	}
 	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
 	wantPuts := []string{
-		"kv put secret/loki/object-store AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
-		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=acme-harbor-registry-primary " +
-			"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 rotated_at=" + rotatedAt + " secret_access_key=SK",
 		"kv put secret/obj/platform AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
 	}
 	for i, want := range wantPuts {

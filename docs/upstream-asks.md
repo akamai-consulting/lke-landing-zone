@@ -143,11 +143,19 @@ consequence plainly: it proves Prometheus reaches Alertmanager and deliberately
 does **not** assert Alertmanager reaches a human, "because apl-core owns the
 receiver configuration and this repo ships none".
 
-**What LLZ does today.** `InertSpecFields` (as above) plus a `doctor` finding, so an
-operator who configures Slack is told it reaches nothing instead of assuming it
-works. The webhook secret half already works: `secret/alerts/webhooks` is seeded and
-rotated, and the `kyverno-alertmanager-slack-webhook` policy repoints apl-core's
-`alertmanager-credentials` ExternalSecret at OpenBao.
+**BOTH HALVES ARE DEAD, not just the routing.** The secret half looks healthy and is
+not: `secret/alerts/webhooks` is seeded, age-tracked and rotated on schedule, but
+the `kyverno-alertmanager-slack-webhook` policy that repointed apl-core's
+`alertmanager-credentials` ExternalSecret at OpenBao was deleted along with the
+rest of the shared Kyverno policy base when LLZ went managed-only (Kyverno itself
+is the managed App Platform's), and nothing replaced it. Only two Kyverno policies
+ship today
+(`verify-llz-image-signature`, `harbor-obj-proxy-ca`). So an operator who follows
+the documented procedure seeds a secret into a path no cluster reads, and gets a
+green credential-age series for it.
+
+**What LLZ does today.** `InertSpecFields` plus a `doctor` finding, so an operator
+who configures Slack is told it reaches nothing instead of assuming it works.
 
 **The ask.** Either an `AplAlerts`-style settings CR under `env/settings/` that an
 external writer may own (as `AplObjectStorage` already is for object storage), or a

@@ -30,7 +30,7 @@ package healthsla
 //                                series as well as an overdue one — which the
 //                                exec check could not do at all. The test that
 //                                holds that replacement to it is
-//                                TestLokiObjectStoreIsGatedByTheAgeLane, in
+//                                TestTheObjectStoreKeyIsGatedByTheAgeLane, in
 //                                assertions/assertsecrets.
 //
 // WHY lke-admin SURVIVED the same audit: it reads Secret creationTimestamps from

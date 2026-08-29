@@ -203,10 +203,23 @@ const (
 	canonicalBlockStorageClass = "block-storage-retain"
 )
 
-// lkeStockStorageClasses are the LKE-shipped classes: present but not for platform
-// use (demoted from default, and PVCs redirected off them by the
-// kyverno-pvc-redirect-untagged-storage-class policy). They carry no platform
-// volumeTags by design, so the audit acknowledges them rather than flagging them.
+// lkeStockStorageClasses are the LKE-shipped classes: present but not the
+// platform's default.
+//
+// THEY ARE NOT "SAFE BECAUSE PVCs ARE REDIRECTED OFF THEM" — that is what this
+// comment and the finding below both used to say, naming a Kyverno policy
+// (pvc-redirect-untagged-storage-class) that no code applies. The policy shipped
+// until LLZ went managed-only, was never re-embedded after, and its manifest sits
+// in bootstrapcluster/manifests/ with no //go:embed. Nothing has mutated a PVC's
+// StorageClass since.
+//
+// What actually protects them is different and stronger: `llz ci bootstrap-cluster`
+// DELETE+RECREATES these classes with encryption and the lke<id> volumeTag before
+// apl-core creates any PVC (StorageClass parameters are immutable, so recreate is
+// the only lever). A PVC that lands here is therefore encrypted and attributable
+// on its own terms, rather than redirected somewhere else. They still carry no
+// platform volumeTags in the audit's sense, so it acknowledges them rather than
+// flagging them — but for that reason, not the retired one.
 var lkeStockStorageClasses = map[string]bool{
 	"linode-block-storage":        true,
 	"linode-block-storage-retain": true,
@@ -298,7 +311,8 @@ func AuditLinodeStorageClasses(classes []StorageClass) []StorageClassParamFindin
 			}
 		case lkeStockStorageClasses[name]:
 			out = append(out, StorageClassParamFinding{CatOK,
-				name + ": LKE stock class present (untagged by design; PVCs redirected off it by kyverno-pvc-redirect-untagged-storage-class)"})
+				name + ": LKE stock class present (recreated by bootstrap-cluster with encryption + " +
+					"lke<id> volumeTags, so a PVC landing here is still encrypted and attributable)"})
 		case linode.LKEIDFromTags(splitTags(sc.Parameters[csiVolumeTagsKey])) != "":
 			out = append(out, StorageClassParamFinding{CatOK,
 				name + ": non-default linodebs class carries an " + reapOwnershipTagPrefix + "<id> ownership tag"})

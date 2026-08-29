@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
@@ -164,33 +163,22 @@ func renderPVCTable(rows []pvcRow) []string {
 	return lines
 }
 
-// kyvernoScopedNamespaces are the namespaces the pvc-force-encrypted-storage-class
-// ClusterPolicy actually matches. MUST stay in sync with the `namespaces:` list in
-// manifests/kyverno-pvc-encrypted-storage-class.yaml — TestKyvernoScopeMatchesPolicy
-// reads that file and fails if they drift, because a stale list here would go on
-// blaming the webhook for PVCs it was never asked to mutate.
-var kyvernoScopedNamespaces = []string{"gitea", "istio-system"}
-
-// splitByKyvernoScope partitions escaped PVCs by whether the mutation policy even
-// applied to them. The audit used to report every one as "Kyverno webhook
-// readiness lagged", which is only true INSIDE that scope; for a harbor or
-// keycloak PVC it sends the reader after a timing bug that isn't there. The real
-// cause outside the scope is the default-StorageClass ordering — see the step
-// summary in RunAuditPVCStorageClass.
-func splitByKyvernoScope(rows []pvcRow) (inScope, outOfScope []pvcRow) {
-	scoped := make(map[string]bool, len(kyvernoScopedNamespaces))
-	for _, ns := range kyvernoScopedNamespaces {
-		scoped[ns] = true
-	}
-	for _, r := range rows {
-		if scoped[r.Namespace] {
-			inScope = append(inScope, r)
-		} else {
-			outOfScope = append(outOfScope, r)
-		}
-	}
-	return inScope, outOfScope
-}
+// THE KYVERNO SCOPE SPLIT IS GONE, and its absence is the finding.
+//
+// This audit used to partition escaped PVCs by whether the
+// pvc-force-encrypted-storage-class ClusterPolicy covered their namespace, and
+// told the reader that an in-scope PVC meant "its admission webhook was not yet
+// enforcing when apl-core created the PVC" — a timing bug to go chasing.
+//
+// That policy has not been applied since LLZ went managed-only: its //go:embed
+// went with the self-install flow and was never restored, and the manifest sat in
+// bootstrapcluster/manifests/ as an orphan. So the scope was empty, the timing
+// story was unreachable, and the success line credited "Kyverno admission caught
+// everything" for work Kyverno was not doing. A kyvernoScopedNamespaces list and
+// a coupling test kept the two halves of a dead mechanism faithfully in sync.
+//
+// There is ONE cause now, and it is the one the out-of-scope branch already
+// described correctly: the default-StorageClass ordering race.
 
 func RunAuditPVCStorageClass() error {
 	// kubectl/parse failures read as "no PVCs escaped" — the bash's
@@ -201,22 +189,23 @@ func RunAuditPVCStorageClass() error {
 	}
 	escaped := escapedPVCs(rows, auditWantStorageClass)
 	if len(escaped) == 0 {
-		fmt.Println("All PVCs are on block-storage-retain — Kyverno admission caught everything.")
+		fmt.Println("All PVCs are on block-storage-retain — the canonical encrypted, Retain class.")
 		return nil
 	}
 	table := renderPVCTable(escaped)
-	inScope, outOfScope := splitByKyvernoScope(escaped)
-	fmt.Fprintf(os.Stderr, "::warning::Found %d PVC(s) NOT on block-storage-retain (%d in Kyverno's scope, %d never covered by it).\n",
-		len(escaped), len(inScope), len(outOfScope))
+	fmt.Fprintf(os.Stderr, "::warning::Found %d PVC(s) NOT on block-storage-retain.\n", len(escaped))
 	for _, l := range table {
 		fmt.Fprintf(os.Stderr, "::warning::  %s\n", l)
 	}
 	summary := append([]string{
 		"### PVCs not on the encrypted, Retain StorageClass",
 		"",
-		"Data on these is NOT encrypted at rest, and their reclaim policy is Delete.",
-		"There are TWO distinct causes and only one of them is a Kyverno timing issue —",
-		"so read the namespace before concluding anything about webhook readiness.",
+		"These are not on the platform's canonical class, so their reclaim policy is",
+		"Delete rather than Retain. Whether their data is ENCRYPTED depends on the class",
+		"they did land on: `llz ci bootstrap-cluster` delete+recreates LKE's stock classes",
+		"with encryption, so on a cluster bootstrapped since that change they are — check",
+		"the storage-class section of `llz ci health`, which reads the live parameters,",
+		"rather than assuming either way from this list.",
 		"",
 		"```",
 		"NAMESPACE  PVC  STORAGECLASS",
@@ -224,23 +213,21 @@ func RunAuditPVCStorageClass() error {
 	summary = append(summary,
 		"```",
 		"",
-		fmt.Sprintf("**In `%s` (%d here):** the `pvc-force-encrypted-storage-class`",
-			strings.Join(kyvernoScopedNamespaces, "`, `"), len(inScope)),
-		"policy DOES cover these, so landing on the wrong class means its admission webhook",
-		"was not yet enforcing when apl-core's helmfile created the PVC. Those two charts",
-		"(gitea-valkey, oauth2-proxy redis) hardcode `linode-block-storage` on the linode",
-		"provider — verified in apl-core v6.0.0 — which is why a mutation is needed at all.",
+		"**The cause is StorageClass ordering, not admission.** Every apl-core chart that",
+		"honors `cluster.defaultStorageClass` defaults it to `''` = \"use the cluster's",
+		"default\" (verified: harbor.gotmpl, harbor-otomi-db, keycloak-otomi-db,",
+		"git-server), so these PVCs took whichever class was annotated default at the",
+		"moment apl-core created them. On a managed cluster Linode installs apl-core during",
+		"provisioning — BEFORE `llz ci bootstrap-cluster` promotes block-storage-retain to",
+		"default — so LKE's stock class wins the race. Two charts (gitea-valkey,",
+		"oauth2-proxy redis) hardcode `linode-block-storage` outright and never consult the",
+		"default at all.",
 		"",
-		fmt.Sprintf("**Any other namespace (%d here):** NOT a Kyverno problem — the policy is", len(outOfScope)),
-		"deliberately scoped to the two namespaces above and never applied to these. Every",
-		"other apl-core chart honors `cluster.defaultStorageClass` (verified: harbor.gotmpl,",
-		"harbor-otomi-db, keycloak-otomi-db, git-server all template it), and that value",
-		"DEFAULTS TO `''` = \"use the cluster's default StorageClass\". So these PVCs took",
-		"whichever class was annotated default at the moment apl-core created them. On a",
-		"managed (`apl_enabled`) cluster Linode installs apl-core during cluster",
-		"provisioning — before `llz ci bootstrap-cluster` promotes block-storage-retain to",
-		"default — so LKE's unencrypted class wins the race. Widening the Kyverno policy",
-		"would NOT fix this: the PVCs predate the webhook existing.",
+		"There is no admission policy in this path. An earlier version of this summary",
+		"blamed a Kyverno webhook's readiness lag for PVCs in `gitea` and `istio-system`;",
+		"that policy has not been applied since LLZ went managed-only, so it could not have",
+		"been late — it was absent. The mitigation that DOES run is the class recreate",
+		"above, which lands before apl-core creates anything.",
 		"",
 		"**To remediate** (per-workload, irreversible for that data — `storageClassName`",
 		"is immutable once bound, so there is no in-place fix):",

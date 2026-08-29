@@ -21,13 +21,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	assertion:seeded[cluster-read]
 //
 // AN ASSERTION, NOT A TRANSITION, and the PVC audit is why. It reports and
-// classifies; it does not repair. The classification is the interesting part:
-// `kyvernoScopedNamespaces` splits findings into "Kyverno's webhook covers this
-// namespace, so a wrong StorageClass means the webhook lagged" and "it does not,
-// so this needs a different explanation". Attributing an out-of-scope PVC to a
-// timing bug sends the reader after something that cannot explain it, which is
-// why TestKyvernoScopeMatchesPolicy pins that list against the ClusterPolicy
-// itself.
+// classifies; it does not repair. The classification used to be the interesting
+// part, and it was classifying against a mechanism that had stopped existing: a
+// `kyvernoScopedNamespaces` list split findings into "Kyverno's webhook covers
+// this namespace, so a wrong StorageClass means the webhook lagged" and "it does
+// not". That policy has not been applied since LLZ went managed-only, so the first
+// branch sent readers after a timing bug that could not have happened. Both the
+// list and the coupling test that faithfully pinned it to the policy are gone; the
+// audit now reports the one cause that is real, StorageClass ordering.
 //
 // `cluster-read` and nothing else — verified by reading, not assumed: every call
 // in the package is a `kubectl get`, and the only writes anywhere near it are the

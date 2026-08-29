@@ -147,7 +147,8 @@ jobs:
       # NO LOKI OBJ-KEY STEP HERE, AND DO NOT ADD ONE BACK (#483). This job used
       # to end with the health-loki-objkey-rotation verb, labelled "THE GATE —
       # deliberately no continue-on-error, and last". It could never fire. The
-      # check measured secret/loki/object-store by exec'ing `bao kv metadata get`
+      # check measured secret/loki/object-store (a per-app key since retired; the
+      # live one is secret/obj/platform) by exec'ing `bao kv metadata get`
       # with OPENBAO_ROOT_TOKEN, and it was inert twice over: bootstrap REVOKES
       # that token (this workflow declared it `required: false` and said as much
       # itself), and this job never mapped it into the step's environment anyway.
@@ -160,7 +161,7 @@ jobs:
       # rather than weekly, at 90 days rather than 120, and fails on an ABSENT
       # series as well as an overdue one — which an exec that never ran could not
       # do at all. LLZCredentialRotationOverdue alerts on it continuously.
-      # TestLokiObjectStoreIsGatedByTheAgeLane, in assertsecrets, holds that
+      # TestTheObjectStoreKeyIsGatedByTheAgeLane, in assertsecrets, holds that
       # replacement to the coverage this step was retired on.
 
       - name: Cleanup kubeconfig

@@ -76,8 +76,18 @@ type CredPath struct {
 }
 
 var CredPaths = []CredPath{
-	{"secret/loki/object-store", "loki-object-store", CredClassAutomated, false},
-	{"secret/harbor/registry-s3", "harbor-registry-s3", CredClassAutomated, false},
+	// secret/loki/object-store AND secret/harbor/registry-s3 ARE NOT HERE, and
+	// their absence is deliberate. Both were per-app Linode Object Storage keys,
+	// projected into the cluster by ExternalSecrets that 52465691 deleted when
+	// object storage went apl-core-native: apl-core builds its own credential
+	// Secret from `obj-secrets` and never reads LLZ's. The ExternalSecrets went;
+	// this table, the rotation table and the OpenBao policies did not — so for
+	// months the platform minted and rotated two read_write keys (the Loki one
+	// spanning chunks/ruler/admin, which hold the OpenBao audit stream) into paths
+	// nothing read, and age-tracked them green on the single pane.
+	//
+	// `secret/obj/platform` below is the one that replaced them: one broad key,
+	// one consumer, one series.
 	{"secret/obj/platform", "obj-platform", CredClassAutomated, false},
 	// The narrow in-cluster PAT. Re-minted monthly per region by
 	// secret-rotation.yml → `rotate-incluster-pat`, so it is genuinely

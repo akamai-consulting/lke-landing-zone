@@ -47,7 +47,14 @@ func WedgeGamedayCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&externalSecret, "externalsecret", "monitoring/loki-object-store", "the ExternalSecret to break, as <namespace>/<name>")
+	// apl-secrets/obj-secrets, NOT monitoring/loki-object-store. The old default
+	// named an ExternalSecret that 52465691 deleted, so the gameday broke nothing
+	// and proved nothing — a fault-injection drill whose fault could not be
+	// injected. obj-secrets is real, is owned by the observability component (which
+	// is what --target-app expects), and carries the object-storage secret half
+	// apl-core reads, so breaking it produces the genuine wedge this drill exists
+	// to rehearse.
+	cmd.Flags().StringVar(&externalSecret, "externalsecret", "apl-secrets/obj-secrets", "the ExternalSecret to break, as <namespace>/<name>")
 	cmd.Flags().StringVar(&targetApp, "target-app", "llz-observability", "the carved Application expected to go non-Healthy (owns --externalsecret)")
 	cmd.Flags().StringVar(&namespace, "namespace", "argocd", "namespace of the Argo Application resources")
 	cmd.Flags().IntVar(&timeout, "timeout", 300, "seconds to watch for the fault to surface")

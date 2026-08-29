@@ -1,15 +1,16 @@
 package seedspecial
 
 import (
+	"github.com/spf13/cobra"
+
 	"errors"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tfvars"
 )
 
@@ -39,20 +40,6 @@ unquoted = bare
 }
 
 // ── seed-harbor-registry-s3 ───────────────────────────────────────────────────
-
-func TestHarborRegistryS3Fields(t *testing.T) {
-	got := credrotate.HarborRegistryS3Fields("acme", "primary", "us-ord-1", "AK", "SK")
-	want := map[string]string{
-		"access_key_id":     "AK",
-		"secret_access_key": "SK",
-		"bucket_name":       "acme-harbor-registry-primary",
-		"endpoint":          "https://us-ord-1.linodeobjects.com",
-		"region":            "us-ord-1",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("credrotate.HarborRegistryS3Fields = %v, want %v", got, want)
-	}
-}
 
 // chdirTempDir moves the test into a fresh temp dir (the commands resolve tfvars
 // relative to the workflow's checkout root).
@@ -197,11 +184,15 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		"data-harbor-redis-0",
 		"gitea-shared",
 		"**To remediate**",
-		// The whole point of the rewrite: the summary must SPLIT BY CAUSE. The harbor
-		// PVC is outside the Kyverno policy's scope, so blaming webhook readiness for
-		// it sends the reader after a race that cannot explain it.
-		"**Any other namespace (1 here):** NOT a Kyverno problem",
+		// THE SUMMARY MUST NAME THE CAUSE THAT EXISTS. It used to split findings by a
+		// Kyverno policy's namespace scope and tell the reader an in-scope PVC meant
+		// the webhook was late — a race that could not explain anything, because the
+		// policy had not been applied since LLZ went managed-only. What remains is the
+		// ordering story, which was always the real one.
+		"**The cause is StorageClass ordering, not admission.**",
 		"cluster.defaultStorageClass",
+		// And it must not resurrect the webhook-timing explanation.
+		"it was absent",
 		// And it must say that recreate is the only remedy, since storageClassName is
 		// immutable once bound.
 		"is immutable once bound",
@@ -305,72 +296,67 @@ spec:
 	})
 }
 
-// TestKyvernoScopeMatchesPolicy pins kyvernoScopedNamespaces to the ClusterPolicy
-// it describes. Drift here is silent and misleading, not loud: the audit would keep
-// attributing an out-of-scope PVC to "Kyverno's webhook lagged" — sending the reader
-// after a timing bug that cannot explain it — or stop naming a namespace the policy
-// really does cover.
-// The path reaches into ANOTHER EXTENSION on purpose: the policy is //go:embed-ed
-// by bootstrap-cluster and did not move with this file. A relative path across a
-// package boundary is the trap that made two other guards go inert in this tree,
-// so it is named here rather than left to be rediscovered — if the
-// manifest moves, this fails loudly, which is the behaviour that was wanted.
+// THE KYVERNO SCOPE COUPLING TEST IS GONE, with the mechanism it pinned.
 //
-// IT MOVED, AND IT DID FAIL LOUDLY. The path was `../bootstrapcluster/...` while
-// every extension was a sibling. Sub-dividing internal/extensions by KIND put the
-// two in different buckets — this contributes evidence (assertions/) and
-// bootstrap-cluster moves the platform (lifecycle/) — so the hop is now up and
-// across. That is the design working rather than a wart: the two really are
-// different kinds of thing, and the coupling between them is a fact about the
-// Kyverno policy, not about where the packages live.
-func TestKyvernoScopeMatchesPolicy(t *testing.T) {
-	raw, err := os.ReadFile("../../lifecycle/bootstrapcluster/manifests/kyverno-pvc-encrypted-storage-class.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The policy line is `namespaces: [gitea, istio-system]`.
-	m := regexp.MustCompile(`(?m)^\s*namespaces:\s*\[([^\]]*)\]`).FindSubmatch(raw)
-	if m == nil {
-		t.Fatal("no `namespaces: [...]` list found in the policy — did its match block change shape?")
-	}
-	var fromPolicy []string
-	for _, f := range strings.Split(string(m[1]), ",") {
-		if f = strings.TrimSpace(f); f != "" {
-			fromPolicy = append(fromPolicy, f)
+// It was a good coupling test: it read the ClusterPolicy's `namespaces:` list off
+// disk and failed if the Go copy drifted, so the audit could never misattribute a
+// PVC to a webhook that did not cover it. What it could not check was whether the
+// policy was APPLIED anywhere — and it had not been since LLZ went managed-only.
+// So it held two halves of a dead mechanism faithfully in sync, and the audit went
+// on explaining PVCs with a webhook-timing story that could not be true.
+//
+// The lesson is not "fewer coupling tests". It is that a coupling test proves two
+// things AGREE, never that either one RUNS — the same gap `delivered-consumer-guard`
+// exists to close for delivered files. It read the policy off disk on every run and
+// could not tell that no cluster ever received it.
+
+// The cobra surfaces and the extension declaration, which nothing exercised: the
+// tests removed with the retired Kyverno scope-split had been carrying this
+// package's coverage floor, and their absence exposed that the flag wiring and the
+// declaration were never asserted at all.
+//
+// Cheap, but not nothing — the extension's grants are the capability fence, and a
+// command whose flags do not bind is one an operator cannot steer.
+func TestCommandSurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   *cobra.Command
+		use   string
+		flags []string
+	}{
+		{ResolveHarborURLCmd(), "resolve-harbor-url", nil},
+		{AuditPVCStorageClassCmd(), "audit-pvc-storageclass", nil},
+	} {
+		if tc.cmd.Use != tc.use {
+			t.Errorf("Use = %q, want %q", tc.cmd.Use, tc.use)
+		}
+		if tc.cmd.RunE == nil {
+			t.Errorf("%s has no RunE", tc.use)
+		}
+		for _, f := range tc.flags {
+			if tc.cmd.Flags().Lookup(f) == nil {
+				t.Errorf("%s is missing flag --%s", tc.use, f)
+			}
 		}
 	}
-	if !reflect.DeepEqual(fromPolicy, kyvernoScopedNamespaces) {
-		t.Fatalf("policy scopes %v but kyvernoScopedNamespaces is %v — the audit would misattribute the cause",
-			fromPolicy, kyvernoScopedNamespaces)
-	}
 }
 
-// TestSplitByKyvernoScope covers the partition that decides WHICH cause the audit
-// reports. Getting it backwards is worse than not splitting at all.
-func TestSplitByKyvernoScope(t *testing.T) {
-	rows := []pvcRow{
-		{"harbor", "harbor-otomi-db-1", "linode-block-storage"},
-		{"istio-system", "data-oauth2-proxy-redis-ha-server-0", "linode-block-storage"},
-		{"keycloak", "keycloak-db-1", "linode-block-storage"},
-		{"gitea", "valkey-data-gitea-valkey-primary-0", "linode-block-storage"},
+// A GATE'S BINDING IS ITS FENCE. seed-special reads the cluster and writes only
+// GitHub step output, so cluster-read is the whole grant — anything wider would be
+// a capability nothing in the package uses.
+func TestExtensionDeclaresOnlyClusterRead(t *testing.T) {
+	e := Extension()
+	if e.Name == "" {
+		t.Fatal("extension has no name")
 	}
-	in, out := splitByKyvernoScope(rows)
-	if got := pvcNames(in); !reflect.DeepEqual(got, []string{"data-oauth2-proxy-redis-ha-server-0", "valkey-data-gitea-valkey-primary-0"}) {
-		t.Fatalf("in-scope = %v", got)
+	if len(e.Bindings) == 0 {
+		t.Fatal("extension declares no bindings")
 	}
-	// harbor/keycloak are the real-world case that used to be misreported.
-	if got := pvcNames(out); !reflect.DeepEqual(got, []string{"harbor-otomi-db-1", "keycloak-db-1"}) {
-		t.Fatalf("out-of-scope = %v", got)
+	for _, b := range e.Bindings {
+		for _, g := range b.Grants {
+			if g != extension.ClusterRead {
+				t.Errorf("binding %q declares %q — every call in this package is a `kubectl get`, "+
+					"and the only writes are GitHub step outputs describing its own findings", b.Name, g)
+			}
+		}
 	}
-	if i, o := splitByKyvernoScope(nil); len(i) != 0 || len(o) != 0 {
-		t.Fatal("nil input should partition to nothing")
-	}
-}
-
-func pvcNames(rows []pvcRow) []string {
-	var out []string
-	for _, r := range rows {
-		out = append(out, r.Name)
-	}
-	return out
 }

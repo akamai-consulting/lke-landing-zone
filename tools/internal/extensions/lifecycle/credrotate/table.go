@@ -87,28 +87,18 @@ type CredEntry struct {
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
 func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
 	return []CredEntry{
-		{
-			Name: "loki-object-store", Kind: CredKindObjKey, Label: prefix + "-loki-" + region,
-			ObjCluster: objCluster,
-			Buckets: []string{
-				prefix + "-loki-chunks-" + region,
-				prefix + "-loki-ruler-" + region,
-				prefix + "-loki-admin-" + region,
-			},
-			Permissions: "read_write",
-			BaoPath:     "secret/loki/object-store", PresentField: "AWS_ACCESS_KEY_ID",
-			Fields: func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
-		},
-		{
-			Name: "harbor-registry-s3", Kind: CredKindObjKey, Label: prefix + "-harbor-registry-" + region,
-			ObjCluster:  objCluster,
-			Buckets:     []string{prefix + "-harbor-registry-" + region},
-			Permissions: "read_write",
-			BaoPath:     "secret/harbor/registry-s3", PresentField: "access_key_id",
-			Fields: func(access, secret string) map[string]string {
-				return HarborRegistryS3Fields(prefix, region, objCluster, access, secret)
-			},
-		},
+		// THE TWO PER-APP OBJ KEYS ARE GONE, and the broad one below is what
+		// replaced them. loki-object-store and harbor-registry-s3 minted read_write
+		// keys scoped to each app's buckets — the Loki one spanning chunks/ruler/admin,
+		// which hold the OpenBao audit stream — and wrote them to OpenBao paths whose
+		// ExternalSecrets 52465691 deleted when object storage went apl-core-native.
+		// apl-core derives its credentials from obj-secrets and never read LLZ's, so
+		// every bootstrap minted and this rotator re-minted keys no cluster consumed,
+		// while credpaths age-tracked them green.
+		//
+		// RETIRING THE ROTATION IS ONLY HALF OF IT: keys already minted still exist in
+		// the Linode account. Revoking them is an operator action against the account,
+		// which no table entry can perform — see docs/runbooks/linode-credential-rotation.md.
 		{
 			// The BROAD platform object-storage key for MANAGED App Platform. The
 			// platform obj settings (env/settings/obj.yaml `AplObjectStorage`,
@@ -141,27 +131,10 @@ func objPlatformFields(access, secret string) map[string]string {
 	return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 }
 
-// lokiObjectStoreFields is the secret/loki/object-store field set (the env-var
-// names the Loki singleBinary pod reads, matching the loki ExternalSecret).
-func lokiObjectStoreFields(access, secret string) map[string]string {
-	return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
-}
-
-// HarborRegistryS3Fields derives the five secret/harbor/registry-s3 fields.
-// The bucket name encodes the deployment region (matches the bucket resource
-// label); endpoint/region come from the obj_cluster the object-storage tfvars
-// actually provisioned into — NOT guessed from the env name. Lives here (not
-// ci_seed_special.go) because the rotation table owns this path now: both the
-// bootstrap mint and the rotator write the same complete field set.
-func HarborRegistryS3Fields(prefix, region, objCluster, accessKey, secretKey string) map[string]string {
-	return map[string]string{
-		"access_key_id":     accessKey,
-		"secret_access_key": secretKey,
-		"bucket_name":       prefix + "-harbor-registry-" + region,
-		"endpoint":          "https://" + objCluster + ".linodeobjects.com",
-		"region":            objCluster,
-	}
-}
+// The per-app field builders went with their table entries. lokiObjectStoreFields
+// and HarborRegistryS3Fields shaped the values written to the two retired OpenBao
+// paths; with no entry writing them, they were code whose only remaining caller
+// was a test asserting it still worked.
 
 // IsDue reports whether a credential whose OpenBao secret carries rotatedAt
 // (epoch seconds; "" or unparseable on a fresh bootstrap seed) is due at now.

@@ -148,12 +148,19 @@ even an instance that had left a root token parked would have measured nothing.
 Every run took the no-token branch, warned, and exited 0. A gate labelled as a
 gate, green for its entire life, on a credential nobody was checking.
 
-**The measurement did not go with it.** Three mechanisms cover
-`secret/loki/object-store` today, none of them needing a root token:
+**The measurement did not go with it.** Three mechanisms cover the platform's
+object-storage credential today, none of them needing a root token.
+
+The credential itself has changed since #483: the check measured
+`secret/loki/object-store`, a per-app key whose ExternalSecret was deleted when
+object storage went apl-core-native. That path has since been retired outright —
+it had no consumer — and `secret/obj/platform` is the key apl-core actually reads,
+for Loki and Harbor both. So the coverage below is about the credential that
+matters rather than the one #483 happened to name:
 
 | Mechanism | Where it runs | Threshold | Cadence |
 |---|---|---|---|
-| `llz_credential_age_days{cred="loki-object-store"}` | `llz-reconciler`, over Kubernetes auth | — (a gauge) | every sample pass |
+| `llz_credential_age_days{cred="obj-platform"}` | `llz-reconciler`, over Kubernetes auth | — (a gauge) | every sample pass |
 | `LLZCredentialRotationOverdue` | in-cluster alert | > 90d | continuous |
 | `llz ci assert-rotation-health` | the credential-single-pane job below | > 90d | **daily** |
 
@@ -162,7 +169,7 @@ and `assert-rotation-health` fails on an **absent series** as well as an overdue
 age — which an exec that never ran could not do at all.
 
 **What holds the replacement to it.**
-`TestLokiObjectStoreIsGatedByTheAgeLane`
+`TestTheObjectStoreKeyIsGatedByTheAgeLane`
 (`tools/internal/extensions/assertions/assertsecrets/ci_assert_rotation_health_test.go`)
 feeds the real
 `credpaths.CredPaths` declaration into the real `evalRotationHealth` predicate

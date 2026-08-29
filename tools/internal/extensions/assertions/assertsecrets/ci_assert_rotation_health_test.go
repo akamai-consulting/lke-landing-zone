@@ -489,7 +489,7 @@ func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
 
 // ── the check this gate inherited ────────────────────────────────────────────
 
-// TestLokiObjectStoreIsGatedByTheAgeLane is the gate that made retiring
+// TestTheObjectStoreKeyIsGatedByTheAgeLane is the gate that made retiring
 // `llz ci health-loki-objkey-rotation` safe (#483).
 //
 // THE FAILURE THAT PRECEDED IT. That check measured secret/loki/object-store by
@@ -514,8 +514,16 @@ func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
 // other test in this file still green, because none of them names this credential.
 // That is the split contract docs/e2e-gates.md is about, so this feeds the REAL
 // declaration into the REAL predicate rather than restating either.
-func TestLokiObjectStoreIsGatedByTheAgeLane(t *testing.T) {
-	const cred = "loki-object-store"
+func TestTheObjectStoreKeyIsGatedByTheAgeLane(t *testing.T) {
+	// obj-platform, NOT loki-object-store. This test named the per-app Loki key
+	// until that key was retired: its ExternalSecret was deleted when object
+	// storage went apl-core-native, so it had no consumer, and the bootstrap mint
+	// plus the rotator were writing a read_write credential into a path nothing
+	// read. The property below is unchanged and still worth gating — it just has
+	// to be asserted about the key that IS load-bearing. apl-core reads
+	// secret/obj/platform (via the obj-secrets ExternalSecret) for every
+	// obj-consuming app, Loki included.
+	const cred = "obj-platform"
 
 	var declared *credpaths.CredPath
 	for i, cp := range credpaths.CredPaths {
@@ -526,13 +534,14 @@ func TestLokiObjectStoreIsGatedByTheAgeLane(t *testing.T) {
 	if declared == nil {
 		t.Fatalf("%s is no longer declared in credpaths.CredPaths. Nothing samples it, so no "+
 			"llz_credential_age_days series exists and LLZCredentialRotationOverdue cannot fire for "+
-			"it — and health-loki-objkey-rotation, the check that used to cover it, was retired in "+
-			"#483 on the strength of this lane", cred)
+			"it — and health-loki-objkey-rotation, the exec'ing check that used to cover the "+
+			"object-storage credential, was retired in #483 on the strength of this lane", cred)
 	}
 	if declared.Optional {
 		t.Errorf("%s is marked Optional, so evalRotationHealth treats an ABSENT series as a skip. "+
-			"It is seeded on every deployment (Loki is not opt-in), and absence is precisely the "+
-			"dark-sampler failure this lane exists to catch", cred)
+			"It is seeded on every deployment that uses object storage at all — which is every "+
+			"deployment, since apl-core reads it for Loki and Harbor both — and absence is "+
+			"precisely the dark-sampler failure this lane exists to catch", cred)
 	}
 
 	// The real predicate, over the real declaration. Two arms, because they are

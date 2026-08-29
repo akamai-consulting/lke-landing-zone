@@ -49,14 +49,23 @@
 #          are orphans. Reaping unattached `pvc-*` Volumes by detach-state alone
 #          is unsafe — detached does not mean orphaned.
 #
+#      NO KYVERNO LAYER IS NAMED HERE ANY MORE, and that is a correction rather
+#      than a simplification. This list used to cite a pvc-redirect-untagged-
+#      storage-class policy and a "Kyverno twin" of the VAP as two of its layers.
+#      Neither has been applied since LLZ went managed-only: the //go:embed lines
+#      went with the self-install flow and were never restored, so the manifests
+#      sat in this directory as orphans while four surfaces went on describing
+#      them as active. They are deleted; the layers below are the ones that run.
+#
 #      Attribution AT PROVISION (here): tagging in the StorageClass stamps
 #      `lke<id>` in the same CreateVolume API call, so a fresh-create Volume is
 #      never observable untagged. This replaces the retired linode-volume-labeler
 #      CronJob (which PUT the tag AFTER creation) as the PRIMARY path. Coverage is
-#      then held in depth: the kyverno-pvc-redirect-untagged-storage-class policy
-#      keeps every PVC on this (tagging) class; the pvc-deny-untaggable-clone VAP
-#      (+ Kyverno twin) blocks clone/snapshot PVCs, whose CloneVolume API path
-#      cannot tag; the llz-reconciler's `volume-tags` lane
+#      then held in depth: bootstrap-cluster delete+recreates LKE's stock classes
+#      with the same encryption + tagging, so a PVC that names one explicitly is
+#      still covered; the pvc-deny-untaggable-clone VAP blocks clone/snapshot
+#      PVCs, whose CloneVolume API path cannot tag; the llz-reconciler's
+#      `volume-tags` lane
 #      (`llz ci reconcile-volume-tags`)
 #      heals this class's volumeTags onto any Volume that slips everything; and
 #      `reap` treats an UNTAGGED `pvc-*` Volume as keep-by-default (see
