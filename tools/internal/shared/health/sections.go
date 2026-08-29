@@ -187,8 +187,30 @@ func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pend
 // ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is
 // informational; a satisfied budget (currentHealthy≥desired with disruptions
 // allowed, or single-replica / over-provisioned) passes; otherwise an operator-
-// deferred match defers, Phase 1 pends (workloads still settling), else it fails
-// (node drains will block).
+// deferred match defers, Phase 1 pends, and the two remaining shapes — a budget
+// that can NEVER permit a drain, and a satisfiable budget whose workload is not
+// healed yet — are both left to the convergence budget.
+//
+// WHY THE TAIL IS BUDGETED AND NOT AN UNCONDITIONAL FAIL. A PDB reports
+// currentHealthy=0 for the whole window in which its pods are ContainerCreating,
+// which on a young cluster is indistinguishable from a workload that will never
+// come up — the same ambiguity ClassifyServiceEndpoints resolves through
+// PendingIfBudgeted, and for the same reason. This branch was gated on phase1
+// instead, which does NOT mean "workloads still settling" despite the message it
+// printed: phase1 is specifically "OpenBao bootstrap pending" and it is one-way,
+// so it has already resolved by the time later-wave charts start rolling out. A
+// real e2e round aborted a healthy cluster ~13 minutes old on nothing but
+// `PDB monitoring/loki-ingester (currentHealthy=0 desiredHealthy=2
+// disruptionsAllowed=0 expectedPods=3)` while the same poll reported all three
+// loki-ingester pods as ContainerCreating and monitoring-loki as Progressing.
+//
+// The two shapes are split because they need different remediation and the old
+// single message named the wrong one. desiredHealthy ≥ expectedPods is a
+// CONFIG defect — minAvailable ≥ replicas can never allow a disruption even at
+// full health — and that is the case "check minAvailable vs replicas" describes.
+// desiredHealthy < expectedPods is a config that WILL permit drains once the
+// workload heals, so pointing the operator at minAvailable sends them to a file
+// with nothing wrong in it; the verdict belongs to the workload's own section.
 func ClassifyPDB(key string, cur, des, allow, exp int, phase1 bool) (Category, string) {
 	label := fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d)", key, cur, des, allow)
 	switch {
@@ -205,9 +227,22 @@ func ClassifyPDB(key string, cur, des, allow, exp int, phase1 bool) (Category, s
 		return CatDeferred, label + " — " + r
 	}
 	if phase1 {
-		return CatPending, label + " — workloads still settling"
+		return CatPending, label + " — support plane still installing"
 	}
-	return CatFail, fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d expectedPods=%d) — node drains will block; check minAvailable vs replicas", key, cur, des, allow, exp)
+	// minAvailable ≥ replicas: no amount of healing raises disruptionsAllowed, so
+	// this is a real defect — but expectedPods is read live, and a StatefulSet
+	// scaling up reports a partial one, so a budget still gets to see it settle.
+	if exp > 1 && des >= exp {
+		return PendingIfBudgeted(
+			fmt.Sprintf("%s — desiredHealthy ≥ expectedPods=%d, which permits no drain; still budgeted in case the workload is mid-scale-up and expectedPods has yet to rise", label, exp),
+			fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d expectedPods=%d) — node drains will block: minAvailable ≥ replicas, so disruptionsAllowed can never rise above 0 even at full health. Lower minAvailable or raise replicas.", key, cur, des, allow, exp))
+	}
+	// desiredHealthy < expectedPods: the budget itself is fine and will permit
+	// drains as soon as the workload heals. The only thing wrong here is pod
+	// health, which the workload and pod sections already judge.
+	return PendingIfBudgeted(
+		fmt.Sprintf("%s — budget is satisfiable (desiredHealthy < expectedPods=%d); backing pods still starting", label, exp),
+		fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d expectedPods=%d) — the budget is fine (minAvailable < replicas); %d of %d pods are healthy, so the BACKING WORKLOAD is unhealthy — this is a steady-state check, so they are not starting. Its own section carries the verdict.", key, cur, des, allow, exp, cur, exp))
 }
 
 // ClassifyIngress classifies an Ingress by whether its loadBalancer address is
