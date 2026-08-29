@@ -89,10 +89,13 @@ func (f fakeRelabelKube) MergePatch(context.Context, string, any) error        {
 type fakeLinodeVols struct {
 	vols      []map[string]any
 	updateErr error
+	listErr   error
 	renamed   map[uint64]string
 }
 
-func (f *fakeLinodeVols) ListVolumes(context.Context) ([]map[string]any, error) { return f.vols, nil }
+func (f *fakeLinodeVols) ListVolumes(context.Context) ([]map[string]any, error) {
+	return f.vols, f.listErr
+}
 func (f *fakeLinodeVols) UpdateVolumeLabel(_ context.Context, id uint64, label string) error {
 	if f.updateErr != nil {
 		return f.updateErr
@@ -137,8 +140,13 @@ func TestRunRelabelVolumes(t *testing.T) {
 	if err := Relabel(context.Background(), d); err != nil {
 		t.Fatalf("Relabel: %v", err)
 	}
-	if len(lc.renamed) != 1 || lc.renamed[100] != "pri-team-needs-rename" {
-		t.Fatalf("renamed = %v, want {100: pri-team-needs-rename}", lc.renamed)
+	// THE INVERTED GATE. This used to assert volume 100 WAS renamed to
+	// pri-team-needs-rename. Renaming it is the bug: the Linode CSI resolves the
+	// device path from the label in the PV's immutable volumeHandle, so a volume
+	// carrying the CSI default `pvc-olduuid` must keep it or its next MountDevice
+	// hunts a path that no longer exists. See the file header.
+	if len(lc.renamed) != 0 {
+		t.Fatalf("relabel-volumes must never rename a bound CSI volume, renamed = %v", lc.renamed)
 	}
 }
 
@@ -160,7 +168,10 @@ func TestRelabelRefusesAnEmptyToken(t *testing.T) {
 	}
 }
 
-func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
+// The old lane surfaced an UpdateVolumeLabel error so its alert would fire. There
+// is no longer an update to fail: a client wired to error on rename proves the
+// call is gone, because reaching it would turn this run red.
+func TestRelabelNeverCallsUpdateEvenWhenItWouldSucceed(t *testing.T) {
 	t.Setenv("REGION_SHORT", "pri")
 	t.Setenv("LINODE_TOKEN", "tok")
 	claim := map[string]any{"namespace": "team", "name": "x"}
@@ -170,8 +181,11 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 		updateErr: errors.New("linode 500"),
 	}
 	d := withRelabelSeams(t, kube, lc)
-	if err := Relabel(context.Background(), d); err == nil {
-		t.Error("a rename error should surface a non-nil error (so the CronJob/alert fires)")
+	if err := Relabel(context.Background(), d); err != nil {
+		t.Fatalf("an inert lane has nothing to fail: %v", err)
+	}
+	if len(lc.renamed) != 0 {
+		t.Fatalf("renamed = %v, want none", lc.renamed)
 	}
 }
 

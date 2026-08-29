@@ -44,9 +44,17 @@ const scStorageClassesPath = "/apis/storage.k8s.io/v1/storageclasses"
 
 // pvVolume is one Linode-CSI PV's backing Volume id (+ bound PVC, for logging).
 type pvVolume struct {
-	VolumeID  string
-	Namespace string
-	PVC       string
+	VolumeID string
+	// HandleLabel is the LABEL half of the CSI volumeHandle (`<id>-<label>`), i.e.
+	// the label the volume carried at CreateVolume. The Linode CSI builds the
+	// device path it looks for from THIS string (findDevicePath ->
+	// GetNormalizedLabel -> GetDiskByIdPaths), and the handle is immutable — so it
+	// is the only label under which the volume can ever be mounted again. Captured
+	// so a gate can compare it against the volume's LIVE label; they diverge
+	// exactly when something renamed the volume, which is unmountable.
+	HandleLabel string
+	Namespace   string
+	PVC         string
 	// Phase is the PV's status.phase. Only the LABEL expectation depends on it:
 	// labels are account-unique so a Released PV sharing a claimRef with a live one
 	// can never take the derived name, while tags and encryption remain meaningful
@@ -72,13 +80,15 @@ func parsePVVolumes(pvList map[string]any) []pvVolume {
 			continue
 		}
 		id, _ := csi["volumeHandle"].(string)
+		handleLabel := ""
 		if i := strings.IndexByte(id, '-'); i >= 0 {
+			handleLabel = id[i+1:]
 			id = id[:i]
 		}
 		if id == "" {
 			continue
 		}
-		v := pvVolume{VolumeID: id}
+		v := pvVolume{VolumeID: id, HandleLabel: handleLabel}
 		if st, ok := pv["status"].(map[string]any); ok {
 			v.Phase, _ = st["phase"].(string)
 		}

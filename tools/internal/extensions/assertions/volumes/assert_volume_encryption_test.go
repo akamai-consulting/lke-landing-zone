@@ -17,6 +17,16 @@ func encVol(encryption string, tags ...string) map[string]any {
 
 func encPV(ns, claim, id string) pvVolume { return pvVolume{VolumeID: id, Namespace: ns, PVC: claim} }
 
+// encPVHandle is encPV plus the label half of the CSI volumeHandle — the label the
+// Volume was CREATED with, and the only one the Linode CSI will ever look its
+// device up by. On LKE-E that is the CSI default `pvc-<uuid>`, because the managed
+// controller ships no --volume-label-prefix.
+func encPVHandle(ns, claim, id, handleLabel string) pvVolume {
+	v := encPV(ns, claim, id)
+	v.HandleLabel = handleLabel
+	return v
+}
+
 // TestJudgeVolume_Encryption covers the primary gate. `encryption` absent (a Volume
 // predating the feature) must read as NOT encrypted — the safe bias, and the shape
 // the Linode API actually returns for older volumes.
@@ -142,24 +152,42 @@ func labelledVol(label string) map[string]any {
 	return v
 }
 
-// TestJudgeVolume_Label is the third leg of the invariant. `pvc-<uuid>` is the CSI
-// default on LKE-E (the managed controller ships no --volume-label-prefix), and a
-// Volume still wearing it is anonymous everywhere it matters — the Linode UI, the
-// billing export, the quota census. You cannot tell which workload owned it, and
-// once the cluster is deleted you can never work it out.
+// TestJudgeVolume_Label is the third leg of the invariant, and it now asks the
+// OPPOSITE question it used to.
+//
+// It used to reject `pvc-<uuid>` — the CSI default on LKE-E, where the managed
+// controller ships no --volume-label-prefix — on the grounds that such a Volume is
+// anonymous in the Linode UI, the billing export and the quota census. That
+// attribution argument is real, but it was being bought with an unmountable
+// volume: the CSI resolves the device path from the label in the PV's IMMUTABLE
+// volumeHandle, so renaming a bound Volume guarantees its next attach fails. The
+// attribution is served instead by Volume TAGS (`lke<id>`, stamped by the
+// StorageClass at CreateVolume), which no device lookup depends on.
+//
+// So the CSI default is now the CORRECT state, and the violation is a live label
+// that has DRIFTED from the handle's — which is exactly the unmountable volume.
 func TestJudgeVolume_Label(t *testing.T) {
 	pvc := encPV("harbor", "data-harbor-redis-0", "17094415")
 
-	t.Run("CSI default is rejected", func(t *testing.T) {
-		v := judgeVolume(pvc, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "")
+	t.Run("CSI default is now the correct state", func(t *testing.T) {
+		// encPV's volumeHandle is `<id>-<label>`, so a volume still wearing the label
+		// the handle names is precisely the mountable one.
+		born := encPVHandle("harbor", "data-harbor-redis-0", "17094415", "pvc-e2e495ebe1504dff")
+		v := judgeVolume(born, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "")
+		if !v.ok() {
+			t.Fatalf("a Volume still wearing its handle's label is MOUNTABLE and must pass, got %q", v.problem())
+		}
+	})
+
+	t.Run("a label renamed away from the handle is rejected", func(t *testing.T) {
+		born := encPVHandle("harbor", "data-harbor-redis-0", "17094415", "pvc-e2e495ebe1504dff")
+		v := judgeVolume(born, labelledVol("pri-harbor-data-harbor-redis-0"), wantTags, "")
 		if v.ok() {
-			t.Fatal("a Volume still labelled pvc-<uuid> must fail — it is unattributable in the Linode UI and the billing export")
+			t.Fatal("a Volume renamed off its volumeHandle label cannot be mounted again and must fail")
 		}
-		if !strings.Contains(v.problem(), "CSI default") {
-			t.Errorf("problem should name the CSI default, got %q", v.problem())
+		if !strings.Contains(v.problem(), "RENAMED") {
+			t.Errorf("problem should name the rename, got %q", v.problem())
 		}
-		// It IS healable — the volume-labels lane renames it — so the gate should be
-		// willing to wait rather than failing instantly like it does for encryption.
 		if !v.healable() {
 			t.Error("a label violation must be healable; only encryption is final")
 		}

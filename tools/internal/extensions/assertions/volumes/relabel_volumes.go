@@ -1,15 +1,55 @@
 package volumes
 
-// ci_relabel_volumes.go implements `llz ci relabel-volumes` — the Go port of the
-// linode-volume-labeler `relabel.sh` CronJob script. For every bound Linode-CSI
-// PV in the cluster it rewrites the backing Linode Volume's UI label from the
-// CSI default (`pvc-<uuid>` on LKE-E, because the managed CSI controller's
-// --volume-label-prefix is empty) to a human-readable
-// `<REGION_SHORT>-<namespace>-<pvc-name>`, sanitized to Linode's charset and
-// truncated to the 32-char label cap. Idempotent and rate-limited-friendly:
-// already-correct labels are skipped. It lists all account Volumes ONCE (vs the
-// script's per-volume GET) and matches by id.
-
+// ci_relabel_volumes.go implements `llz ci relabel-volumes`. It USED to rewrite
+// every bound Linode-CSI Volume's label from the CSI default (`pvc-<uuid>` on
+// LKE-E, where the managed CSI controller's --volume-label-prefix is empty) to a
+// readable `<REGION_SHORT>-<namespace>-<pvc-name>`. It no longer renames
+// anything, and the rename must not come back.
+//
+// RENAMING A BOUND CSI VOLUME PERMANENTLY BREAKS ITS NEXT MOUNT. The Linode CSI
+// driver finds the block device by LABEL, not by id: findDevicePath does
+// `deviceName := key.GetNormalizedLabel()` and hands it to GetDiskByIdPaths,
+// producing /dev/disk/by-id/{linode-,scsi-0Linode_Volume_}<label>. That label
+// comes from the volumeHandle (`<linode-id>-<label>`), which is stamped at
+// CreateVolume and is IMMUTABLE. Rename the Volume and the in-guest udev symlink
+// follows the new label while the driver goes on hunting the old one — forever.
+// The kubelet reports it as, and it never resolves:
+//
+//	MountVolume.MountDevice failed for volume "pvc-72af5c8ff02c4813":
+//	  Unable to find device path out of attempted paths:
+//	  [/dev/disk/by-id/linode-pvc-72af5c8ff02c4813
+//	   /dev/disk/by-id/scsi-0Linode_Volume_pvc-72af5c8ff02c4813]
+//
+// HOW IT WENT UNNOTICED FOR WEEKS. The damage needs the rename to land between
+// AttachVolume and MountDevice, so it only hits volumes whose pod has not mounted
+// YET. Until e2eb26fb the lane had no token-arrival kick, so on a cold bootstrap
+// it first ran at the 1h resync floor — by which time everything had long since
+// mounted. That hour was never meant as a safety margin, but it was one: the kick
+// moved the first pass into the middle of bootstrap, straight through the mount
+// window of every later-wave chart. On e2e that is loki-ingester, reproduced 3/3
+// (runs 33215535380, 33222076304, 33225578330); in the field it showed as "1 of 3
+// ingesters ready for 16 days", which the only alert watching it could not fire on
+// (wrong StatefulSet name AND `== 0` vs a partial outage — see
+// support-plane-alerts.yaml). docs/lessons-learned.md recorded the symptom as an
+// intermittent Linode CSI flake; it is not, it is this lane.
+//
+// THERE IS NO SAFE SUBSET. Skipping volumes that are not yet mounted would still
+// leave every renamed volume unmountable on its NEXT attach — a node drain, a
+// reschedule, an upgrade — because the handle keeps the creation-time label
+// either way. A rename is only ever safe on a Volume no CSI PV will mount again,
+// which is a Volume about to be reaped, where a readable name buys nothing.
+//
+// NOTHING FUNCTIONAL DEPENDED ON THE RENAME. Cluster identity lives in Volume
+// TAGS (`lke<id>`, stamped by the block-storage-retain StorageClass's volumeTags
+// at CreateVolume, with reconcile-volume-tags as the heal-path backstop), and the
+// reaper accepts the `pvc-` prefix, so volumes keeping their CSI default stay
+// reapable. The readers still tolerate the OLD renamed form
+// (linode.VolumeLabelPrefixes) because clusters relabelled before this change
+// still carry those names — that tolerance is for reading history, not a licence
+// to write it again.
+//
+// What remains is a REPORT: it says what the old lane would have renamed, so an
+// operator can see the lane is deliberately inert rather than quietly missing.
 import (
 	"context"
 	"fmt"
@@ -70,7 +110,10 @@ func Relabel(ctx context.Context, d Deps) error {
 	}
 	labelByID := volumeLabelsByID(all)
 
-	var renamed, alreadyOK, missing, errs int
+	// NO UpdateVolumeLabel CALL, deliberately — see the file header. Every volume
+	// this loop would once have renamed is one the CSI will look up by the label it
+	// has now, so renaming it is what breaks the mount.
+	var wouldRename, historic, missing int
 	for _, v := range vols {
 		desired := desiredVolumeLabel(regionShort, v.namespace, v.pvcName)
 		cur, present := labelByID[v.id]
@@ -78,21 +121,15 @@ func Relabel(ctx context.Context, d Deps) error {
 		case !present:
 			missing++ // volume deleted out-of-band while the PV still references it
 		case cur == desired:
-			alreadyOK++
+			historic++ // renamed by a build that predates this change
 		default:
-			if err := lc.UpdateVolumeLabel(ctx, v.id, desired); err != nil {
-				fmt.Fprintf(os.Stderr, "error relabeling volume %d: %v\n", v.id, err)
-				errs++
-				continue
-			}
-			fmt.Printf("renamed %d: %s -> %s\n", v.id, cur, desired)
-			renamed++
+			wouldRename++
 		}
 	}
-	fmt.Printf("summary: renamed=%d already-ok=%d missing=%d errors=%d\n", renamed, alreadyOK, missing, errs)
-	if errs > 0 {
-		return fmt.Errorf("%d volume relabel error(s)", errs)
-	}
+	fmt.Printf("summary: renaming-disabled=%d already-renamed=%d missing=%d\n", wouldRename, historic, missing)
+	fmt.Println("relabel-volumes is inert BY DESIGN: the Linode CSI resolves a volume's device " +
+		"path from its label, and the label in the PV's volumeHandle is immutable, so renaming a " +
+		"bound Volume permanently breaks its next mount. Cluster identity comes from Volume tags.")
 	return nil
 }
 

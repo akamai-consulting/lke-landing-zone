@@ -57,16 +57,23 @@ func TestRunRelabelVolumesPVListStatusWindow(t *testing.T) {
 			if !tc.wantErr && err != nil {
 				t.Errorf("status %d is a valid PV list, got error: %v", tc.status, err)
 			}
-			if !tc.wantErr && len(lc.renamed) != 1 {
-				t.Errorf("status %d must actually relabel, renamed = %v", tc.status, lc.renamed)
+			// The status window still has to be honoured — a 403 must fail the run
+			// rather than read as an empty PV list — but a successful read now
+			// renames NOTHING. See the file header: renaming a bound CSI volume
+			// breaks its next mount.
+			if !tc.wantErr && len(lc.renamed) != 0 {
+				t.Errorf("status %d must not relabel, renamed = %v", tc.status, lc.renamed)
 			}
 		})
 	}
 }
 
-// The summary line is the CronJob's entire audit trail. Each counter has to move
-// in its own direction and only for its own case, or a run that renamed nothing
-// is indistinguishable from one that renamed everything.
+// The summary line is the lane's entire audit trail, and it still has to
+// distinguish its three cases — an operator reading it needs to see that the lane
+// is deliberately inert, not that it found nothing to do. `renaming-disabled`
+// counts what the old lane WOULD have renamed; `already-renamed` counts volumes a
+// build predating this change already renamed (they keep those names, and the
+// reaper still accepts them).
 func TestRunRelabelVolumesSummaryTally(t *testing.T) {
 	t.Setenv("REGION_SHORT", "pri")
 	t.Setenv("LINODE_TOKEN", "tok")
@@ -88,7 +95,10 @@ func TestRunRelabelVolumesSummaryTally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRelabelVolumes: %v", err)
 	}
-	if want := "summary: renamed=1 already-ok=1 missing=1 errors=0"; !strings.Contains(out, want) {
+	if len(lc.renamed) != 0 {
+		t.Fatalf("no counter may come from an actual rename, renamed = %v", lc.renamed)
+	}
+	if want := "summary: renaming-disabled=1 already-renamed=1 missing=1"; !strings.Contains(out, want) {
 		t.Errorf("summary line wrong.\ngot:\n%s\nwant it to contain: %s", out, want)
 	}
 }

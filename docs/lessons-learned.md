@@ -243,23 +243,40 @@ default against, not something to "clean up." Version-specific notes (apl-core
   owned by Flux's `workload` HelmRelease, so annotation patches (e.g. demoting it
   from default) revert on Flux's ~10m reconcile. Fall back to per-chart
   `storageClassName:` overrides.
-- **Linode CSI intermittently loses a freshly-attached volume's device path.** The
-  pod stalls indefinitely in `Init`/mount with `Unable to find device path out of
-  attempted paths: …/linode-pvc-…` — *after* a **successful** attach, so the Linode
+- **A "lost device path" after a successful attach is OUR relabeler, not a CSI
+  flake.** The pod stalls forever in mount with `Unable to find device path out of
+  attempted paths: …/linode-pvc-…`, *after* a **successful** attach, so the Linode
   API and the `VolumeAttachment` both look healthy and only the kubelet log names
-  the fault. Observed downstream (gsap-apl) on plain `linode-block-storage` as well
-  as the encrypted default, with the node well under the attach limit (4 volumes),
-  so it is a CSI device-enumeration flake — **not** the dm-crypt/`encrypted=true`
-  class, not the reclaim policy, and not something chart config can make reliable.
-  There is no retry that fixes it: the volume never appears. The durable fix is to
-  **not put ephemeral data on block storage at all** — a build workspace, scratch
-  dir, or anything discarded with the pod belongs in an `emptyDir` (node-local, no
-  attach step, so the flake cannot apply — and it is faster). Reserve PVCs for state
-  that must outlive the pod. Note this cuts against the cluster default: LLZ
-  promotes the encrypted+tagged `block-storage-retain` to sole default
-  (llz-cluster-foundation `sc-default-patcher`), so an unqualified `volumeClaimTemplate`
-  in a *new* workload silently inherits block storage and this failure mode with it.
-
+  the fault. This was recorded here for weeks as an intermittent Linode CSI
+  device-enumeration bug with no fix. It is not. The Linode CSI resolves a volume's
+  device by **label** — `findDevicePath` does `key.GetNormalizedLabel()` →
+  `GetDiskByIdPaths` → `/dev/disk/by-id/{linode-,scsi-0Linode_Volume_}<label>` —
+  and that label comes from the PV's **immutable** `volumeHandle` (`<id>-<label>`,
+  stamped at CreateVolume). LLZ's own volume-labels reconciler renamed every bound
+  Volume to `<REGION_SHORT>-<ns>-<pvc>`, so the in-guest udev symlink moved to the
+  new name while the driver went on hunting the old one. Permanently: there is no
+  retry that fixes it because nothing ever puts the old name back.
+  **Why it looked intermittent.** The rename only breaks a volume whose pod has not
+  mounted it YET, so it hits whatever is rolling out when the reconciler's first
+  pass fires. Before `e2eb26fb` that pass waited for the 1h resync floor — long
+  after everything had mounted — and the hour was an accidental safety margin. The
+  token-arrival kick moved it into the middle of bootstrap, i.e. straight through
+  the mount window of every later-wave chart. On e2e that is `loki-ingester` (3/3
+  reproductions); in the field it showed as "1 of 3 ingesters ready for 16 days",
+  which the only alert watching it could not fire on. **Every volume already
+  renamed is also a latent failure** — it works only because it is already mounted,
+  and its next attach (drain, reschedule, upgrade) will not find it.
+  The relabeler no longer renames anything; `assert-volume-encryption` now flags a
+  live label that has drifted from its `volumeHandle`, which is how you find the
+  already-broken ones. Volume identity for reaping and attribution comes from
+  **tags** (`lke<id>`), which no device lookup depends on.
+  Independently still true: ephemeral data — a build workspace, scratch dir,
+  anything discarded with the pod — belongs in an `emptyDir`, which is node-local,
+  needs no attach, and is faster. Reserve PVCs for state that must outlive the pod.
+  Note this cuts against the cluster default: LLZ promotes the encrypted+tagged
+  `block-storage-retain` to sole default (llz-cluster-foundation
+  `sc-default-patcher`), so an unqualified `volumeClaimTemplate` in a *new* workload
+  silently inherits block storage.
 ### OpenBao / ESO / cert rotation
 
 - **OpenBao raft-join is a chicken-and-egg.** Followers never auto-join (no
