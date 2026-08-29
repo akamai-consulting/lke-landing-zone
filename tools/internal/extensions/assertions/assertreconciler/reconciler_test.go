@@ -348,8 +348,31 @@ func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 		t.Fatalf("no --reconcile-* flag registrations found in %s — the scan is looking at the "+
 			"wrong file or for the wrong shape, which is how this half came to check nothing", cobraCmds)
 	}
+	// RETIRED NO-OPS are registered but enable nothing. They exist only so an
+	// upgrade that lands a new image against a manifest still passing the old flag
+	// does not CrashLoopBackOff the pod on `unknown flag`, taking every lane down.
+	//
+	// Listing one here is NOT enough to excuse it from the census: it must also be
+	// hidden, which is the thing a genuinely-live lane could never be. That keeps
+	// this list from becoming a way to smuggle a lane past --lanes.
+	retired := map[string]string{
+		"--reconcile-volume-labels": "the volume-labels lane was retired; renaming a bound Volume breaks its next mount",
+	}
+	for flag := range retired {
+		if !strings.Contains(string(flagSrc), `MarkHidden("`+strings.TrimPrefix(flag, "--")+`")`) {
+			t.Errorf("%s is listed as a retired no-op but is not MarkHidden — a flag that still "+
+				"advertises itself is indistinguishable from a live lane", flag)
+		}
+		if _, ok := reconcileFlagLane[flag]; ok {
+			t.Errorf("%s is both retired and mapped to a lane — one of the two is wrong", flag)
+		}
+	}
+
 	for _, m := range matches {
 		flag := "--" + m[1]
+		if _, ok := retired[flag]; ok {
+			continue
+		}
 		if _, ok := reconcileFlagLane[flag]; !ok {
 			t.Errorf("reconcile.go registers %s but reconcileFlagLane has no entry — "+
 				"the lane it enables will be silently excluded from assert-reconciler --lanes", flag)

@@ -76,3 +76,24 @@ func TestWorkloadTagsStayInTheSafeCharset(t *testing.T) {
 		}
 	}
 }
+
+// A RELEASED PV keeps its claimRef — that is what makes it Released rather than
+// Available — so a claimRef-only test admits every leaked Retain Volume from
+// every previous incarnation of a StatefulSet pod. Tagging those with the LIVE
+// workload's identity is worse than leaving them bare: `harbor-otomi-db-1` would
+// name one live Volume and two corpses, and the tag exists to identify exactly
+// one workload.
+func TestWorkloadTagsSkipReleasedAndFailedPVs(t *testing.T) {
+	for _, phase := range []string{"Released", "Failed", "Available", "Pending"} {
+		pv := pvVolume{VolumeID: "1", Namespace: "harbor", PVC: "harbor-otomi-db-1", Phase: phase}
+		if got := workloadTags(pv); len(got) != 0 {
+			t.Errorf("phase %s still carries a claimRef but is not the live owner; got %v", phase, got)
+		}
+	}
+	// An empty phase is the in-cluster reader's "not reported", which the sibling
+	// label check also treats as Bound — so it must still be tagged.
+	live := pvVolume{VolumeID: "1", Namespace: "harbor", PVC: "harbor-otomi-db-1"}
+	if got := workloadTags(live); len(got) != 2 {
+		t.Errorf("an unreported phase must be treated as Bound, got %v", got)
+	}
+}

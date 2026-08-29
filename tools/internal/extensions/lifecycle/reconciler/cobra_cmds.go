@@ -15,10 +15,11 @@ package reconciler
 // package main from holding capability logic, and a `c.Flags().BoolVar` for a lane
 // this package defines is not main's business either.
 //
-// The four `llz ci` constructors follow the same lane home for consistency: their
-// verbs (discover-firewall, relabel-volumes, reconcile-volume-tags,
-// assert-volume-encryption) are the one-shot forms of reconcilers this package
-// runs continuously, and the two spellings should not drift apart.
+// The `llz ci` constructors follow the same lane home for consistency: their
+// verbs (discover-firewall, reconcile-volume-tags, assert-volume-encryption) are
+// the one-shot forms of reconcilers this package runs continuously, and the two
+// spellings should not drift apart. (relabel-volumes was the fourth until the
+// volume-labels lane was retired.)
 
 import (
 	"context"
@@ -65,9 +66,6 @@ func Cmd() *cobra.Command {
 			"                             driven (was the argo-resync-nudger CronJob)\n" +
 			"  --reconcile-cidr-firewall  reconcile the CIDR-firewall ConfigMap on Node change\n" +
 			"                             (was the cidrFirewall CronJob; needs NODE_NAME,\n" +
-			"                             LINODE_TOKEN)\n" +
-			"  --reconcile-volume-labels  rename Linode Volumes for bound PVs, watch-driven (was\n" +
-			"                             the linode-volume-labeler CronJob; needs REGION_SHORT,\n" +
 			"                             LINODE_TOKEN)\n" +
 			"  --reconcile-volume-tags    heal the block-storage-retain StorageClass's volumeTags\n" +
 			"                             (incl. this cluster's lke<id> ownership tag) onto\n" +
@@ -133,6 +131,24 @@ func Cmd() *cobra.Command {
 	f.StringVar(&o.metricsClientCAFile, "metrics-tls-client-ca-file", "", "CA bundle scrapers' client certificates must chain to (llz-client-ca)")
 	f.IntVar(&o.sampleInterval, "sample-interval", 30, "seconds between observe-reconciler cluster samples")
 	f.BoolVar(&o.leaderElection, "leader-election", true, "gate the driving reconcilers on a coordination.k8s.io Lease (single writer)")
+	// RETIRED FLAGS, ACCEPTED AND IGNORED FOR ONE RELEASE. The volume-labels lane
+	// is gone (renaming a bound Volume breaks its next mount), but the Deployment's
+	// args and the image tag are pinned SEPARATELY — `_commit` and `llz_version` —
+	// so an upgrade can land the new image against a manifest that still passes
+	// `--reconcile-volume-labels`. cobra rejects an unknown flag at startup, which
+	// CrashLoopBackOffs the pod and takes ALL NINE lanes down, not just this one.
+	//
+	// That is not hypothetical here: kustomize.go records objProxy doing exactly
+	// this with `unknown flag: --listen`. Hidden so `--help` does not advertise a
+	// lane that no longer exists, and removable once no rendered manifest passes
+	// them.
+	var retiredVolLabels bool
+	var retiredVolLabelsResync int
+	f.BoolVar(&retiredVolLabels, "reconcile-volume-labels", false, "RETIRED no-op — the volume-labels lane was removed; renaming a bound Volume breaks its next mount")
+	f.IntVar(&retiredVolLabelsResync, "volume-labels-resync", 3600, "RETIRED no-op — see --reconcile-volume-labels")
+	_ = f.MarkHidden("reconcile-volume-labels")
+	_ = f.MarkHidden("volume-labels-resync")
+
 	f.BoolVar(&o.reconcileArgoNudge, "reconcile-argo-nudge", false, "enable the argo-resync-nudger watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.argoNudgeResync, "argo-nudge-resync", 300, "resync-floor seconds for the argo-nudge reconciler (watch drives the immediacy)")
 	f.BoolVar(&o.reconcileCidrFW, "reconcile-cidr-firewall", false, "enable the CIDR-firewall discovery watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")

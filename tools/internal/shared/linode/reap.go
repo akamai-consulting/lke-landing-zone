@@ -272,7 +272,18 @@ func (c *Client) ListFirewalls(ctx context.Context) ([]map[string]any, error) {
 
 // UpdateVolumeLabel PUTs a new UI label onto a Linode Volume. A 404 — the volume
 // was deleted out-of-band while a PV still references it — is treated as success
-// (nothing to relabel), matching relabel.sh's skip-404 behavior.
+// (nothing to relabel).
+//
+// NO PRODUCTION CALLER, AND DO NOT GIVE IT ONE CASUALLY. This is the primitive
+// the retired volume-labels lane used, and calling it on a Volume that backs a
+// live PV BREAKS THAT VOLUME PERMANENTLY: the Linode CSI resolves the device path
+// from the label baked into the PV's immutable volumeHandle, so a renamed Volume
+// fails MountDevice on its next attach and never recovers.
+//
+// It is kept because it is exactly what the documented REPAIR needs — restoring a
+// drifted Volume's ORIGINAL label, the `<label>` half of its volumeHandle, which
+// `llz ci assert-volume-encryption` prints. That is an operator-run, one-Volume,
+// deliberate act. See docs/runbooks/volume-labels.md.
 func (c *Client) UpdateVolumeLabel(ctx context.Context, id uint64, label string) error {
 	url := fmt.Sprintf("%s/v4/volumes/%d", c.base, id)
 	resp, err := c.put(ctx, url, map[string]string{"label": label})

@@ -165,8 +165,19 @@ const maxLinodeTag = 50
 // StorageClass already identifies the cluster more precisely than a 3-letter
 // prefix did.
 func workloadTags(pv pvVolume) []string {
+	// PHASE, NOT JUST claimRef — and getting this wrong is subtle enough that this
+	// package documents it elsewhere and it was still missed here. A RELEASED PV
+	// KEEPS ITS claimRef; that is precisely what makes it Released rather than
+	// Available. So a claimRef test alone admits every leaked Retain Volume from
+	// every previous incarnation of a StatefulSet pod, and each one would be
+	// stamped with the LIVE workload's identity — three `harbor-otomi-db-1` tags
+	// pointing at one live Volume and two corpses, which destroys the single thing
+	// these tags are for. Phase is carried on pvVolume for exactly this test.
+	if pv.Phase != "" && pv.Phase != "Bound" {
+		return nil
+	}
 	if pv.Namespace == "" || pv.PVC == "" {
-		return nil // a released PV with no claim has no workload to name
+		return nil // no claim at all: nothing to name
 	}
 	return []string{
 		fitLinodeTag("ns-" + pv.Namespace),

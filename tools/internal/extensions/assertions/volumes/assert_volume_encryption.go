@@ -6,12 +6,20 @@ package volumes
 //
 //   1. ENCRYPTED at rest (the security property, and the reason for the name);
 //   2. tagged with this cluster's `lke<id>`, so `llz reap` can attribute it;
-//   3. labelled `<region>-<ns>-<pvc>` rather than the CSI's default `pvc-<uuid>`,
-//      so it is identifiable in the Linode UI, the billing export and the quota
-//      census — the places you look when the cluster is already gone.
+//   3. still wearing the label named in its PV's volumeHandle — i.e. NOT renamed.
 //
-// (1) is fixed at CreateVolume or never. (2) and (3) are applied afterwards by
-// llz-reconciler lanes, so this gate waits a bounded time for them before failing —
+// (3) IS THE REVERSE OF WHAT IT ONCE WAS. This gate used to demand the opposite:
+// that a Volume had been renamed off the CSI default `pvc-<uuid>` to a readable
+// `<region>-<ns>-<pvc>`, for identifiability in the Linode UI and the billing
+// export. That rename is what breaks the Volume — the CSI resolves the device
+// path from the label in the IMMUTABLE volumeHandle — so `pvc-<uuid>` is now the
+// correct state and drift from the handle is the violation. Readability moved to
+// Volume TAGS (`ns-<namespace>`, `<namespace>-<pvc>`), which no device lookup
+// reads.
+//
+// (1) is fixed at CreateVolume or never, and so is (3): nothing can rename a
+// Volume back into agreement automatically. (2) is applied afterwards by the
+// volume-tags llz-reconciler lane, so this gate waits a bounded time for it —
 // see volumeHealBudget.
 //
 // It asserts against the LINODE API, not against Kubernetes. That is the whole
