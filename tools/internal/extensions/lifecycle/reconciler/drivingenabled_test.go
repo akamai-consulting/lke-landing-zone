@@ -26,7 +26,6 @@ func TestDrivingEnabled(t *testing.T) {
 	for name, set := range map[string]func(*reconcileOpts){
 		"argoNudge":  func(o *reconcileOpts) { o.reconcileArgoNudge = true },
 		"cidrFW":     func(o *reconcileOpts) { o.reconcileCidrFW = true },
-		"volLabels":  func(o *reconcileOpts) { o.reconcileVolLabels = true },
 		"scDemote":   func(o *reconcileOpts) { o.reconcileSCDemote = true },
 		"linodeCred": func(o *reconcileOpts) { o.reconcileLinodeCred = true },
 		"volTags":    func(o *reconcileOpts) { o.reconcileVolTags = true },

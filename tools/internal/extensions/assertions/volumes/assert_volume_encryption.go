@@ -222,9 +222,11 @@ func AssertEncryption(ctx context.Context, d Deps, scName string) error {
 		scName = DefaultTagsSC
 	}
 
-	// REGION_SHORT is the volume-label prefix the relabeler uses. Optional here: when
-	// absent the label check degrades to "must not be the CSI default" rather than
-	// being skipped, because a missing env var must not silently disable a gate.
+	// REGION_SHORT is the prefix `llz reap` derives, and the one the RETIRED
+	// relabeler used to write. It no longer feeds the label check at all — that
+	// compares a Volume's live label against its PV's volumeHandle, which needs no
+	// per-env input — and is read only by the reapability leg below. Optional, so a
+	// missing env var narrows that leg rather than silently disabling the gate.
 	regionShort := os.Getenv("REGION_SHORT")
 	if regionShort == "REPLACE_ME" {
 		// The un-rendered placeholder from the reconciler manifest. Treat as unset:

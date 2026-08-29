@@ -321,8 +321,8 @@ surface LLZ deliberately does not drive is still described.
 > `clusterHealthWorkflow` for its dependency side effect. Without either, your
 > `WorkflowTemplate` fails to sync with `WorkflowTemplate.argoproj.io "" not found`,
 > which names the CRD that is missing but not the reason.
-(There is no `volumeLabeler` — it was retired into the `volume-labels` lane of
-`llz reconcile` — and no `dns` component. `Validate` rejects unknown keys, so
+(There is no `volumeLabeler` — it became the `volume-labels` lane of
+`llz reconcile`, which is itself now retired — and no `dns` component. `Validate` rejects unknown keys, so
 naming either is a hard spec error.)
 
 **Per-component sizing.** A few components take capacity knobs alongside `enabled`.

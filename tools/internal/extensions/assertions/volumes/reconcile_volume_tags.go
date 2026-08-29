@@ -30,6 +30,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
+// linodeCSIDriver identifies the Linode Block Storage CSI driver on a PV's
+// spec.csi. Lived beside the volume-labels lane until that lane was retired; it
+// is the tag reconciler and the encryption gate that need it now.
+const linodeCSIDriver = "linodebs.csi.linode.com"
+
 // volumeTagsSCParam is the CSI parameter key carrying the class's desired tag set.
 const volumeTagsSCParam = "linodebs.csi.linode.com/volumeTags"
 

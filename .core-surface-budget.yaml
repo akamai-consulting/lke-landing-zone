@@ -1353,6 +1353,11 @@ categories:
     #                       publish instead of before it; this is the preflight.
     #                       One AddCommand — the logic is in templatecommit,
     #                       unit-tested, which is the split ADR 0013 asks for.
+    # 1949 -> 1948: PAYDOWN. The AddCommand line for the retired `relabel-volumes`
+    # verb goes with the volume-labels lane — it renamed bound Linode Volumes,
+    # which is what breaks the CSI's device lookup, so the verb has no safe
+    # behaviour left to expose. Banked exactly, per this budget's
+    # own rule: slack left behind would pre-approve the next change's growth.
     # 1948 -> 1949: one line, the `c.AddCommand(templatecommit.AssertReleaseImageCmd())`
     # that makes `llz ci assert-release-image` reachable. Wiring a verb into the tree
     # is the one thing this layer is FOR; the verb's own logic lives in
@@ -1596,7 +1601,17 @@ categories:
     #                       AddCommand call, and the manifest parsing, the symbol
     #                       corpus and the consumer registry all live in
     #                       extensions/guards/deliveredconsumer.
-    budget: 1949
+    #   1,948 / 129 files  -1 the `relabel-volumes` AddCommand. A PURE PAYDOWN.
+    #                       The retired `relabel-volumes` verb renamed a bound Volume
+    #                       to <REGION_SHORT>-<ns>-<pvc>, and that rename is what
+    #                       loses the device: the CSI resolves the block device from
+    #                       the label baked into the PV's IMMUTABLE volumeHandle, so
+    #                       a renamed Volume fails MountDevice on its next attach and
+    #                       never recovers. There is no safe subset of the behaviour
+    #                       to keep, so the verb, its reconciler lane and its
+    #                       extension binding were retired together and this layer
+    #                       loses the one line that made the verb reachable.
+    budget: 1948
     exact: true
     include:
       - "tools/internal/cli/*.go"

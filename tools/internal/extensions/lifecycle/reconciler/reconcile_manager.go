@@ -355,7 +355,6 @@ func ReconcilerLanes() []LaneDecl {
 	all := reconcileOpts{
 		reconcileArgoNudge:  true,
 		reconcileCidrFW:     true,
-		reconcileVolLabels:  true,
 		reconcileVolTags:    true,
 		reconcileSCDemote:   true,
 		reconcileLinodeCred: true,

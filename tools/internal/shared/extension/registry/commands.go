@@ -233,7 +233,6 @@ var commands = []Command{
 	{"reconciler", reconciler.AssertVolumeEncryptionCmd},
 	{"reconciler", reconciler.DiscoverFirewallCmd},
 	{"reconciler", reconciler.ReconcileVolumeTagsCmd},
-	{"reconciler", reconciler.RelabelVolumesCmd},
 	{"reconciler", reconciler.Cmd},
 	{"releasepublish", releasepublish.AssertInstancePRGatesCmd},
 	{"releasepublish", releasepublish.PinInstanceImagesCmd},

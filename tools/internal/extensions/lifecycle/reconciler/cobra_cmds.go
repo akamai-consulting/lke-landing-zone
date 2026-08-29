@@ -105,8 +105,6 @@ func Cmd() *cobra.Command {
 				argoNudgeResync:     time.Duration(o.argoNudgeResync) * time.Second,
 				reconcileCidrFW:     o.reconcileCidrFW,
 				cidrFWResync:        time.Duration(o.cidrFWResync) * time.Second,
-				reconcileVolLabels:  o.reconcileVolLabels,
-				volLabelsResync:     time.Duration(o.volLabelsResync) * time.Second,
 				reconcileVolTags:    o.reconcileVolTags,
 				volTagsResync:       time.Duration(o.volTagsResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
@@ -139,8 +137,6 @@ func Cmd() *cobra.Command {
 	f.IntVar(&o.argoNudgeResync, "argo-nudge-resync", 300, "resync-floor seconds for the argo-nudge reconciler (watch drives the immediacy)")
 	f.BoolVar(&o.reconcileCidrFW, "reconcile-cidr-firewall", false, "enable the CIDR-firewall discovery watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.cidrFWResync, "cidr-firewall-resync", 600, "resync-floor seconds for the cidr-firewall reconciler (Node watch drives immediacy)")
-	f.BoolVar(&o.reconcileVolLabels, "reconcile-volume-labels", false, "enable the Linode Volume relabeler watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
-	f.IntVar(&o.volLabelsResync, "volume-labels-resync", 3600, "resync-floor seconds for the volume-labels reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileVolTags, "reconcile-volume-tags", false, "enable the Linode Volume tag-heal watch reconciler (default off; the StorageClass tags at provision — this lane only heals Volumes born untagged)")
 	f.IntVar(&o.volTagsResync, "volume-tags-resync", 3600, "resync-floor seconds for the volume-tags reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
@@ -213,19 +209,4 @@ func ReconcileVolumeTagsCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&scName, "storage-class", volumes.DefaultTagsSC, "StorageClass whose volumeTags parameter defines the desired tag set")
 	return c
-}
-func RelabelVolumesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "relabel-volumes",
-		Short: "rename Linode Volumes to <region>-<ns>-<pvc> for every bound Linode-CSI PV",
-		Long: "In-cluster Linode Volume relabeler — the Go port of the linode-volume-labeler\n" +
-			"relabel.sh CronJob. Lists cluster PVs and, for each bound Linode-CSI volume,\n" +
-			"rewrites its Linode UI label from the CSI default pvc-<uuid> to a readable\n" +
-			"<REGION_SHORT>-<namespace>-<pvc-name> (sanitized to Linode's charset, truncated\n" +
-			"to 32 chars). Idempotent — already-correct labels are skipped; a volume deleted\n" +
-			"out-of-band (absent from the account list) is skipped. Env: REGION_SHORT,\n" +
-			"LINODE_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runRelabelVolumes(context.Background()) },
-	}
 }

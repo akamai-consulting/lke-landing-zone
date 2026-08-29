@@ -54,11 +54,3 @@ func runCIReconcileVolumeTags(ctx context.Context, scName string) error {
 	}
 	return volumes.ReconcileTags(ctx, d, scName)
 }
-
-func runRelabelVolumes(ctx context.Context) error {
-	d, err := inClusterVolumeDeps()
-	if err != nil {
-		return err
-	}
-	return volumes.Relabel(ctx, d)
-}

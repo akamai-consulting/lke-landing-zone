@@ -107,7 +107,7 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 // provisions, before anything renames it.
 //
 // IT IS NOT ENOUGH ON ITS OWN. LLZ's volume-labels reconciler (a PV watch in
-// llz-reconciler, `llz ci relabel-volumes`) renames every bound volume to
+// llz-reconciler, the retired `relabel-volumes` verb) renamed every bound volume to
 // <REGION_SHORT>-<namespace>-<pvc>, e.g. `e2e-harbor-harbor-otomi-db-1`. From the
 // moment that reconciler landed (2026-07-05), matching only this prefix matched
 // NOTHING on any converged cluster — the reaper reported "none matched the

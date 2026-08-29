@@ -65,14 +65,31 @@ func TestTheTwoInvariantsAreNamedAndDistinct(t *testing.T) {
 		}
 		seen[b.Name] = true
 	}
-	if invariants != 2 {
-		t.Fatalf("want two invariants (volume-tags, volume-labels), got %d", invariants)
+	// ONE invariant since volume-labels was retired. The name check above still
+	// earns its keep: it is what makes a second invariant declare itself rather
+	// than silently share this one's binding.
+	if invariants != 1 {
+		t.Fatalf("want one invariant (volume-tags), got %d", invariants)
 	}
 
 	// Prove the names are load-bearing rather than decorative: strip them and the
 	// declaration must be refused. Without this, dropping Binding.Name entirely
 	// would leave every test above still passing.
+	//
+	// The collision needs TWO invariants at one state, and this package now ships
+	// only volume-tags — so the second is synthesised here rather than borrowed
+	// from the retired volume-labels. That is the more honest form of the test
+	// anyway: the property is "names disambiguate colliding bindings", which must
+	// hold whatever this package happens to declare today.
 	e = Extension()
+	var inv extension.Binding
+	for _, b := range e.Bindings {
+		if b.Kind == extension.Invariant {
+			inv = b
+			break
+		}
+	}
+	e.Bindings = append(e.Bindings, inv)
 	for i := range e.Bindings {
 		e.Bindings[i].Name = ""
 	}
@@ -99,13 +116,13 @@ func TestTheReconcilerLanesCanDeclareWhatTheyDo(t *testing.T) {
 	}
 }
 
-// THE TWO MUTATING SITES MUST GET MUTATING BINDINGS, AND THE READ ASSERTION MUST
+// THE MUTATING SITE MUST GET A MUTATING BINDING, AND THE READ ASSERTION MUST
 // NEVER GAIN ONE. This package is the clean case of the rule the cloud conversion
-// runs on — the narrowest binding that covers what the call actually does —
-// because both of its Linode writes are genuine PUTs (UpdateVolume,
-// UpdateVolumeLabel) and its third binding only looks.
+// runs on — the narrowest binding that covers what the call actually does. It
+// used to hold two mutating bindings; volume-labels' PUT (UpdateVolumeLabel) went
+// with the retired lane, leaving volume-tags' UpdateVolume as the only write.
 func TestCloudBindingsMatchWhatEachCallDoes(t *testing.T) {
-	for _, name := range []string{"volume-tags", "volume-labels"} {
+	for _, name := range []string{"volume-tags"} {
 		b := cloudBinding(name)
 		if !hasGrant(b, extension.CloudMutate) {
 			t.Errorf("%s must hold cloud-mutate — it PUTs to /v4/volumes, and without the grant "+

@@ -1,92 +1,93 @@
-# Volume labels — Linode UI relabeler
+# Volume labels — why some are `pvc-<uuid>` and some are not
 
-The LKE-managed Linode CSI controller stamps every Block Storage Volume with
-the label `pvc-<uuid>` because the `--volume-label-prefix` flag on the managed
-controller is empty on LKE-Enterprise. The upstream CSI driver
-(`linode-blockstorage-csi-driver` through v1.1.3) exposes no per-PVC label
-mechanism — not via StorageClass parameters, not via the CSI spec's
-`--extra-create-metadata`.
+**The relabeler is retired. Nothing renames Linode Volumes any more, and nothing
+should.** This runbook exists because clusters built before that change still
+carry renamed Volumes, and those Volumes have a latent failure you need to know
+about.
 
-To get human-readable labels (e.g. `<env>-openbao-data-<release>-openbao-0`)
-the in-cluster reconciler watches PVs and PUTs labels via the Linode Volumes API.
+## Why renaming was removed
 
-## What runs and where
+The Linode CSI driver finds a Volume's block device by **label**:
+`findDevicePath` calls `key.GetNormalizedLabel()` and hands the result to
+`GetDiskByIdPaths`, producing
+`/dev/disk/by-id/{linode-,scsi-0Linode_Volume_}<label>`. That label comes from
+the PV's `volumeHandle` (`<id>-<label>`), which is stamped at CreateVolume and is
+**immutable**.
 
-This used to be a `CronJob/linode-volume-labeler` in its own namespace, seeded by
-the `cluster-bootstrap` Terraform root. **Both are gone.** The CronJob was
-retired into the `volume-labels` lane of the `llz-reconciler` Deployment, and the
-Terraform root was deleted (ADR 0002).
-
-| Resource | Namespace | Owner |
-|---|---|---|
-| `Deployment/llz-reconciler` (lane `--reconcile-volume-labels`) | `llz-reconciler` | the `llzReconciler` component, synced by Argo CD |
-
-The lane is **watch-driven** off PVs rather than scheduled, with a resync floor
-of `--volume-labels-resync` seconds (default 3600). It needs `REGION_SHORT` and
-`LINODE_TOKEN`, supplied by the component's ExternalSecret.
-
-## Label format
+So renaming a Volume moves the in-guest udev symlink to the new name while the
+driver goes on looking for the old one. It never resolves:
 
 ```
-<region-short>-<namespace>-<pvc-name>
+MountVolume.MountDevice failed for volume "pvc-72af5c8ff02c4813":
+  Unable to find device path out of attempted paths:
+  [/dev/disk/by-id/linode-pvc-72af5c8ff02c4813
+   /dev/disk/by-id/scsi-0Linode_Volume_pvc-72af5c8ff02c4813]
 ```
 
-- `<region-short>` is `substr(var.region, 0, 3)` (a short per-cluster prefix,
-  e.g. `pri`, `sec`, `sta`, or `lab`)
-- Truncated to 32 characters (Linode's `LinodeVolumeLabelLength`)
-- Sanitized to `[a-zA-Z0-9_-]` (the Linode label charset); any other rune
-  becomes `-`
-- Trailing `-` stripped after truncation
+The rename only breaks a Volume whose pod has **not mounted it yet**, which is
+why it looked intermittent — it hit whatever happened to be rolling out when the
+reconciler's first pass fired. See
+[lessons-learned](../lessons-learned.md) for the full history.
 
-Example: `data-<release>-openbao-0` in the `openbao` namespace on a cluster
-with region-short `<env>` becomes `<env>-openbao-data-<release>-openbao-0`.
+## What this means for an existing cluster
 
-## Inspecting the labeler
+A Volume that was renamed **and is currently mounted** is working, but only
+because the mount already happened. Its next attach — a node drain, a pod
+reschedule, a cluster upgrade — re-runs the device lookup and will not find it.
+
+**Every renamed Volume is a deferred failure, not a cosmetic wart.**
+
+## Finding them
+
+`llz ci assert-volume-encryption` reports any Volume whose live label has drifted
+from the label in its PV's `volumeHandle`:
+
+```
+volume 17656487 (e2e-monitoring-data-lok-gester-0) monitoring/data-loki-ingester-0 —
+  label "e2e-monitoring-data-lok-gester-0" was RENAMED away from "pvc-5e9cdc9a98684924",
+  the label in the PV's volumeHandle — the Linode CSI looks the device up by that
+  immutable name, so this volume will fail to mount on its next attach
+```
+
+## Repairing one
+
+There is no in-place fix. The `volumeHandle` cannot be edited, and renaming the
+Volume back is only safe if you restore the label **exactly** — any drift and you
+are in the same state.
+
+Restoring the original label is the least disruptive option **when you have it**
+(the gate prints it, and it is the `<label>` half of the PV's `volumeHandle`):
 
 ```bash
-# Reconciler state
-kubectl -n llz-reconciler get deploy llz-reconciler
-
-# Logs for the volume-labels lane
-kubectl -n llz-reconciler logs deploy/llz-reconciler | grep volume-labels
+# The label the CSI will look for, straight from the PV:
+kubectl get pv <pv> -o jsonpath='{.spec.csi.volumeHandle}'   # -> <id>-<label>
 ```
 
-The lane's summary line is the quick health check:
-```
-summary: renamed=N already-ok=M api-404=0 errors=0
-```
+Then PUT that exact label back onto the Volume via the Linode API. Verify the
+gate goes quiet before draining the node.
 
-## Manual one-shot
+If the original label is unrecoverable, the Volume must be replaced: drain the
+workload, delete the PVC, and let the StorageClass provision a new Volume.
+For a replicated workload (OpenBao, a CNPG cluster, Loki ingesters) do this one
+replica at a time and let it re-sync.
 
-Run the relabel pass directly, without waiting for a watch event or the resync
-floor:
+## What still uses the old names
 
-```bash
-llz ci relabel-volumes      # needs REGION_SHORT + LINODE_TOKEN
-```
+Nothing writes them, but two readers still have to recognise them:
 
-## Why not the "first-class" path
+- **`llz reap`** accepts both the `pvc-` prefix and `<REGION_SHORT>-`, or renamed
+  Volumes from older clusters would be invisible to the sweep and leak on
+  teardown. Always pass `--env` — see
+  [orphan-volume-cleanup](orphan-volume-cleanup.md).
+- **`REGION_SHORT`** is still rendered into the `llz-reconciler` Deployment. No
+  lane reads it now; it is retained because it is the prefix `reap` derives, and
+  because dropping it would change every instance's rendered output for no
+  behavioural gain.
 
-The Linode CSI driver source ([`controllerserver_helper.go`](https://github.com/linode/linode-blockstorage-csi-driver/blob/v1.1.3/internal/driver/controllerserver_helper.go))
-shows the volume label is always `<--volume-label-prefix><req.GetName()>`
-where `req.GetName()` is the PV name (`pvc-<uuid>`) set by external-provisioner.
-The prefix is a controller-level env var (`LINODE_VOLUME_LABEL_PREFIX`), max
-12 chars, no per-PVC template.
+## Attribution
 
-On LKE-E the controller runs in Linode's management plane so we can't patch
-its env vars from the user cluster. The two first-class paths are:
-
-1. A Linode support ticket asking for `LINODE_VOLUME_LABEL_PREFIX` to be set
-   on the managed controller (would give every volume a fixed prefix like
-   `<env>-`, max 12 chars including separator; no PVC-name substitution).
-2. An upstream PR adding a `linodebs.csi.linode.com/volume-label-template`
-   SC parameter that uses Go-template substitution against
-   `--extra-create-metadata`'s `csi.storage.k8s.io/pvc/{name,namespace}`.
-
-This reconciler lane is the pragmatic fallback while either of those is pending.
-
-## Disabling
-
-Turn off the `llzReconciler` component in the spec, or drop the
-`--reconcile-volume-labels` flag from the Deployment. Argo CD owns the manifest,
-so an ad-hoc `kubectl` edit is reverted on the next sync — change the spec.
+Identifying which cluster owns a Volume is done with **tags**, not labels: the
+`block-storage-retain` StorageClass stamps `lke<id>` at CreateVolume, and the
+`volume-tags` reconciler heals any Volume born without them (clone/snapshot PVCs
+admitted while admission control was degraded). Tags are not part of any device
+path, so writing them is safe.
