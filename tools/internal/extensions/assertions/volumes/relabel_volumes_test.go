@@ -89,10 +89,13 @@ func (f fakeRelabelKube) MergePatch(context.Context, string, any) error        {
 type fakeLinodeVols struct {
 	vols      []map[string]any
 	updateErr error
+	listErr   error
 	renamed   map[uint64]string
 }
 
-func (f *fakeLinodeVols) ListVolumes(context.Context) ([]map[string]any, error) { return f.vols, nil }
+func (f *fakeLinodeVols) ListVolumes(context.Context) ([]map[string]any, error) {
+	return f.vols, f.listErr
+}
 func (f *fakeLinodeVols) UpdateVolumeLabel(_ context.Context, id uint64, label string) error {
 	if f.updateErr != nil {
 		return f.updateErr
