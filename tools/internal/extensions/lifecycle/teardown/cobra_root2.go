@@ -76,7 +76,7 @@ func ReapVolumesCmd() *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVar(&region, "region", "", "scope to one Linode region (e.g. us-ord)")
-	f.StringVar(&env, "env", "", "deployment name (REGION_SHORT) whose RELABELED volumes to include; without it the sweep sees only the CSI default pvc-* labels and leaks every renamed volume")
+	f.StringVar(&env, "env", "", "deployment name (REGION_SHORT) whose LEGACY relabelled volumes to include. Nothing renames volumes any more, so a cluster built after the volume-labels lane was retired needs no --env — every volume keeps its `pvc-*` label and the sweep already sees it. Still REQUIRED for a cluster built before that: without it the sweep sees only `pvc-*` and leaks every volume an older build renamed")
 	f.StringVar(&volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (the precise CI scope)")
 	f.StringVar(&tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
 	f.IntVar(&waitDetach, "wait-detach", 0, "seconds to wait for the --volume-ids Volumes to detach before sweeping (0 = no wait)")
