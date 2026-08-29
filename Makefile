@@ -61,6 +61,20 @@ RETRY := template-scripts/ci/with-retry.sh
 # at 2; CI has read both 70.1 and 69.6. A floor of 70 sits inside that variance —
 # a coin flip, not a promise. The real fix is to make the test wait until the
 # health endpoint answers before cancelling, then raise this back.
+# internal/extensions/assertions/volumes = 84, LOWERED from 85, and this is the
+# ratchet's "never down" rule being deliberately set aside rather than overlooked.
+# The package did not regress — it SHRANK. Retiring the volume-labels lane deleted
+# Relabel and its helpers, a large and unusually well-covered block, leaving behind
+# a package weighted toward I/O orchestration that is inherently harder to cover
+# (AssertEncryption, reconcileVolumeTags). A floor calibrated with Relabel present
+# is a promise about a package that no longer exists. The retirement still ADDED
+# tests rather than only removing them — the surviving lane's refusal paths, which
+# had none — so this is not coverage traded away for convenience.
+# 84 follows the banking rule above: local (macOS/arm64) reads 85.8, CI
+# (linux/amd64) read 84.4 for the same commit, and the floor belongs to the gating
+# environment. Raise it when AssertEncryption's orchestration gets a seam worth
+# testing through.
+
 COVERAGE_MINS := \
 	internal/cli=71 \
 	internal/cli/deps=41 \
@@ -119,7 +133,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/teardown=47 \
 	internal/extensions/assertions/tokeninv=74 \
 	internal/shared/terraform=100 \
-	internal/extensions/assertions/volumes=85 \
+	internal/extensions/assertions/volumes=84 \
 	internal/extensions/guards/wavehealth=82 \
 	internal/extensions/lifecycle/tofudriver=25 \
 	internal/extensions/assertions/assertobs=68 \
