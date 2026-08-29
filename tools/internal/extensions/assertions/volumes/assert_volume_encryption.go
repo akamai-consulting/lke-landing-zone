@@ -38,7 +38,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -65,14 +64,6 @@ var (
 	assertVolumeNow   = time.Now
 	assertVolumeSleep = time.Sleep
 )
-
-// csiDefaultLabelRE matches the label the Linode CSI controller assigns when it
-// has no --volume-label-prefix, which is the case on LKE-E: `pvc-<uuid-ish hex>`.
-// A Volume still carrying it has not been through the volume-labels reconciler, so
-// its identity in the Linode UI, the billing export, and the quota census is an
-// opaque uuid — nobody can tell which workload owns it without joining back
-// through Kubernetes, which is exactly what you cannot do once the cluster is gone.
-var csiDefaultLabelRE = regexp.MustCompile(`^pvc-[0-9a-f]{8,}$`)
 
 // volumeVerdict is one PV-backed Volume's compliance with the storage invariant.
 type volumeVerdict struct {
