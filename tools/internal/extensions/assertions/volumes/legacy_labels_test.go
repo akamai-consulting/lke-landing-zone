@@ -22,18 +22,11 @@ const (
 	maxLinodeLabel = 32
 )
 
-// jnum builds the json.Number the Linode client yields for numeric fields, and pv
-// builds a Linode-CSI PersistentVolume. Both moved here when the volume-labels
-// lane was retired — they describe the API and PV shapes the surviving tests in
-// this package still need, not anything the lane owned.
+// jnum builds the json.Number the Linode client yields for numeric fields. It
+// moved here when the volume-labels lane was retired: it describes the API shape
+// the surviving tests still need, not anything the lane owned. (Its companion
+// `pv` helper went with the lane — every caller was a relabeler test.)
 func jnum(n string) json.Number { return json.Number(n) }
-
-func pv(driver, handle string, claim map[string]any) map[string]any {
-	return map[string]any{"spec": map[string]any{
-		"csi":      map[string]any{"driver": driver, "volumeHandle": handle},
-		"claimRef": claim,
-	}}
-}
 
 // desiredVolumeLabel builds the target Linode label: <region>-<namespace>-<pvc>,
 // mapping every char outside Linode's [A-Za-z0-9_-] set to '-', truncating to the
