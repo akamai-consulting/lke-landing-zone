@@ -49,27 +49,53 @@ volume 17656487 (e2e-monitoring-data-lok-gester-0) monitoring/data-loki-ingester
   immutable name, so this volume will fail to mount on its next attach
 ```
 
-## Repairing one
+## Repairing one — without losing the data
 
-There is no in-place fix. The `volumeHandle` cannot be edited, and renaming the
-Volume back is only safe if you restore the label **exactly** — any drift and you
-are in the same state.
+The rule is simply that **the label half of the PV's `volumeHandle` must equal
+the Volume's actual label.** A rename breaks that equality; a repair restores it.
+There are two ways round, and neither destroys data.
 
-Restoring the original label is the least disruptive option **when you have it**
-(the gate prints it, and it is the `<label>` half of the PV's `volumeHandle`):
+First, read what the driver is looking for:
 
 ```bash
-# The label the CSI will look for, straight from the PV:
 kubectl get pv <pv> -o jsonpath='{.spec.csi.volumeHandle}'   # -> <id>-<label>
 ```
 
-Then PUT that exact label back onto the Volume via the Linode API. Verify the
-gate goes quiet before draining the node.
+**Option A — put the label back.** Least disruptive when you still have the
+original (the gate prints it, and it is the `<label>` half above). `PUT
+/v4/volumes/<id>` with that **exact** string; any drift and you are in the same
+state. Verify the gate goes quiet before draining the node.
 
-If the original label is unrecoverable, the Volume must be replaced: drain the
-workload, delete the PVC, and let the StorageClass provision a new Volume.
-For a replicated workload (OpenBao, a CNPG cluster, Loki ingesters) do this one
-replica at a time and let it re-sync.
+**Option B — rebuild the PV so the handle matches the label.** Use this when the
+original label is unrecoverable, or when you would rather keep the readable name.
+The handle is free-form text after the first dash — `ParseLinodeVolumeKey` does
+`strings.SplitN(key, "-", 2)` — and nothing validates it against the Linode API at
+mount time. So the handle can be re-stated to match reality.
+
+The `volumeHandle` field is immutable on a live PV, so this means recreating the
+PV **object**. With `persistentVolumeReclaimPolicy: Retain` the Linode Volume
+survives that, and the PVC rebinds:
+
+1. Confirm the PV is `Retain`. **If it is `Delete`, patch it to `Retain` first** —
+   deleting the PV object under `Delete` destroys the Volume.
+2. Record the full PV spec, the Volume id, and the Volume's current label.
+3. Delete the PV object. The Volume persists; the PVC goes `Pending`.
+4. Recreate the PV with `csi.volumeHandle: <id>-<current-label>` and the same
+   `claimRef` (namespace, name, and the PVC's uid) so it rebinds to the same PVC.
+5. Restart the workload and confirm it mounts.
+
+Do this **one replica at a time** on a replicated workload (OpenBao, a CNPG
+cluster, Loki ingesters), and let each re-sync before the next.
+
+> **Not a reconciler job.** Both options are deliberate, per-Volume, operator-run
+> repairs. Automating them means mutating PV objects in lockstep with Linode API
+> calls and being correct under every partial failure — which is how you get
+> half-repaired Volumes with no path back. That is the same reasoning that
+> retired the relabeler.
+
+**Replacing the Volume is the last resort, not the first.** Draining the workload
+and deleting the PVC discards the data; the options above do not. Reach for it
+only when the Volume is genuinely unwanted.
 
 ## What still uses the old names
 
@@ -84,10 +110,42 @@ Nothing writes them, but two readers still have to recognise them:
   because dropping it would change every instance's rendered output for no
   behavioural gain.
 
-## Attribution
+## Attribution — it lives in tags now
 
-Identifying which cluster owns a Volume is done with **tags**, not labels: the
-`block-storage-retain` StorageClass stamps `lke<id>` at CreateVolume, and the
-`volume-tags` reconciler heals any Volume born without them (clone/snapshot PVCs
-admitted while admission control was degraded). Tags are not part of any device
-path, so writing them is safe.
+Identifying a Volume is done with **tags**, never labels. Tags are not part of any
+device path, so writing one cannot break a mount the way renaming a Volume does.
+
+| Tag | Set by | Answers |
+|---|---|---|
+| `block-storage`, `platform-support-services` | `block-storage-retain` StorageClass, at CreateVolume | is this ours? |
+| `lke<id>` | same | which cluster? |
+| `ns-<namespace>` | `volume-tags` reconciler | which namespace? (filterable in Cloud Manager) |
+| `<namespace>-<pvc>` | same | **which workload?** |
+
+The last two carry what the old label carried. They are written after creation by
+the `volume-tags` lane, which is safe precisely because tags are inert — the lane
+echoes the Volume's existing label back on every PUT and changes only the tag set.
+
+Two differences from the old label, both improvements. Tags need not be
+account-unique, so StatefulSet replicas no longer collide (the old scheme had
+three OpenBao replicas competing for one name, and Linode rejected 17 of 17
+renames with `Must be unique`). And a wrong tag is correctable, where a wrong
+label was permanent.
+
+They do not carry `REGION_SHORT`. `lke<id>` identifies the cluster more precisely
+than a three-letter prefix, and the `volume-tags` lane deliberately takes no
+per-env configuration.
+
+### What tags cannot do
+
+A Volume leaked from a **deleted** cluster is still hard to attribute: the tags
+are only as good as the last reconcile, and the PV that mapped the Volume to a
+workload is gone with the cluster. Tags narrow this a lot — the workload name is
+right there — but nothing recovers a Volume that was never tagged.
+
+Readable **labels** would need the CSI driver to build them at CreateVolume from
+the PVC's identity, which is the only point where the label and the volumeHandle
+cannot diverge. Requested upstream in
+[linode-blockstorage-csi-driver#603](https://github.com/linode/linode-blockstorage-csi-driver/issues/603),
+with the platform half in
+[apl-core#3607](https://github.com/linode/apl-core/issues/3607).
