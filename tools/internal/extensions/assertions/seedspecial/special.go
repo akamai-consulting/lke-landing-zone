@@ -85,11 +85,23 @@ func RunResolveHarborURL(region string) error {
 		//     discovered apl-core domain), so a mismatch still means the override is
 		//     the odd one out.
 		if override != derived {
+			// The REMEDY has to differ by platform too, because on managed the
+			// self-install advice is not merely unhelpful — both halves of it are
+			// impossible. "Align vars.HARBOR_URL" cannot be done: the managed host is
+			// harbor.lke<id>.akamai-apl.net and the LKE id is new for every cluster, so
+			// any fixed value is stale the next time the cluster is rebuilt (e2e proved
+			// this — lke648798 one run, lke648821 the next). "Change the domainSuffix"
+			// cannot be done either: validateEnv rejects a managed env that sets one
+			// ("domainSuffix must NOT be set"). An operator handed two impossible
+			// instructions concludes the warning is noise and stops reading it, which
+			// is how a real divergence goes unnoticed.
 			source := "harbor.<domainSuffix>, from RenderHarborHostPatch"
+			remedy := "align vars.HARBOR_URL with it, or change the domainSuffix"
 			if e.Cluster.Bootstrap.ManagedAppPlatform {
 				source = "discovered from Harbor's own systeminfo on managed App Platform"
+				remedy = "UNSET vars.HARBOR_URL and let discovery own it — the managed host embeds the per-cluster LKE id, so no fixed value stays correct"
 			}
-			fmt.Fprintf(os.Stderr, "::warning::HARBOR_URL is %q but the in-cluster provisioner will use %q (%s — it ignores this override). CI and the cluster will disagree about the registry host — align vars.HARBOR_URL with it, or change the domainSuffix.\n", override, derived, source)
+			fmt.Fprintf(os.Stderr, "::warning::HARBOR_URL is %q but the in-cluster provisioner will use %q (%s — it ignores this override). CI and the cluster will disagree about the registry host — %s.\n", override, derived, source, remedy)
 		}
 		fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL).\n", override)
 		return nil

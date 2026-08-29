@@ -360,3 +360,90 @@ func TestExtensionDeclaresOnlyClusterRead(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveHarborURLManagedRemedyIsAchievable pins the REMEDY half of the
+// divergence warning. The cross-check above already proves the warning FIRES on
+// managed; what it never checked is whether the advice can be followed, and on
+// managed neither half of the self-install text can be:
+//
+//   - "align vars.HARBOR_URL with it" — the managed host is
+//     harbor.lke<id>.akamai-apl.net and the LKE id is new for every cluster, so a
+//     static repo variable is stale the next time the cluster is rebuilt.
+//   - "change the domainSuffix" — validateEnv rejects a managed env that sets one
+//     ("domainSuffix must NOT be set"), so this is not merely wrong but invalid.
+//
+// A warning that asks for two impossible things teaches its reader to skip it,
+// which is how a stale override survives: harbor.e2e.internal sat on the
+// infra-e2e environment from 2026-06-09 until an e2e run surfaced the mismatch.
+// The only achievable remedy is to unset the override and let discovery own it.
+func TestResolveHarborURLManagedRemedyIsAchievable(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("landingzone.yaml", `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: t }
+spec:
+  instance: { upstreamOrg: akamai-consulting, repo: o/t, forge: github, templateVersion: v0.4.0 }
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7
+      nodePool: { type: g8-dedicated-8-4, count: 3 }
+`)
+	// The real managed shape: managedAppPlatform with NO domainSuffix.
+	write("environments/e2e.yaml", `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: e2e }
+spec:
+  cluster:
+    clusterLabel: c-e2e
+    region: us-sea
+    bootstrap: { name: b-e2e, managedAppPlatform: true }
+    objectStorage: { cluster: us-sea-1 }
+`)
+	t.Chdir(dir)
+	// Discovery's single read: the otomi/otomi-api SSO_ISSUER, from which
+	// ManagedDomainFromIssuer strips the bare domain.
+	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
+		return []byte("https://keycloak.lke648821.akamai-apl.net/realms/otomi"), nil
+	})
+	t.Setenv("HARBOR_URL", "harbor.e2e.internal")
+
+	var errOut string
+	out := captureStdout(t, func() {
+		errOut = captureStderr(t, func() {
+			if err := RunResolveHarborURL("e2e"); err != nil {
+				t.Fatalf("an override must not fail the preflight: %v", err)
+			}
+		})
+	})
+	_ = out
+
+	if !strings.Contains(errOut, "::warning::") {
+		t.Fatalf("a divergent override on managed must still warn:\n%s", errOut)
+	}
+	// It must name the real host, so the reader can see what discovery found.
+	if !strings.Contains(errOut, "harbor.lke648821.akamai-apl.net") {
+		t.Errorf("warning must name the discovered host:\n%s", errOut)
+	}
+	// The achievable instruction.
+	if !strings.Contains(errOut, "UNSET vars.HARBOR_URL") {
+		t.Errorf("managed remedy must tell the operator to unset the override:\n%s", errOut)
+	}
+	// The impossible one must be gone. Guarding the whole phrase (not the bare
+	// word "domainSuffix", which legitimately appears in the self-install source
+	// label) keeps this from passing for the wrong reason.
+	if strings.Contains(errOut, "change the domainSuffix") {
+		t.Errorf("managed remedy must not advise a domainSuffix validateEnv rejects:\n%s", errOut)
+	}
+}
