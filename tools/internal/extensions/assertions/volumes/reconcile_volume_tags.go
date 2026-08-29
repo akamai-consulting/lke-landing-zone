@@ -30,6 +30,11 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
+// linodeCSIDriver identifies the Linode Block Storage CSI driver on a PV's
+// spec.csi. Lived beside the volume-labels lane until that lane was retired; it
+// is the tag reconciler and the encryption gate that need it now.
+const linodeCSIDriver = "linodebs.csi.linode.com"
+
 // volumeTagsSCParam is the CSI parameter key carrying the class's desired tag set.
 const volumeTagsSCParam = "linodebs.csi.linode.com/volumeTags"
 
@@ -133,6 +138,83 @@ var tagReconcileLinodeFn = func(token string) tagReconcileClient {
 	return capability.CloudFor(cloudBinding("volume-tags")).Client(token, 60*time.Second)
 }
 
+// maxLinodeTag is Linode's tag-length cap (the API declares minLength 3,
+// maxLength 50). Distinct from the 32-char Volume LABEL cap, and the extra
+// headroom is why <namespace>-<pvc> fits here where it did not always fit there.
+const maxLinodeTag = 50
+
+// workloadTags are the per-Volume tags carrying what the retired volume-labels
+// lane used to put in the LABEL: which workload owns this Volume.
+//
+// TAGS, NOT THE LABEL, AND THAT IS THE WHOLE POINT. The label is load-bearing —
+// the CSI resolves the block device from the label baked into the PV's immutable
+// volumeHandle, so writing it after creation permanently breaks the next mount
+// (see the retirement of relabel-volumes). NOTHING reads tags to find a device,
+// so they can be written, corrected and rewritten freely. This restores the
+// readability the label used to give without any of the risk.
+//
+// Two tags rather than one joined string, because they answer different
+// questions in the Cloud Manager: `ns-<namespace>` filters every Volume in a
+// namespace (few distinct values, one per namespace), and `<namespace>-<pvc>`
+// identifies the single workload. Unlike labels, tags need not be
+// account-unique, so StatefulSet replicas do NOT collide here — the failure that
+// made the old relabeler reject 17 of 17 renames cannot happen.
+//
+// NO REGION_SHORT, deliberately, even though the old label began with it. This
+// lane is documented as taking no per-env config, and `lke<id>` from the
+// StorageClass already identifies the cluster more precisely than a 3-letter
+// prefix did.
+func workloadTags(pv pvVolume) []string {
+	// PHASE, NOT JUST claimRef — and getting this wrong is subtle enough that this
+	// package documents it elsewhere and it was still missed here. A RELEASED PV
+	// KEEPS ITS claimRef; that is precisely what makes it Released rather than
+	// Available. So a claimRef test alone admits every leaked Retain Volume from
+	// every previous incarnation of a StatefulSet pod, and each one would be
+	// stamped with the LIVE workload's identity — three `harbor-otomi-db-1` tags
+	// pointing at one live Volume and two corpses, which destroys the single thing
+	// these tags are for. Phase is carried on pvVolume for exactly this test.
+	if pv.Phase != "" && pv.Phase != "Bound" {
+		return nil
+	}
+	if pv.Namespace == "" || pv.PVC == "" {
+		return nil // no claim at all: nothing to name
+	}
+	return []string{
+		fitLinodeTag("ns-" + pv.Namespace),
+		fitLinodeTag(pv.Namespace + "-" + pv.PVC),
+	}
+}
+
+// fitLinodeTag sanitizes to the charset Linode accepted for Volume labels
+// ([A-Za-z0-9_-], the safe subset) and squeezes to maxLinodeTag by dropping from
+// the MIDDLE, keeping the tail.
+//
+// Keeping the tail is not cosmetic. A StatefulSet's ordinal lives on the right,
+// so truncating from the right collapses `data-platform-openbao-{0,1,2}` into one
+// string — which is exactly how the old relabeler made three replicas ask for a
+// single account-unique label and fail. Tags tolerate duplicates, so this is a
+// readability bug here rather than a breakage, but it is the same mistake and it
+// is just as easy to avoid.
+func fitLinodeTag(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if len(out) > maxLinodeTag {
+		const tailKeep = 8
+		head := maxLinodeTag - tailKeep - 1 // -1 for the joining '-'
+		tail := strings.TrimLeft(out[len(out)-tailKeep:], "-")
+		out = strings.TrimRight(out[:head], "-") + "-" + tail
+	}
+	return strings.TrimRight(out, "-")
+}
+
 type reconcileTagsResult struct{ healed, ok, missing, errors int }
 
 // reconcileVolumeTags heals each PV-backed Volume to carry every desired tag:
@@ -156,7 +238,13 @@ func reconcileVolumeTags(ctx context.Context, c tagReconcileClient, desired []st
 			r.errors++
 			continue
 		}
-		merged, changed := linode.MergeTags(linode.MapTags(vol), desired)
+		// Per-Volume tags on top of the class's static set. A fresh slice: append
+		// onto `desired` would scribble into the caller's backing array and leak
+		// one Volume's workload tags onto the next.
+		want := make([]string, 0, len(desired)+2)
+		want = append(want, desired...)
+		want = append(want, workloadTags(pv)...)
+		merged, changed := linode.MergeTags(linode.MapTags(vol), want)
 		if !changed {
 			r.ok++
 			continue

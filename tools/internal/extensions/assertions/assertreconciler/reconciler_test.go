@@ -281,10 +281,10 @@ func TestLanesFromDeploymentArgs(t *testing.T) {
 	got := lanesFromDeploymentArgs([]string{
 		"reconcile", "--metrics-addr=:8080",
 		"--reconcile-argo-nudge", "--reconcile-sc-demote=true",
-		"--reconcile-volume-labels", "--reconcile-volume-tags=false",
+		"--reconcile-volume-tags", "--reconcile-cidr-firewall=false",
 		"--reconcile-unknown-future-lane",
 	})
-	want := []string{"argo-nudge", "observe", "sc-demote", "volume-labels"}
+	want := []string{"argo-nudge", "observe", "sc-demote", "volume-tags"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -348,8 +348,31 @@ func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 		t.Fatalf("no --reconcile-* flag registrations found in %s — the scan is looking at the "+
 			"wrong file or for the wrong shape, which is how this half came to check nothing", cobraCmds)
 	}
+	// RETIRED NO-OPS are registered but enable nothing. They exist only so an
+	// upgrade that lands a new image against a manifest still passing the old flag
+	// does not CrashLoopBackOff the pod on `unknown flag`, taking every lane down.
+	//
+	// Listing one here is NOT enough to excuse it from the census: it must also be
+	// hidden, which is the thing a genuinely-live lane could never be. That keeps
+	// this list from becoming a way to smuggle a lane past --lanes.
+	retired := map[string]string{
+		"--reconcile-volume-labels": "the volume-labels lane was retired; renaming a bound Volume breaks its next mount",
+	}
+	for flag := range retired {
+		if !strings.Contains(string(flagSrc), `MarkHidden("`+strings.TrimPrefix(flag, "--")+`")`) {
+			t.Errorf("%s is listed as a retired no-op but is not MarkHidden — a flag that still "+
+				"advertises itself is indistinguishable from a live lane", flag)
+		}
+		if _, ok := reconcileFlagLane[flag]; ok {
+			t.Errorf("%s is both retired and mapped to a lane — one of the two is wrong", flag)
+		}
+	}
+
 	for _, m := range matches {
 		flag := "--" + m[1]
+		if _, ok := retired[flag]; ok {
+			continue
+		}
 		if _, ok := reconcileFlagLane[flag]; !ok {
 			t.Errorf("reconcile.go registers %s but reconcileFlagLane has no entry — "+
 				"the lane it enables will be silently excluded from assert-reconciler --lanes", flag)
@@ -374,13 +397,13 @@ func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
 
 func TestEvalLaneFreshness(t *testing.T) {
 	now := time.Unix(1_720_010_000, 0)
-	expected := []string{"observe", "apl-overlay", "volume-labels", "ghost"}
+	expected := []string{"observe", "apl-overlay", "volume-tags", "ghost"}
 	lastSuccess := map[string]float64{
-		"observe":       float64(now.Add(-20 * time.Second).Unix()), // 30s cadence → fine
-		"apl-overlay":   float64(now.Add(-2 * time.Hour).Unix()),    // 300s cadence → stale
-		"volume-labels": float64(now.Add(-30 * time.Minute).Unix()), // 3600s cadence → fine
+		"observe":     float64(now.Add(-20 * time.Second).Unix()), // 30s cadence → fine
+		"apl-overlay": float64(now.Add(-2 * time.Hour).Unix()),    // 300s cadence → stale
+		"volume-tags": float64(now.Add(-30 * time.Minute).Unix()), // 3600s cadence → fine
 	}
-	intervals := map[string]float64{"observe": 30, "apl-overlay": 300, "volume-labels": 3600}
+	intervals := map[string]float64{"observe": 30, "apl-overlay": 300, "volume-tags": 3600}
 
 	got := evalLaneFreshness(expected, lastSuccess, intervals, now, 10, defaultLaneInterval)
 	byLane := map[string]laneVerdict{}
@@ -390,9 +413,9 @@ func TestEvalLaneFreshness(t *testing.T) {
 	if byLane["observe"].FailWhy != "" {
 		t.Errorf("observe should be fresh: %s", byLane["observe"].FailWhy)
 	}
-	if byLane["volume-labels"].FailWhy != "" {
+	if byLane["volume-tags"].FailWhy != "" {
 		t.Errorf("a slow lane inside its OWN budget must pass — judging every lane on one cadence is the bug: %s",
-			byLane["volume-labels"].FailWhy)
+			byLane["volume-tags"].FailWhy)
 	}
 	if byLane["apl-overlay"].FailWhy == "" {
 		t.Error("a 300s lane silent for 2h must be stale")
@@ -430,7 +453,7 @@ func TestRunAssertReconcilerFailsOnDeadLane(t *testing.T) {
 	]}}`)
 	intervals := []byte(`{"status":"success","data":{"resultType":"vector","result":[
 	  {"metric":{"reconciler":"observe"},"value":[1,"30"]},
-	  {"metric":{"reconciler":"volume-labels"},"value":[1,"3600"]}
+	  {"metric":{"reconciler":"volume-tags"},"value":[1,"3600"]}
 	]}}`)
 
 	orig := deps.WithPrometheus
@@ -449,13 +472,13 @@ func TestRunAssertReconcilerFailsOnDeadLane(t *testing.T) {
 	}
 	stubExecCombined(t, "")
 
-	// volume-labels is enabled but has no last-success series — a dead lane.
+	// volume-tags is enabled but has no last-success series — a dead lane.
 	err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", true,
-		[]string{"observe", "volume-labels"}, 10, 0, time.Millisecond)
+		[]string{"observe", "volume-tags"}, 10, 0, time.Millisecond)
 	if err == nil {
 		t.Fatal("a dead lane must fail the gate even while up=1 and leader=1")
 	}
-	if !strings.Contains(err.Error(), "volume-labels") {
+	if !strings.Contains(err.Error(), "volume-tags") {
 		t.Errorf("the failure must name the dead lane, got %v", err)
 	}
 }

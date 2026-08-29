@@ -188,8 +188,17 @@ func TestJudgeVolume_Label(t *testing.T) {
 		if !strings.Contains(v.problem(), "RENAMED") {
 			t.Errorf("problem should name the rename, got %q", v.problem())
 		}
-		if !v.healable() {
-			t.Error("a label violation must be healable; only encryption is final")
+		// FINAL, NOT HEALABLE — and this assertion used to say the opposite.
+		//
+		// It was right when a bad label meant "the volume-labels lane has not
+		// renamed it YET": waiting was the remedy, so the gate polled. Inverting the
+		// verdict above without inverting this left the gate burning its whole heal
+		// budget re-listing the Linode API for a condition nothing can heal, then
+		// warning that a lane which no longer exists "did not heal them in time".
+		// Drift from the volumeHandle is permanent: nothing renames Volumes now, and
+		// the handle cannot change.
+		if v.healable() {
+			t.Error("handle drift is final — polling cannot fix it, and waiting only delays the verdict")
 		}
 	})
 

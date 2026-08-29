@@ -790,10 +790,15 @@ jobs:
 
       # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
       # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
-      # ownership tag, and have been renamed off the CSI default pvc-<uuid> to a
-      # readable <region>-<ns>-<pvc> (an opaque uuid is unattributable in the Linode
-      # UI, the billing export and the quota census — the places you look once the
-      # cluster is gone). Checks the Volume's own `encryption` field, not the PVC's
+      # ownership tag, and still wear the label named in its PV's volumeHandle.
+      # THAT LAST ONE IS THE OPPOSITE OF WHAT IT USED TO BE: this once required the
+      # Volume to have been RENAMED off the CSI default pvc-<uuid> to a readable
+      # <region>-<ns>-<pvc>. That rename is what breaks the Volume — the CSI
+      # resolves the device path from the label in the IMMUTABLE volumeHandle, so a
+      # renamed Volume fails to mount on its next attach and never recovers. A
+      # `pvc-<uuid>` label is now the CORRECT state; readability lives in Volume
+      # TAGS (ns-<namespace>, <namespace>-<pvc>), which no device lookup reads.
+      # Checks the Volume's own `encryption` field, not the PVC's
       # storageClassName: the class name is a PROXY, and it was a satisfied proxy
       # the entire time a managed cluster provisioned 13 of 16 PVCs unencrypted.
       #

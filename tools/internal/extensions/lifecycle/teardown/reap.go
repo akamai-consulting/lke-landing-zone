@@ -329,9 +329,15 @@ func ReapVolumes(ctx context.Context, client *linode.Client, o ReapOpts, del fun
 		// weeks. Say what was skipped and what would widen the net.
 		fmt.Printf("  none matched the filter (%d Volume(s) skipped)\n", skipped)
 		if o.Env == "" {
-			fmt.Println(color.Dim("  NOTE: LLZ's volume-labels reconciler renames bound volumes to"))
-			fmt.Println(color.Dim("        <deployment>-<namespace>-<pvc>, which no longer start with \"pvc-\"."))
-			fmt.Println(color.Dim("        Pass --env <deployment> (e.g. --env e2e) to include those."))
+			// PAST TENSE, deliberately. The volume-labels lane is retired, so nothing
+			// renames volumes any more and a cluster built since then has none of
+			// these. Left in place because clusters built BEFORE it still do, and
+			// this hint is the only thing standing between them and a silent leak —
+			// but written so it does not send someone hunting a reconciler that no
+			// longer exists.
+			fmt.Println(color.Dim("  NOTE: builds before the volume-labels lane was retired renamed bound"))
+			fmt.Println(color.Dim("        volumes to <deployment>-<namespace>-<pvc>, which do not start with"))
+			fmt.Println(color.Dim("        \"pvc-\". On such a cluster, pass --env <deployment> to include them."))
 		}
 	}
 	return nil

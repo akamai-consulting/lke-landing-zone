@@ -29,11 +29,13 @@ package assertreconciler
 //                    ingress or an open hole depending on which key went blank.
 //
 // NOT covered here, deliberately:
-//   - volume-labels / volume-tags: their invariants (no Volume left named
-//     pvc-<uuid>, every Volume ownership-tagged) are asserted against the LINODE
-//     API by assert-volume-encryption, which already holds that client and that
-//     heal budget. Two gates asserting the same invariant differently is how they
-//     drift apart.
+//   - volume-tags: its invariant (every Volume ownership-tagged, and no Volume
+//     renamed away from the label in its PV's volumeHandle) is asserted against
+//     the LINODE API by assert-volume-encryption, which already holds that client
+//     and that heal budget. Two gates asserting the same invariant differently is
+//     how they drift apart. NOTE the label half used to read the other way round —
+//     it demanded that Volumes had been RENAMED off `pvc-<uuid>` — until that
+//     rename turned out to be what breaks the CSI's device lookup.
 //   - apl-overlay / es-store-recovery: their effects land in a git repo and in
 //     ExternalSecret resync timing respectively. Neither has a cheap in-cluster
 //     invariant that is not just a restatement of the lane's own metric, so they

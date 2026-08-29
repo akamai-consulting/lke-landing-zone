@@ -16,19 +16,19 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `assert-storage` declaration.
 //
-// THREE BINDINGS, and it is the first extension with more than one — so it is also
-// the first to exercise the pairing pattern the catalog calls its strongest
-// structural signal, and the first where `Extension.Grants()`'s derived union says
-// something different from any single binding.
+// TWO BINDINGS. It was three until the volume-labels invariant was retired —
+// renaming a bound Volume is what breaks the CSI's device lookup — and the pairing
+// it demonstrated survives in the two that remain: a read-only assertion and a
+// mutating invariant over the same resource, where `Extension.Grants()`'s derived
+// union says something different from either binding alone.
 //
 //	assertion:verified  [cluster-read, cloud-read]   assert-volume-encryption
 //	invariant:operating [cluster-read, cloud-mutate] volume-tags   (named)
-//	invariant:operating [cluster-read, cloud-mutate] volume-labels (named)
 //
-// WHY THE MUTATING HALVES ARE INVARIANTS AND NOT PART OF THE ASSERTION. This is
-// the re-modelling working. `reconcile-volume-tags` and `relabel-volumes` are wired
-// into `reconcile.go` as continuous reconciler lanes: they run in-pod, forever,
-// and they PUT tags and labels onto Linode Volumes. Folding them into the assertion
+// WHY THE MUTATING HALF IS AN INVARIANT AND NOT PART OF THE ASSERTION. This is
+// the re-modelling working. `reconcile-volume-tags` is wired
+// into `reconcile.go` as a continuous reconciler lane: it runs in-pod, forever,
+// and PUTs tags onto Linode Volumes. Folding it into the assertion
 // would have required an assertion that holds `cloud-mutate` — which the validator
 // refuses, correctly, because an assertion that mutates what it measures cannot be
 // trusted about what it found. Declared separately, each binding is judged on what
@@ -83,15 +83,6 @@ func Extension() extension.Extension {
 				// tags) are invisible to the billing and quota census until this runs.
 				Kind:   extension.Invariant,
 				Name:   "volume-tags",
-				State:  extension.Operating,
-				Grants: append(readCluster, extension.CloudMutate),
-			},
-			{
-				// The relabeler. A `pvc-<uuid>` label is the Volume's identity in the
-				// Linode UI, the billing export and the quota census; once the cluster
-				// is gone nothing can attribute it.
-				Kind:   extension.Invariant,
-				Name:   "volume-labels",
 				State:  extension.Operating,
 				Grants: append(readCluster, extension.CloudMutate),
 			},

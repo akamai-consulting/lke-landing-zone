@@ -132,9 +132,10 @@ func TestReconcileTagsHealsMissingTags(t *testing.T) {
 	if err := ReconcileTags(context.Background(), Deps{Token: "tok", Kube: kube}, DefaultTagsSC); err != nil {
 		t.Fatalf("ReconcileTags: %v", err)
 	}
+	// The class's desired set PLUS the per-workload tags for this PV's claim.
 	got := c.puts["17"]
-	if len(got) != len(wantTags) {
-		t.Fatalf("PUT tags = %v, want the full desired set %v", got, wantTags)
+	if len(got) != len(wantTags)+2 {
+		t.Fatalf("PUT tags = %v, want the desired set %v plus the two workload tags", got, wantTags)
 	}
 }
 

@@ -49,8 +49,6 @@ type reconcileFlags struct {
 	argoNudgeResync     int
 	reconcileCidrFW     bool
 	cidrFWResync        int
-	reconcileVolLabels  bool
-	volLabelsResync     int
 	reconcileVolTags    bool
 	volTagsResync       int
 	reconcileLinodeCred bool
@@ -80,8 +78,6 @@ type reconcileOpts struct {
 	argoNudgeResync     time.Duration
 	reconcileCidrFW     bool
 	cidrFWResync        time.Duration
-	reconcileVolLabels  bool
-	volLabelsResync     time.Duration
 	reconcileVolTags    bool
 	volTagsResync       time.Duration
 	reconcileSCDemote   bool
@@ -124,7 +120,7 @@ func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Cont
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
-	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels || o.reconcileVolTags ||
+	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolTags ||
 		o.reconcileSCDemote || o.reconcileLinodeCred ||
 		o.reconcileESRecovery || o.reconcileAplOverlay
 }
@@ -410,27 +406,6 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// token is seeded, so the arrival kick is what makes the first pass run.
 			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/nodes", "", func(kube.WatchEvent) error {
-					onEvent()
-					return nil
-				})
-			}),
-		})
-	}
-	if o.reconcileVolLabels {
-		recs = append(recs, reconciler{
-			name:     "volume-labels",
-			ext:      "assert-storage",
-			binding:  "volume-labels",
-			interval: o.volLabelsResync,
-			// Go port of the linode-volume-labeler relabel.sh (`ci relabel-volumes`);
-			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
-			// Volume to relabel, so watch PersistentVolumes.
-			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRelabelVolumes(ctx) })),
-			// linodeWatch: on a cold bootstrap every PV event fires BEFORE the token
-			// is seeded, so without the token-arrival kick these Volumes keep their
-			// pvc-<uuid> labels until the 1h resync floor. See withLinodeTokenWait.
-			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {
-				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})

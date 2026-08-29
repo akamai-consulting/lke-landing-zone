@@ -106,9 +106,14 @@ func TestReconcileVolumeTags(t *testing.T) {
 	if r.healed != 2 || r.ok != 1 || r.missing != 1 || r.errors != 0 {
 		t.Fatalf("result = %+v, want healed=2 ok=1 missing=1", r)
 	}
-	if got := strings.Join(f.puts["2"], ","); got != "block-storage,platform-support-services,lke123" {
+	// Volume 2's PV names a claim, so it also gets the per-workload tags that
+	// carry what the retired label used to: which workload owns this Volume.
+	if got := strings.Join(f.puts["2"], ","); got != "block-storage,platform-support-services,lke123,ns-ns,ns-c" {
 		t.Errorf("clone heal PUT = %q", got)
 	}
+	// Volume 3's PV carries no claimRef, so there is no workload to name and it
+	// gets the class tags only — proof the per-workload tags are derived per PV
+	// and do not leak from the previous one.
 	if got := strings.Join(f.puts["3"], ","); got != "block-storage,platform-support-services,lke123" {
 		t.Errorf("partial heal PUT = %q (existing first, missing appended)", got)
 	}

@@ -107,7 +107,7 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 // provisions, before anything renames it.
 //
 // IT IS NOT ENOUGH ON ITS OWN. LLZ's volume-labels reconciler (a PV watch in
-// llz-reconciler, `llz ci relabel-volumes`) renames every bound volume to
+// llz-reconciler, the retired `relabel-volumes` verb) renamed every bound volume to
 // <REGION_SHORT>-<namespace>-<pvc>, e.g. `e2e-harbor-harbor-otomi-db-1`. From the
 // moment that reconciler landed (2026-07-05), matching only this prefix matched
 // NOTHING on any converged cluster — the reaper reported "none matched the
@@ -272,7 +272,18 @@ func (c *Client) ListFirewalls(ctx context.Context) ([]map[string]any, error) {
 
 // UpdateVolumeLabel PUTs a new UI label onto a Linode Volume. A 404 — the volume
 // was deleted out-of-band while a PV still references it — is treated as success
-// (nothing to relabel), matching relabel.sh's skip-404 behavior.
+// (nothing to relabel).
+//
+// NO PRODUCTION CALLER, AND DO NOT GIVE IT ONE CASUALLY. This is the primitive
+// the retired volume-labels lane used, and calling it on a Volume that backs a
+// live PV BREAKS THAT VOLUME PERMANENTLY: the Linode CSI resolves the device path
+// from the label baked into the PV's immutable volumeHandle, so a renamed Volume
+// fails MountDevice on its next attach and never recovers.
+//
+// It is kept because it is exactly what the documented REPAIR needs — restoring a
+// drifted Volume's ORIGINAL label, the `<label>` half of its volumeHandle, which
+// `llz ci assert-volume-encryption` prints. That is an operator-run, one-Volume,
+// deliberate act. See docs/runbooks/volume-labels.md.
 func (c *Client) UpdateVolumeLabel(ctx context.Context, id uint64, label string) error {
 	url := fmt.Sprintf("%s/v4/volumes/%d", c.base, id)
 	resp, err := c.put(ctx, url, map[string]string{"label": label})

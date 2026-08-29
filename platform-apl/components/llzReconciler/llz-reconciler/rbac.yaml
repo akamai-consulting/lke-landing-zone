@@ -9,13 +9,13 @@
 #     observe        — nodes (readiness), clustersecretstores/openbao (ESO gauge),
 #                      cert-manager Certificates across all namespaces (cert gauge).
 #     cidr-firewall  — nodes (node → instance → firewall).
-#     volume-labels  — persistentvolumes (map bound Linode-CSI Volumes; renames go
-#                      to the Linode API, not Kubernetes — read-only here).
-#     volume-tags    — no grants of its OWN, deliberately. It reads
-#                      persistentvolumes (the volume-labels rule) and the desired
-#                      tag set from the block-storage-retain StorageClass (the
-#                      sc-demote rule's get/list); everything it WRITES goes to the
-#                      Linode API, not Kubernetes.
+#     volume-tags    — persistentvolumes (map bound Linode-CSI Volumes), plus the
+#                      desired tag set from the block-storage-retain StorageClass
+#                      (via the sc-demote rule's get/list). Everything it WRITES
+#                      goes to the Linode API, not Kubernetes, so its only
+#                      Kubernetes grants are reads. The persistentvolumes rule was
+#                      granted for the retired volume-labels lane and is now this
+#                      lane's own.
 #     sc-demote      — storageclasses get/list/watch/patch (StorageClass is a
 #                      cluster-scoped resource; keep LKE's Flux-promoted retain
 #                      class non-default).
@@ -47,7 +47,7 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # volume-labels: read PVs to map bound Linode-CSI volumes (renames go to Linode).
+  # volume-tags: read PVs to map bound Linode-CSI volumes (tag writes go to Linode).
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]

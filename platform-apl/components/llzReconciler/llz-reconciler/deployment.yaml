@@ -62,10 +62,6 @@ spec:
           # by the chart's allowedClientPods entry; the `reconciler` k8s-auth role
           # ships from bao-configure). Idempotent/read-only alongside the CronJobs,
           # which stay until each proves out.
-          # volume-labels: renames bound Linode-CSI Volumes to
-          # <REGION_SHORT>-<ns>-<pvc>. Needs LINODE_TOKEN (ESO Secret) + REGION_SHORT
-          # (per-env, filled by the render-patch). Leader-gated + idempotent
-          # alongside the linode-volume-labeler CronJob.
           # cidr-firewall (this batch): the discover-firewall-config logic — reads
           # NODE_NAME (downward API) → the node's Linode instance → its firewall/VPC,
           # plus LINODE_TOKEN. Leader-gated + idempotent alongside the cidrFirewall
@@ -104,7 +100,6 @@ spec:
             - --reconcile-sc-demote
             - --reconcile-openbao-gauges
             - --reconcile-token-inventory
-            - --reconcile-volume-labels
             # volume-tags: heal the block-storage-retain StorageClass's volumeTags —
             # this cluster's `lke<id>` ownership tag included — onto any Linode Volume
             # that lacks them. A class stamps its tags inside CreateVolume, so this lane
@@ -139,8 +134,9 @@ spec:
             # its workload is re-rolled. Tags are healable; bytes are not.
             #
             # Needs only LINODE_TOKEN (read lazily from the optional volume below) and
-            # no new RBAC: persistentvolumes read comes from the volume-labels grant,
-            # storageclasses get/list from sc-demote. Same PV watch as volume-labels.
+            # no new RBAC: persistentvolumes read and the PV watch were granted for
+            # the retired volume-labels lane and are now this lane's own;
+            # storageclasses get/list come from sc-demote.
             - --reconcile-volume-tags
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
@@ -178,9 +174,13 @@ spec:
             # (LINODE_TOKEN is no longer an env secretKeyRef: the linode lanes
             # lazily read the optional linode-api-token volume below — env would
             # hold the pod hostage pre-store AND never see a rotation.)
-            # volume-labels reconciler: the per-env label prefix. REGION_SHORT is
-            # a placeholder overwritten per-env by llz-reconciler-env-patch.yaml
-            # (llz render).
+            # REGION_SHORT was the retired volume-labels lane's label prefix, and
+            # NOTHING IN THIS POD READS IT ANY MORE. Kept deliberately: it is still
+            # the prefix `llz reap` derives to see Volumes that older builds
+            # relabelled, and dropping it here would change every instance's
+            # rendered output for no behavioural gain. Removable once no cluster
+            # carries a relabelled Volume. Placeholder overwritten per-env by
+            # llz-reconciler-env-patch.yaml (llz render).
             - name: REGION_SHORT
               value: "REPLACE_ME"
             # cidr-firewall reconciler: the node this pod lands on identifies the
@@ -320,7 +320,7 @@ spec:
         # The controls that actually protect this key are RBAC on the Secret and
         # etcd encryption at rest, not the in-pod file mode.
         # optional, matching the openbao-ca bundle above: this pod runs many
-        # lanes that never touch OpenBao (argo-nudge, sc-demote, volume-labels,
+        # lanes that never touch OpenBao (argo-nudge, sc-demote, volume-tags,
         # cidr-firewall), and wedging all of them in ContainerCreating because an
         # OpenBao identity has not issued yet would be a worse failure than the
         # OpenBao lanes erroring. inClusterBaoHTTPClient retries rather than

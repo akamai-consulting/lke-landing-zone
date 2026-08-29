@@ -17,7 +17,7 @@ are read by operators who do not have this repo checked out, often mid-incident.
 | A recreated cluster will not converge; the values repo still has the old `apl-<env>` branch | [apl-branch-recreate-wedge](apl-branch-recreate-wedge.md) |
 | apl-core is not picking up values, or you need to know how values reach the cluster | [apl-values-propagation](apl-values-propagation.md) |
 | Leftover Linode Volumes after a destroy, or a bill for storage nothing is using | [orphan-volume-cleanup](orphan-volume-cleanup.md) |
-| Volumes in the Linode UI are all `pvc-<uuid>` and you cannot tell them apart | [volume-labels](volume-labels.md) |
+| A Volume's label differs from its PV's `volumeHandle` (it will fail to mount on the next attach) | [volume-labels](volume-labels.md) |
 | An apply is refused because it would replace your Object Storage buckets | [bucket-prefix-rename](bucket-prefix-rename.md) |
 | An `llz ci assert-*` lane is red in release-e2e and the log is not enough | [e2e-lane-diagnostics](e2e-lane-diagnostics.md) |
 

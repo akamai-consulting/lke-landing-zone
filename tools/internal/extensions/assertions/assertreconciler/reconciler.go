@@ -57,7 +57,6 @@ const alwaysOnReconcilerLane = "observe"
 var reconcileFlagLane = map[string]string{
 	"--reconcile-argo-nudge":        "argo-nudge",
 	"--reconcile-cidr-firewall":     "cidr-firewall",
-	"--reconcile-volume-labels":     "volume-labels",
 	"--reconcile-volume-tags":       "volume-tags",
 	"--reconcile-sc-demote":         "sc-demote",
 	"--reconcile-linode-creds":      "linode-creds",
@@ -130,7 +129,7 @@ type laneVerdict struct {
 // recently enough. Pure.
 //
 // Each lane is judged against its OWN cadence: apl-overlay runs every 300s and
-// volume-labels has a 3600s resync floor, so one global budget would either
+// volume-tags has a 3600s resync floor, so one global budget would either
 // excuse a dead fast lane or condemn a healthy slow one. That is the same
 // per-lane join the LLZReconcilerStale rule does; this reuses the reasoning
 // rather than inventing a second definition of "stale".

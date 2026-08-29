@@ -33,11 +33,11 @@ func withGHSetSecret(t *testing.T, fail func(name string) error) *[]string {
 	return calls
 }
 
-const initJSON = `{"recovery_keys_b64":["uk1","uk2","uk3","uk4","uk5"],"root_token":"s.root"}`
+const initJSON = `{"recovery_keys_b64":["uk1-fixture-not-a-real-recovery-share","uk2-fixture-not-a-real-recovery-share","uk3-fixture-not-a-real-recovery-share","uk4-fixture-not-a-real-recovery-share","uk5-fixture-not-a-real-recovery-share"],"root_token":"s.root-fixture-not-a-real-root-token"}`
 
 func TestParseBaoInit(t *testing.T) {
 	r, err := ParseInit(initJSON)
-	if err != nil || r.RootToken != "s.root" || len(r.RecoveryKeysB64) != 5 {
+	if err != nil || r.RootToken != "s.root-fixture-not-a-real-root-token" || len(r.RecoveryKeysB64) != 5 {
 		t.Fatalf("ParseInit = (%+v, %v), want full payload", r, err)
 	}
 	for _, bad := range []string{
@@ -72,7 +72,20 @@ func initHarness(t *testing.T, failSet func(name string) error) (string, *[]stri
 
 // allInitSecrets is every value `operator init` mints. NOTHING in this list may
 // appear in the job summary on any path — see the next test for why.
-var allInitSecrets = []string{"uk1", "uk2", "uk3", "uk4", "uk5", "s.root"}
+//
+// THE VALUES ARE LONG ON PURPOSE. They used to be `uk1`..`uk5`, and the escrow
+// path writes RSA CIPHERTEXT into the summary — so a 3-character needle hits a
+// few hundred characters of random base64 by chance often enough to fail on
+// repetition (5/5 at -count=50, while a single run passes). That made the
+// disclosure gate look flaky and got it treated as noise, which is the worst
+// possible fate for a test whose job is to catch leaked key material. These are
+// long enough that a chance substring match is not a thing that happens.
+//
+// AND DELIBERATELY LOW-ENTROPY. The first attempt used hex suffixes, which
+// `gitleaks` generic-api-key flagged as a real credential next to a `root_token`
+// key — a fixture that trips the secret scanner is its own kind of noise. Plain
+// words carry the same collision-resistance with none of the entropy.
+var allInitSecrets = []string{"uk1-fixture-not-a-real-recovery-share", "uk2-fixture-not-a-real-recovery-share", "uk3-fixture-not-a-real-recovery-share", "uk4-fixture-not-a-real-recovery-share", "uk5-fixture-not-a-real-recovery-share", "s.root-fixture-not-a-real-root-token"}
 
 func TestRunCIBaoInit(t *testing.T) {
 	dir, ghCalls := initHarness(t, nil)
@@ -82,7 +95,7 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 
 	env, _ := os.ReadFile(filepath.Join(dir, "GITHUB_ENV"))
-	wantEnv := "OPENBAO_ROOT_TOKEN=s.root\nRECOVERY_K1=uk1\nRECOVERY_K2=uk2\nRECOVERY_K3=uk3\n"
+	wantEnv := "OPENBAO_ROOT_TOKEN=s.root-fixture-not-a-real-root-token\nRECOVERY_K1=uk1-fixture-not-a-real-recovery-share\nRECOVERY_K2=uk2-fixture-not-a-real-recovery-share\nRECOVERY_K3=uk3-fixture-not-a-real-recovery-share\n"
 	if string(env) != wantEnv {
 		t.Errorf("GITHUB_ENV = %q, want %q", env, wantEnv)
 	}
@@ -92,12 +105,12 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 	// Shares 4 and 5 have no other home on this path, so they must be persisted.
 	want := []string{
-		"OPENBAO_RECOVERY_KEY_1@infra-primary=uk1",
-		"OPENBAO_RECOVERY_KEY_2@infra-primary=uk2",
-		"OPENBAO_RECOVERY_KEY_3@infra-primary=uk3",
-		"OPENBAO_ROOT_TOKEN@infra-primary=s.root",
-		"OPENBAO_RECOVERY_KEY_4@infra-primary=uk4",
-		"OPENBAO_RECOVERY_KEY_5@infra-primary=uk5",
+		"OPENBAO_RECOVERY_KEY_1@infra-primary=uk1-fixture-not-a-real-recovery-share",
+		"OPENBAO_RECOVERY_KEY_2@infra-primary=uk2-fixture-not-a-real-recovery-share",
+		"OPENBAO_RECOVERY_KEY_3@infra-primary=uk3-fixture-not-a-real-recovery-share",
+		"OPENBAO_ROOT_TOKEN@infra-primary=s.root-fixture-not-a-real-root-token",
+		"OPENBAO_RECOVERY_KEY_4@infra-primary=uk4-fixture-not-a-real-recovery-share",
+		"OPENBAO_RECOVERY_KEY_5@infra-primary=uk5-fixture-not-a-real-recovery-share",
 	}
 	if strings.Join(*ghCalls, " ") != strings.Join(want, " ") {
 		t.Errorf("gh calls = %v, want %v", *ghCalls, want)
@@ -206,7 +219,10 @@ func TestRunCIBaoInitEscrowDeliversCiphertextOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("block %d did not decrypt: %v", i+1, err)
 		}
-		if want := fmt.Sprintf("uk%d", i+1); string(got) != want {
+		// From allInitSecrets, not re-derived with a format string: the two used to
+		// state the fixture names independently, so lengthening them in one place
+		// broke the other.
+		if want := allInitSecrets[i]; string(got) != want {
 			t.Errorf("block %d = %q, want %q", i+1, got, want)
 		}
 		// The same ciphertext must ALSO be inline in the summary: the artifact

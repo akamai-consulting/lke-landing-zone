@@ -125,4 +125,4 @@ orphans), drop into the Linode UI and delete by hand.
 
 ## See also
 
-- [`volume-labels.md`](volume-labels.md) — the labeler itself: what it renames, when, and why a Volume may still be `pvc-*` an hour after it was bound.
+- [`volume-labels.md`](volume-labels.md) — why the relabeler is retired, and how to find and repair Volumes older builds renamed (they fail to mount on their next attach).

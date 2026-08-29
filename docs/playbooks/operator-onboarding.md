@@ -326,7 +326,7 @@ Skim each [`docs/runbooks/`](../runbooks/) file once so you know what exists and
 - `lke-admin-rotation.md` — rotating LKE-Enterprise admin tokens (monthly)
 - `linode-credential-rotation.md` — Linode PAT + OBJ-key rotation
 - `orphan-volume-cleanup.md` — reclaiming orphaned block-storage volumes
-- `volume-labels.md` — why a Volume is named what it is (and what that means for cleanup)
+- `volume-labels.md` — why nothing renames Volumes any more, and what to do about ones older builds did
 - `reconciler-alerts.md` — triaging `LLZReconciler*` alerts
 - `apl-values-propagation.md` — a values change that hasn't reached the cluster
 - `apl-branch-recreate-wedge.md` — the `apl-<env>` branch wedge

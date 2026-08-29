@@ -248,13 +248,10 @@ func ciCmd() *cobra.Command {
 	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
 	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps color.Green).
 	c.AddCommand(assertplatform.InstanceCustomCmd())
-	// Linode Volume relabeler — the Go port of the linode-volume-labeler
-	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
-	c.AddCommand(reconciler.RelabelVolumesCmd())
 	// Linode Volume tag-heal backstop for Volumes born without the StorageClass's
 	// lke<id> ownership tag (also runnable in-cluster by the volume-tags reconciler).
 	c.AddCommand(reconciler.ReconcileVolumeTagsCmd())
-	// The e2e GATE for the same invariant the two lanes above maintain: asserts
+	// The e2e GATE for the same invariant the lane above maintains: asserts
 	// against the Linode API that every PV-backed Volume is encrypted at rest AND
 	// carries its lke<id> ownership tag. Fails closed, including on an empty cluster.
 	c.AddCommand(reconciler.AssertVolumeEncryptionCmd())

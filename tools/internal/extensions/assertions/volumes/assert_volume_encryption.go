@@ -6,12 +6,20 @@ package volumes
 //
 //   1. ENCRYPTED at rest (the security property, and the reason for the name);
 //   2. tagged with this cluster's `lke<id>`, so `llz reap` can attribute it;
-//   3. labelled `<region>-<ns>-<pvc>` rather than the CSI's default `pvc-<uuid>`,
-//      so it is identifiable in the Linode UI, the billing export and the quota
-//      census — the places you look when the cluster is already gone.
+//   3. still wearing the label named in its PV's volumeHandle — i.e. NOT renamed.
 //
-// (1) is fixed at CreateVolume or never. (2) and (3) are applied afterwards by
-// llz-reconciler lanes, so this gate waits a bounded time for them before failing —
+// (3) IS THE REVERSE OF WHAT IT ONCE WAS. This gate used to demand the opposite:
+// that a Volume had been renamed off the CSI default `pvc-<uuid>` to a readable
+// `<region>-<ns>-<pvc>`, for identifiability in the Linode UI and the billing
+// export. That rename is what breaks the Volume — the CSI resolves the device
+// path from the label in the IMMUTABLE volumeHandle — so `pvc-<uuid>` is now the
+// correct state and drift from the handle is the violation. Readability moved to
+// Volume TAGS (`ns-<namespace>`, `<namespace>-<pvc>`), which no device lookup
+// reads.
+//
+// (1) is fixed at CreateVolume or never, and so is (3): nothing can rename a
+// Volume back into agreement automatically. (2) is applied afterwards by the
+// volume-tags llz-reconciler lane, so this gate waits a bounded time for it —
 // see volumeHealBudget.
 //
 // It asserts against the LINODE API, not against Kubernetes. That is the whole
@@ -96,7 +104,17 @@ func (v volumeVerdict) ok() bool {
 func (v volumeVerdict) healable() bool {
 	// NotReapable is a naming/predicate mismatch in code, not a pending reconcile —
 	// waiting cannot change it, so it is final like encryption.
-	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled && v.NotReapable == ""
+	//
+	// BadLabel IS FINAL TOO, and it did not used to be. When this gate demanded
+	// that Volumes had been RENAMED off the CSI default, a bad label meant "the
+	// volume-labels lane has not got to it yet" and waiting was the right answer.
+	// That leg is inverted: BadLabel now means the live label has DRIFTED from the
+	// one in the PV's immutable volumeHandle, and nothing renames Volumes any more,
+	// so no amount of polling changes it. Treating it as healable burned the whole
+	// heal budget re-listing the Linode API and then blamed a lane that no longer
+	// exists.
+	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled &&
+		v.NotReapable == "" && v.BadLabel == ""
 }
 
 // problem renders the single most important thing wrong with this Volume.
@@ -222,9 +240,11 @@ func AssertEncryption(ctx context.Context, d Deps, scName string) error {
 		scName = DefaultTagsSC
 	}
 
-	// REGION_SHORT is the volume-label prefix the relabeler uses. Optional here: when
-	// absent the label check degrades to "must not be the CSI default" rather than
-	// being skipped, because a missing env var must not silently disable a gate.
+	// REGION_SHORT is the prefix `llz reap` derives, and the one the RETIRED
+	// relabeler used to write. It no longer feeds the label check at all — that
+	// compares a Volume's live label against its PV's volumeHandle, which needs no
+	// per-env input — and is read only by the reapability leg below. Optional, so a
+	// missing env var narrows that leg rather than silently disabling the gate.
 	regionShort := os.Getenv("REGION_SHORT")
 	if regionShort == "REPLACE_ME" {
 		// The un-rendered placeholder from the reconciler manifest. Treat as unset:
@@ -301,7 +321,7 @@ func AssertEncryption(ctx context.Context, d Deps, scName string) error {
 		}
 		if pending == 0 || !assertVolumeNow().Before(deadline) {
 			if pending > 0 {
-				fmt.Printf("::warning::%d Volume(s) still missing tags/labels after %s — the volume-tags / volume-labels reconciler lanes did not heal them in time.\n",
+				fmt.Printf("::warning::%d Volume(s) still missing tags after %s — the volume-tags reconciler lane did not heal them in time.\n",
 					pending, volumeHealBudget)
 			}
 			break
@@ -360,15 +380,23 @@ func reportVolumeEncryption(d Deps, verdicts []volumeVerdict, desired []string, 
 		"destroys that volume's data: delete the owning workload, delete the PVC, re-sync",
 		"so it is recreated on a class that encrypts.",
 		"",
-		"**untagged / CSI-default label — repairable, and something should already have**",
-		"**done it.** Both are applied after CreateVolume by llz-reconciler lanes",
-		"(`--reconcile-volume-tags`, `--reconcile-volume-labels`), and this gate already",
-		"waited for them. Seeing them here means the lane is not running, not electing a",
-		"leader, or has no LINODE_TOKEN — both lanes read it lazily from the optional",
-		"`linode-api-token` Secret and silently no-op when it is absent, so check that",
-		"Secret exists before suspecting anything subtler. A `pvc-<uuid>` label is not",
-		"cosmetic: it is the Volume's identity in the Linode UI, the billing export and",
-		"the quota census, and once the cluster is deleted nothing can attribute it.",
+		"**UNTAGGED — repairable, and something should already have done it.** Tags are",
+		"applied after CreateVolume by the `--reconcile-volume-tags` llz-reconciler lane,",
+		"and this gate already waited for it. Seeing this here means the lane is not",
+		"running, not electing a leader, or has no LINODE_TOKEN — it reads the token",
+		"lazily from the optional `linode-api-token` Secret and silently no-ops when it is",
+		"absent, so check that Secret exists before suspecting anything subtler.",
+		"",
+		"**RENAMED LABEL — final, and DO NOT try to fix it by renaming.** A `pvc-<uuid>`",
+		"label is the CORRECT state: the Linode CSI resolves a Volume's device path from",
+		"the label baked into its PV's immutable volumeHandle, so a Volume whose live",
+		"label has drifted from that one cannot be mounted on its next attach — a drain,",
+		"a reschedule, an upgrade. Renaming it again only moves the target. Recover it",
+		"WITH ITS DATA by restoring the exact original label (printed above, and it is the",
+		"`<label>` half of the PV's volumeHandle), or by recreating the PV object against",
+		"`<id>-<current-label>` under Retain. See docs/runbooks/volume-labels.md.",
+		"Workload identity lives in Volume TAGS (`ns-<namespace>`, `<namespace>-<pvc>`),",
+		"which no device lookup reads.",
 		"",
 		"**If these landed on an LKE stock class** (`linode-block-storage[-retain]`), the",
 		"cause is upstream of the PVC: on managed, apl-core's `cluster.defaultStorageClass`",
