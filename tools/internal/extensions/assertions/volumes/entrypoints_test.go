@@ -78,9 +78,12 @@ func TestAssertEncryptionPassesAndFails(t *testing.T) {
 		return nil, fmt.Errorf("unexpected kubectl %v", args)
 	}
 
-	t.Run("an encrypted, tagged, renamed volume passes", func(t *testing.T) {
+	// "renamed" USED to be the compliant shape here. It is now the broken one: the
+	// compliant volume keeps the label its volumeHandle names, which is what the
+	// CSI will look the device up by on the next attach.
+	t.Run("an encrypted, tagged, un-renamed volume passes", func(t *testing.T) {
 		stubTagClient(t, &fakeTagClient{vols: map[string]map[string]any{
-			"1": {"id": jnum("1"), "label": "pri-llz-openbao-data", "encryption": "enabled", "tags": anySlice(wantTags)},
+			"1": {"id": jnum("1"), "label": "data-platform-openbao-0", "encryption": "enabled", "tags": anySlice(wantTags)},
 		}})
 		d, _ := capturingDeps()
 		d.Token, d.Kubectl = "tok", kubectl

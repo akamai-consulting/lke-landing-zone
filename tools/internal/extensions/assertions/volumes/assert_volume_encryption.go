@@ -197,16 +197,26 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort 
 	// all five claiming monitoring/storage-loki-0.
 	//
 	// They stay reapable: reap accepts the `pvc-` prefix, which is what they keep.
+	// THIS CHECK IS INVERTED FROM WHAT IT USED TO BE, and the inversion is the
+	// point. It used to demand that a bound volume had been RENAMED off the CSI
+	// default to <region>-<ns>-<pvc>, and would flag a `pvc-<uuid>` label as "the
+	// volume-labels reconciler has not renamed it". That renaming is what breaks
+	// the mount: the CSI resolves the device path from the label baked into the
+	// PV's immutable volumeHandle, so a volume renamed away from it can never be
+	// mounted again — immediately if the pod had not mounted yet, or latently on
+	// the next drain/reschedule. The old gate therefore enforced the defect and
+	// would have gone red on the fix. See relabel_volumes.go's header.
+	//
+	// So the question is no longer "was it renamed?" but "does its live label still
+	// match the one the CSI will ask for?". That catches the legacy clusters too:
+	// volumes relabelled by builds predating the fix are still unmountable, and an
+	// operator wants to know which ones before a drain finds out for them.
 	if pv.Namespace != "" && pv.PVC != "" && (pv.Phase == "" || pv.Phase == "Bound") {
 		switch {
 		case v.Label == "":
 			v.BadLabel = "Linode Volume has NO label"
-		case csiDefaultLabelRE.MatchString(v.Label):
-			v.BadLabel = fmt.Sprintf("label %q is still the CSI default pvc-<uuid> — the volume-labels reconciler has not renamed it to <region>-%s-%s", v.Label, pv.Namespace, pv.PVC)
-		case regionShort != "":
-			if want := desiredVolumeLabel(regionShort, pv.Namespace, pv.PVC); v.Label != want {
-				v.BadLabel = fmt.Sprintf("label %q != expected %q", v.Label, want)
-			}
+		case pv.HandleLabel != "" && v.Label != pv.HandleLabel:
+			v.BadLabel = fmt.Sprintf("label %q was RENAMED away from %q, the label in the PV's volumeHandle — the Linode CSI looks the device up by that immutable name, so this volume will fail to mount on its next attach (drain, reschedule, upgrade)", v.Label, pv.HandleLabel)
 		}
 	}
 	return v
