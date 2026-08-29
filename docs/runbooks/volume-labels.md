@@ -136,12 +136,25 @@ They do not carry `REGION_SHORT`. `lke<id>` identifies the cluster more precisel
 than a three-letter prefix, and the `volume-tags` lane deliberately takes no
 per-env configuration.
 
-### What tags cannot do
+### What survives a deleted cluster
 
-A Volume leaked from a **deleted** cluster is still hard to attribute: the tags
-are only as good as the last reconcile, and the PV that mapped the Volume to a
-workload is gone with the cluster. Tags narrow this a lot — the workload name is
-right there — but nothing recovers a Volume that was never tagged.
+Tags live on the Linode Volume, not on the cluster, so they outlive it.
+
+`lke<id>` is stamped by the StorageClass **at CreateVolume**, before the Volume is
+ever observable — there is no reconcile-lag window, which is exactly why `llz
+reap`'s cluster-liveness gate can key on it. So a Volume leaked from a cluster
+that no longer exists still names the cluster that made it.
+
+The per-workload tags (`ns-*`, `<namespace>-<pvc>`) are written by the
+`volume-tags` lane *after* creation, so those do have a lag window: a Volume
+created and orphaned before the lane's next pass carries `lke<id>` but no workload
+name. In practice the lane runs on every PV event, so the window is short.
+
+The one path that can produce a Volume with **no** tags at all is a clone/snapshot
+PVC admitted while admission control is degraded — the Linode CloneVolume API
+takes no tags and does not copy the source's. That is precisely what the
+`volume-tags` lane exists to heal, and a Volume orphaned inside that window is the
+genuinely unattributable case.
 
 Readable **labels** would need the CSI driver to build them at CreateVolume from
 the PVC's identity, which is the only point where the label and the volumeHandle
