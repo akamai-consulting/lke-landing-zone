@@ -266,10 +266,25 @@ default against, not something to "clean up." Version-specific notes (apl-core
   which the only alert watching it could not fire on. **Every volume already
   renamed is also a latent failure** — it works only because it is already mounted,
   and its next attach (drain, reschedule, upgrade) will not find it.
-  The relabeler no longer renames anything; `assert-volume-encryption` now flags a
-  live label that has drifted from its `volumeHandle`, which is how you find the
-  already-broken ones. Volume identity for reaping and attribution comes from
-  **tags** (`lke<id>`), which no device lookup depends on.
+  The volume-labels lane is **retired**, not merely disabled — an inert lane named
+  for a rename invites the next person to switch it back on.
+  `assert-volume-encryption` now flags a live label that has drifted from its
+  `volumeHandle`, which is how you find the already-broken ones.
+  **A drifted Volume is recoverable with its data.** The handle is free-form text
+  after the first dash (`ParseLinodeVolumeKey` does `SplitN(key, "-", 2)`) and
+  nothing validates it against the Linode API at mount time, so either restore the
+  exact original label, or delete and recreate the PV **object** with
+  `volumeHandle: <id>-<current-label>` under `Retain`. Replacing the Volume is the
+  last resort, not the first — see [volume-labels](runbooks/volume-labels.md).
+  Identity lives in **tags**, which no device lookup reads: `lke<id>` stamped by
+  the StorageClass at CreateVolume (so it is never observable untagged, which is
+  what `llz reap`'s liveness gate keys on), plus `ns-<namespace>` and
+  `<namespace>-<pvc>` written by the `volume-tags` lane to carry the per-workload
+  identity the label used to.
+  Readable labels can only be made safe by the CSI setting them at CreateVolume,
+  the one point where label and handle cannot diverge — requested upstream at
+  [csi-driver#603](https://github.com/linode/linode-blockstorage-csi-driver/issues/603)
+  and [apl-core#3607](https://github.com/linode/apl-core/issues/3607).
   Independently still true: ephemeral data — a build workspace, scratch dir,
   anything discarded with the pod — belongs in an `emptyDir`, which is node-local,
   needs no attach, and is faster. Reserve PVCs for state that must outlive the pod.
