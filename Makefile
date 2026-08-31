@@ -1239,6 +1239,9 @@ lint:
 	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \
 		$(MAKE) --no-print-directory instance-test; \
 	fi; \
+	if echo "$$CHANGED" | grep -qE '^instance-template/'; then \
+		$(MAKE) --no-print-directory managed-lock-check template-manifest-check; \
+	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \
 	fi; \
