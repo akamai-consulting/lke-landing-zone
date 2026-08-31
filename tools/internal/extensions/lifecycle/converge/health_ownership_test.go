@@ -510,6 +510,14 @@ func uncomparedGitopsShell(name string) string {
 		`"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"}}}`
 }
 
+// uncomparedGitopsShellIn is an uncompared Application that DOES name a
+// destination, so the veto is bounded to it rather than widened to every
+// platform namespace. The report has to distinguish the two.
+func uncomparedGitopsShellIn(name, ns string) string {
+	return `{"metadata":{"name":"` + name + `"},"spec":{"project":"default","syncPolicy":{"automated":{}},"destination":{"namespace":"` + ns + `"}},` +
+		`"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"}}}`
+}
+
 // hatchIstioSystemJSON is the escape hatch's Application, declaring the
 // istio-system resources that hard-failed the platform gate in the failed run.
 const hatchIstioSystemJSON = `{"metadata":{"name":"instance-custom-istio-system"},` +
@@ -717,5 +725,129 @@ func TestBoundary_ReportNamesOnlyUncomparedApplications(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("boundary line no longer says %q — it must name the condition (not compared), not just 'declares no resources':\n%s", want, out)
 		}
+	}
+
+	// THE SCOPE CLAIM, both branches. The line this replaced said "nothing in a
+	// platform namespace is demotable", which is wrong twice over: a bounded veto
+	// leaves the other platform namespaces demotable on the same poll, and the
+	// app-estate inference is off EVERYWHERE regardless — the half that left a
+	// team-namespace failure with no explanation in the report at all. A test
+	// pinning the wording is only worth having if it pins the wording that is
+	// TRUE, so both branches are asserted against a real printed report.
+	if !strings.Contains(out, "every platform namespace") {
+		t.Errorf("an uncompared Application naming NO destination bounds nothing, so the report must say the veto covers every platform namespace:\n%s", out)
+	}
+	if !strings.Contains(out, "app estate") {
+		t.Errorf("the report must also say the app-estate inference is off — otherwise a team-namespace failure gates for a reason the report never prints:\n%s", out)
+	}
+
+	// Bounded: every uncompared app names a destination, so the veto is scoped to
+	// those namespaces and the report must name them instead.
+	bounded := boundaryIndex(t, hatchIstioSystemJSON, uncomparedGitopsShellIn("harbor-harbor", "harbor"))
+	bout := captureStdout(t, func() { printHealthSummary(&health.Report{}, bounded) })
+	if strings.Contains(bout, "every platform namespace") {
+		t.Errorf("a veto bounded to harbor must NOT claim every platform namespace — istio-system still demotes on this poll:\n%s", bout)
+	}
+	if !strings.Contains(bout, "harbor") {
+		t.Errorf("a bounded veto must name the destination namespace it is bounded to:\n%s", bout)
+	}
+}
+
+// platformAppMonitoringJSON is a platform Application in a namespace the
+// caller's healthNamespaces does NOT contain — apl-core runs Loki in monitoring.
+// It is here so the inference gate below can prove the derived-from-the-cluster
+// exclusion (platformOccupied) still holds, not just the caller's list.
+const platformAppMonitoringJSON = `{"metadata":{"name":"monitoring-loki"},` +
+	`"spec":{"project":"platform-support","syncPolicy":{"automated":{}},"destination":{"namespace":"monitoring"}},` +
+	`"status":{"sync":{"status":"Synced"},"health":{"status":"Progressing"},"resources":[` +
+	`{"group":"apps","kind":"StatefulSet","namespace":"monitoring","name":"loki-ingester","status":"Synced"}]}}`
+
+// TestBoundary_ComparedEmptyAppTurnsTheAppEstateInferenceBackOn is the gate for
+// the HALF OF THE BLAST RADIUS THAT IS NOT THE VETO.
+//
+// Owns switches the app-estate namespace inference off wholesale while
+// platformUnresolved is non-empty (`if len(i.platformUnresolved) > 0 { return
+// false }`) — it is gated on the same list the veto is. So emptying that list
+// does two things, not one: it lifts the per-namespace veto AND it turns the
+// inference on. On gsap-apl the inference had never run, because those four
+// permanently-Synced shells kept the list non-empty forever; this change is the
+// first time an undeclared resource in team-gsap or crossplane-system is
+// demoted there.
+//
+// The other three gates in this file all use istio-system — a PLATFORM
+// namespace, where the inference is excluded by definition — so none of them
+// reaches this arm. This one uses a non-platform namespace precisely so it does.
+func TestBoundary_ComparedEmptyAppTurnsTheAppEstateInferenceBackOn(t *testing.T) {
+	// instanceAppJSON declares Deployment/team-gsap/dispatch; team-gsap is in no
+	// platform list and no platform Application occupies it, so it is app estate.
+	declared := health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "team-gsap", Name: "dispatch"}
+	// Declared by NOTHING — a controller's operand, a hand-applied manifest, an
+	// orphan. Only the namespace inference can reach it.
+	undeclared := health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "team-gsap", Name: "some-operand"}
+
+	// THE INSTANCE APP MUST REACH INTO monitoring, or the platformOccupied fence
+	// below is never exercised: instanceNamespaces is derived from the namespaces
+	// instance-owned Applications DECLARE into, so a monitoring probe against a
+	// corpus where nothing instance-owned touches monitoring passes whether the
+	// fence exists or not. (Caught by mutation: deleting `!i.platformOccupied[n]`
+	// left the earlier version of this test green.)
+	const instanceReachesMonitoringJSON = `{"metadata":{"name":"dispatch"},` +
+		`"spec":{"project":"instance-custom","syncPolicy":{"automated":{}}},` +
+		`"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"resources":[` +
+		`{"group":"apps","kind":"Deployment","namespace":"team-gsap","name":"dispatch","status":"Synced"},` +
+		`{"group":"monitoring.coreos.com","kind":"ServiceMonitor","namespace":"monitoring","name":"dispatch","status":"Synced"}` +
+		`]}}`
+	corpus := []string{instanceReachesMonitoringJSON, platformAppJSON, platformAppMonitoringJSON}
+
+	on := boundaryIndex(t, append(append([]string{}, corpus...), emptyGitopsShell("gitops-global"))...)
+	// Vacuity: the estate must actually have been derived, or "demotes" below is
+	// meaningless and "does not demote" passes for the wrong reason.
+	if got := on.InstanceNamespaces(); len(got) != 1 || got[0] != "team-gsap" {
+		t.Fatalf("InstanceNamespaces() = %v, want [team-gsap] — the estate was never derived, so this gate would prove nothing", got)
+	}
+	if len(on.PlatformUnresolved()) != 0 {
+		t.Fatalf("PlatformUnresolved() = %v, want none — the compared shell must not veto", on.PlatformUnresolved())
+	}
+	if !on.Owns(undeclared) {
+		t.Error("an UNDECLARED resource in the app estate must demote once nothing is uncompared — this is the arm the fix switches on, and it is the widening the PR has to own")
+	}
+	if !on.Owns(declared) {
+		t.Error("a direct claim in the app estate must demote")
+	}
+
+	// THE INFERENCE MUST STILL NOT REACH THE PLATFORM. Each of these is a
+	// separate fence, and the PVC is the one from ownership.go:100-130 — generated
+	// by a volumeClaimTemplate, so declared by no Application and unprotected by
+	// platformDeclared. Only platformOccupied (derived from the cluster, not from
+	// healthNamespaces — monitoring is not in that list) keeps it platform.
+	for _, tc := range []struct {
+		label string
+		ref   health.ResourceRef
+	}{
+		{"a namespace the caller named as the platform's", health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "harbor", Name: "undeclared"}},
+		{"a namespace a platform Application occupies but the caller did not name", health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "monitoring", Name: "undeclared"}},
+		{"loki's generated volumeClaimTemplate PVC", health.ResourceRef{Kind: "PersistentVolumeClaim", Namespace: "monitoring", Name: "data-loki-ingester-0"}},
+		// NOT kube-system. It is in healthNamespaces, so the caller's list already
+		// excludes it here and a probe would pass with platformReservedNamespaces
+		// deleted — a green assertion proving nothing. That fence guards the
+		// caller who OMITS kube-system, and TestOwns_PlatformReservedNamespace
+		// gates it directly (no caller list, and the claim is a direct one, so the
+		// reserved early-return is the only thing that can refuse it).
+	} {
+		if on.Owns(tc.ref) {
+			t.Errorf("the inference reached %s (%s/%s in %s) — widening it into the platform is exactly what the fences exist to stop",
+				tc.label, tc.ref.Kind, tc.ref.Name, tc.ref.Namespace)
+		}
+	}
+
+	// THE INVERSE, so the arm cannot be left permanently on. One genuinely
+	// uncompared platform app and the inference goes off again — while the DIRECT
+	// claim survives, because that one is evidence rather than a namespace guess.
+	off := boundaryIndex(t, append(append([]string{}, corpus...), uncomparedGitopsShell("gitops-global"))...)
+	if off.Owns(undeclared) {
+		t.Error("the inference must be OFF while a platform Application is uncompared — it could have declared this resource, and a namespace-shaped guess must not overrule that")
+	}
+	if !off.Owns(declared) {
+		t.Error("a DIRECT claim in a non-platform namespace must survive an uncompared platform app — the veto is scoped to platform namespaces, and this app names no destination in the estate")
 	}
 }

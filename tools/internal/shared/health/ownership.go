@@ -430,6 +430,31 @@ func (i OwnershipIndex) Namespaces() []string {
 // the contested pass to have missed.
 func (i OwnershipIndex) PlatformUnresolved() []string { return i.platformUnresolved }
 
+// PlatformUnresolvedAnywhere reports whether one of the uncompared platform
+// Applications names no destination, so nothing bounds it and the veto covers
+// every platform namespace rather than a named few.
+//
+// EXPORTED SO THE REPORT CAN STATE THE TRUE SCOPE. The boundary line used to say
+// "nothing in a platform namespace is demotable", which is wrong in both
+// directions: with a bounded veto the OTHER platform namespaces still demote on
+// that same poll, and separately the app-estate inference is off EVERYWHERE
+// while this list is non-empty (see Owns), which that sentence never mentioned.
+// A reader debugging a team-namespace failure got no line explaining it at all.
+func (i OwnershipIndex) PlatformUnresolvedAnywhere() bool { return i.platformUnresolvedAnywhere }
+
+// PlatformUnresolvedNamespaces lists the destination namespaces that bound the
+// veto — the namespaces demotion is actually off in when the veto is bounded.
+// Empty when PlatformUnresolvedAnywhere is true, where the scope is instead
+// every platform namespace.
+func (i OwnershipIndex) PlatformUnresolvedNamespaces() []string {
+	out := make([]string, 0, len(i.platformUnresolvedNS))
+	for ns := range i.platformUnresolvedNS {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Contested is how many resources an instance-owned Application claimed that a
 // platform Application claims too — refused, and still gating.
 func (i OwnershipIndex) Contested() int { return i.contested }
