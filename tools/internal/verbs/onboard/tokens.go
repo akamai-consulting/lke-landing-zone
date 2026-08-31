@@ -29,12 +29,14 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghapi"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghcli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/proc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/validate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/doctor"
 
@@ -102,7 +104,10 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalidN := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	// PRESENCE isn't VALIDITY isn't AUTHORIZATION. The third is the one that used
+	// to be asked only in CI.
+	capabilities, deniedN := doctor.ProbeTokenCapabilities(reqs, secrets, vars, instSt, tokenprobe.CapContext{Repo: instanceRepo, Region: deployEnv, ComponentOff: clusterspec.DisabledComponents(deployEnv)})
+	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity, capabilities)
 	if invalidN > 0 {
 		fmt.Println(color.Dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
@@ -122,7 +127,7 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 		// section; past this point the operator may have just pasted a replacement for
 		// the very token that probed dead, and failing on a stale measurement would
 		// reject the fix. Here nothing was prompted, so the measurement still holds.
-		if err := InvalidCredentialsError(invalidN, instanceRepo); err != nil {
+		if err := CredentialRefusal(invalidN, deniedN, instanceRepo); err != nil {
 			return err
 		}
 		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo))
@@ -240,16 +245,24 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 		}
 	}
 	owner, _, _ := strings.Cut(instanceRepo, "/")
-	// OPENBAO_SECRETS_WRITE_TOKEN: CI's `gh secret set` persists the OpenBao
-	// unseal keys back into the infra-<env> environment. Fine-grained needs
-	// Actions: write + ENVIRONMENTS: write — not "Secrets", which governs only
-	// repo-level secrets and leaves environment writes 403ing (see
-	// ghFineGrainedSecretsWriteURL). A classic repo+workflow PAT works too —
+	// OPENBAO_SECRETS_WRITE_TOKEN: two consumers, two grants. CI's `gh secret
+	// set` persists the OpenBao unseal keys into the infra-<env> ENVIRONMENT
+	// (Environments: write — "Secrets" does not cover environment secrets), and
+	// the in-cluster harbor-robot-provisioner publishes the REPO-level HARBOR_*
+	// secrets with the same PAT (Secrets: write — Environments does not cover
+	// those). Neither implies the other; see ghFineGrainedSecretsWriteURL, whose
+	// pre-fill requests both. A classic repo+workflow PAT carries all three —
 	// offer both. Either way the PAT owner must be Environment admin on every
 	// infra-<env> environment, or the --env-scoped writes 401.
+	//
+	// THIS LABEL IS THE FIFTH COPY of that advice and was the last one still
+	// saying "Environments: write" alone, after the URL pre-fill, the catalog
+	// Note, the workflow require-secret hints and the docs had all been corrected
+	// together. It is what an operator READS while pasting the token, so of the
+	// five it is the worst one to leave stale.
 	gatherGH("OPENBAO_SECRETS_WRITE_TOKEN",
 		"CI persists OpenBao unseal keys into the infra-<env> environment (you must also be Environment admin on it)",
-		"fine-grained, recommended (Actions: write + Environments: write; Only select repositories: "+instanceRepo+")",
+		secretsWritePATLabel(instanceRepo),
 		ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", owner),
 		"classic (scopes repo + workflow)",
 		ghTokenURL("repo,workflow", "llz-openbao-secrets-write"))
@@ -418,7 +431,11 @@ func DoctorE2E(repo, env string, admin bool) error {
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.Value("GHCR_USERNAME"))
 	validity, invalid := doctor.ProbeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
-	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	// And SCOPE — the question that authenticates cleanly and still 403s. Probed
+	// against this deployment (repo + infra-<env>), so doctor asks exactly what
+	// `llz ci validate-tokens` asks from inside the run it is standing in front of.
+	capabilities, denied := doctor.ProbeTokenCapabilities(reqs, secrets, vars, instSt, tokenprobe.CapContext{Repo: instanceRepo, Region: env, ComponentOff: clusterspec.DisabledComponents(env)})
+	missing := envreq.ReportReadiness(reqs, secrets, vars, instSt, tmplSt, validity, capabilities)
 	// PRESENCE is not FRESHNESS. reportReadiness ticks TF_IMAGE/KUBE_IMAGE as set;
 	// `llz ci assert-image-fresh` — the first step of the apply's first job —
 	// additionally requires them to name THIS instance's pin. Same merged lookup
@@ -430,7 +447,7 @@ func DoctorE2E(repo, env string, admin bool) error {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", color.Red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `" + tokensCommand(env, admin) + "` to provision them.")
 	}
-	if err := InvalidCredentialsError(invalid, instanceRepo); err != nil {
+	if err := CredentialRefusal(invalid, denied, instanceRepo); err != nil {
 		return err
 	}
 	if pinErr != nil {
@@ -453,7 +470,7 @@ func DoctorE2E(repo, env string, admin bool) error {
 		return fmt.Errorf("%d required item(s) not set on %s: %s — run `llz tokens%s --env %s --yes`",
 			len(missing), instanceRepo, strings.Join(missing, ", "), adminFlag(admin), env)
 	}
-	fmt.Println("\n" + color.Green("✓") + " ready — every required value is set and every probeable token is valid.")
+	fmt.Println("\n" + color.Green("✓") + " ready — every required value is set, and every probeable token is valid and scoped for its job.")
 	return nil
 }
 
@@ -496,6 +513,74 @@ func InvalidCredentialsError(n int, repo string) error {
 		return nil
 	}
 	return fmt.Errorf("%d probeable credential(s) on %s are invalid — rotate them (see the validity report above)", n, repo)
+}
+
+// DeniedCredentialsError is the refusal for a credential that AUTHENTICATES and
+// is not authorized for the operation it exists to perform. nil when there are
+// none.
+//
+// SEPARATE FROM InvalidCredentialsError BECAUSE THE REMEDY IS THE OPPOSITE ONE.
+// An invalid token is dead and must be rotated; a denied token is alive, in date,
+// and under-scoped — rotating it produces an identically under-scoped replacement
+// and burns the afternoon. The messages must not be interchangeable, so neither
+// are the errors.
+//
+// n counts CREDENTIALS, not refused grants: one PAT can be denied several and is
+// still one thing to go and fix.
+func DeniedCredentialsError(n int, repo string) error {
+	if n <= 0 {
+		return nil
+	}
+	return fmt.Errorf("%d required credential(s) on %s authenticate but lack a required permission — RE-SCOPE them, do not rotate (see the scope notes above)", n, repo)
+}
+
+// secretsWritePATLabel is the on-screen choice an operator reads while pasting
+// OPENBAO_SECRETS_WRITE_TOKEN — the fifth copy of this credential's permission
+// advice, and the one that was last to be corrected.
+//
+// A NAMED FUNCTION SO A GATE CAN SEE IT. It was an inline literal in a call
+// three frames deep, which is reachable by grep and by review and by nothing
+// else; the drift class it belongs to has now been caught twice by human reading
+// and never by CI. Hoisting it costs one function and puts it inside
+// pat_guidance_drift_test.go's reach with the other four.
+func secretsWritePATLabel(instanceRepo string) string {
+	return "fine-grained, recommended (Actions: write + Environments: write + Secrets: write; " +
+		"Only select repositories: " + instanceRepo + ")"
+}
+
+// CredentialRefusal is the ONE decision both `llz tokens` and `llz doctor` make
+// about a probe result: does what we just measured stop the operator here?
+//
+// IT IS ONE FUNCTION BECAUSE THE SECOND VERDICT REPEATED THE FIRST ONE'S BUG.
+// InvalidCredentialsError exists because the two verbs disagreed about a dead
+// token — doctor errored, tokens printed a green "nothing to provision" and
+// "Next steps: llz build" — and its own comment names the cause: "Restating the
+// rule in both places is what let them drift; there is now one place to change
+// and one place to test." When the scope probe was added, doctor was wired to
+// stop on a denial and tokens was not, so a PAT rendering "PERMS ✗ DENIED"
+// reached the same green line and the same exit 0. Two verdicts, one rule, same
+// drift, one release apart.
+//
+// WHAT THE SINGLE FUNCTION DOES AND DOES NOT BUY. It buys one definition of the
+// rule and one test of it, and it makes ADDING a probe safe: a new parameter here
+// is a compile error at both call sites, so the next verdict cannot be wired into
+// one verb and forgotten in the other. It does NOT prevent the slip that actually
+// happened — `CredentialRefusal(invalidN, 0, repo)` compiles perfectly, and a
+// caller that stops threading a real count through is still invisible to the
+// compiler and to these tests, which exercise the rule and not the wiring.
+// Nothing here relieves a reader of checking that both call sites pass measured
+// numbers; claiming otherwise would put a guarantee in a comment that the code
+// does not carry, which is its own version of the bug above.
+//
+// Invalidity is reported FIRST when both are present: a dead credential cannot be
+// scope-probed meaningfully, so "rotate it" is the instruction that unblocks, and
+// leading with "re-scope" would have the operator re-mint a token that is about to
+// be replaced anyway.
+func CredentialRefusal(invalid, denied int, repo string) error {
+	if err := InvalidCredentialsError(invalid, repo); err != nil {
+		return err
+	}
+	return DeniedCredentialsError(denied, repo)
 }
 
 // NothingToProvisionNote is what `llz tokens` says when it finds every required

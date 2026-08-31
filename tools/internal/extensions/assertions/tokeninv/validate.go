@@ -28,7 +28,9 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/tokenprobe"
 )
 
@@ -44,14 +46,36 @@ var validatableTokens = []string{
 	"GHCR_READ_TOKEN",
 }
 
-// optionalTokens never block the run when invalid — only WARN. These are the
-// credentials that aren't required for a stock instance: GHCR_READ_TOKEN (the
-// charts are public, and ghcrPullToken falls back to anonymous) and
-// LINODE_DNS_TOKEN (DNS-01 certs are opt-in). An invalid REQUIRED token (Linode
-// API, the GitHub PATs) is a hard fail — it WILL break the run downstream.
-var optionalTokens = map[string]bool{
-	"GHCR_READ_TOKEN":  true,
-	"LINODE_DNS_TOKEN": true,
+// optional reports whether a credential may be invalid or under-scoped without
+// blocking the run — GHCR_READ_TOKEN (the charts are public, and ghcrPullToken
+// falls back to anonymous) and LINODE_DNS_TOKEN (DNS-01 certs are opt-in), today.
+// An invalid or denied REQUIRED token (Linode API, the GitHub PATs) is a hard
+// fail: it WILL break the run downstream.
+//
+// IT READS THE REQUIREMENT TABLE, IT IS NOT A COPY OF IT. This was a hand-kept
+// map of two names sitting beside envreq.E2ERequirements, which carries the same
+// fact in its Required column for every credential — two lists, agreeing by
+// nobody's arrangement, in a repo where configreadiness and secretscope both
+// already read the table and say so in their comments. They happened to agree,
+// which is the state a divergence starts from; and `llz doctor` decides the same
+// question off r.Required, so the two commands' claim to "agree on what stops a
+// build" rested on that coincidence holding.
+//
+// FAIL CLOSED ON AN UNKNOWN NAME. A credential absent from the table is treated
+// as REQUIRED (blocking), never as optional — an entry that quietly stopped
+// gating would be indistinguishable from one that never gated. That cannot happen
+// silently either: TestEveryValidatableTokenIsInTheRequirementTable asserts the
+// two sets line up.
+//
+// admin=true is the SUPERSET — E2E_DISPATCH_TOKEN exists only on that side of the
+// table, and reading the non-admin list would make it an unknown name here.
+func optional(name string) bool {
+	for _, r := range envreq.E2ERequirements(true) {
+		if r.Name == name {
+			return !r.Required
+		}
+	}
+	return false // unknown → treated as required
 }
 
 // runCIValidateTokens returns nil when nothing blocking is invalid and an error
@@ -62,6 +86,13 @@ var optionalTokens = map[string]bool{
 func RunValidate(failOnInvalid bool) error {
 	now := time.Now()
 	ghcrUser := os.Getenv("GHCR_USERNAME")
+	// The deployment the scope checks are asked about. In CI both halves are
+	// ambient; `llz doctor` builds the same struct from what the operator typed.
+	capCtx := tokenprobe.EnvCapContext()
+	// A grant whose consumer this deployment does not deploy is not a finding.
+	// The workflow runs with the instance checked out, so the spec is right here;
+	// an unreadable one yields an empty set and every check still runs.
+	capCtx.ComponentOff = clusterspec.DisabledComponents(capCtx.Region)
 
 	fmt.Printf("%s\n", color.Bold("Token validity — probing pipeline credentials in the environment"))
 	probed, blockingInvalid, optionalInvalid, blockingDenied, inertRoutes := 0, 0, 0, 0, 0
@@ -77,7 +108,7 @@ func RunValidate(failOnInvalid bool) error {
 		probed++
 		suffix := ""
 		if tv.Status == tokenprobe.VInvalid {
-			if optionalTokens[name] {
+			if optional(name) {
 				optionalInvalid++
 				suffix = color.Dim("  (optional — warning only)")
 				fmt.Fprintf(os.Stderr, "::warning::%s is invalid but optional — it won't block the run; rotate or unset it.\n", name)
@@ -93,14 +124,24 @@ func RunValidate(failOnInvalid bool) error {
 		if tv.Status == tokenprobe.VInvalid {
 			continue
 		}
-		if cr, ok := checkCapability(name, val); ok {
+		// EVERY registered check, not the first: OPENBAO_SECRETS_WRITE_TOKEN needs
+		// two different GitHub permissions (Environments: write for the build's own
+		// writeback, repo-level Secrets for the in-cluster harbor-robot-provisioner),
+		// and reporting one of them is how the other stayed unmeasured until a
+		// CronJob 403ed for a month.
+		// deniedHere, not blockingDenied++, because the counter is of CREDENTIALS
+		// and this loop is over that credential's GRANTS. Incrementing per refusal
+		// reported one under-scoped PAT as "2 REQUIRED pipeline credential(s)",
+		// sending the reader to look for a second broken token.
+		deniedHere := false
+		for _, cr := range tokenprobe.CheckCapabilities(capCtx, name, val) {
 			switch {
-			case cr.status == capDenied && optionalTokens[name]:
+			case cr.Status == tokenprobe.CapDenied && optional(name):
 				fmt.Fprintf(os.Stderr, "::warning::%s is not authorized for its required scope but is optional — it won't block the run.\n", name)
-			case cr.status == capDenied:
-				blockingDenied++
-				fmt.Fprintf(os.Stderr, "::error::%s: %s\n", name, capabilityHint(name))
-			case cr.status == capRouteRefused:
+			case cr.Status == tokenprobe.CapDenied:
+				deniedHere = true
+				fmt.Fprintf(os.Stderr, "::error::%s: %s\n", name, tokenprobe.CapabilityHint(name, cr.Op))
+			case cr.Status == tokenprobe.CapRouteRefused:
 				// ANNOTATED, NEVER BLOCKING, AND COUNTED. The credential is correctly
 				// scoped, so there is nothing to fail it for — but a downstream check has
 				// been proven unanswerable in this pipeline, and that is exactly the finding
@@ -108,9 +149,12 @@ func RunValidate(failOnInvalid bool) error {
 				// step. cigate.Warning so the reason survives into the annotation instead of
 				// being truncated at the first newline.
 				inertRoutes++
-				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf("%s: %s", name, cr.detail)))
+				fmt.Fprintln(os.Stderr, cigate.Warning(fmt.Sprintf("%s: %s", name, cr.Detail)))
 			}
-			fmt.Printf("  %-30s %s\n", "  └ scope", capabilityCell(cr))
+			fmt.Printf("  %-30s %s\n", "  └ scope", tokenprobe.CapabilityCell(cr))
+		}
+		if deniedHere {
+			blockingDenied++
 		}
 	}
 

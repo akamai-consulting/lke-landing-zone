@@ -48,13 +48,21 @@ func E2ERequirements(admin bool) []Requirement {
 		{"LINODE_API_TOKEN", true, true, true, false, "Linode PAT (also creates the state bucket)"},
 		{"TF_STATE_ACCESS_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
 		{"TF_STATE_SECRET_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
-		// "Environments: write", NOT "Secrets". The fine-grained Secrets permission
-		// governs only REPO-level secrets, and every secret the build writes back is
-		// scoped to infra-<env> — so a PAT built from this line 403s on the seal-key
-		// write six minutes after the cluster comes up. The wizard prompt and the
-		// quickstart both say Environments; this table (which the code calls the
-		// single source of truth) said the opposite.
-		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Environments:write"},
+		// BOTH secret permissions — they govern different endpoints for different
+		// consumers and neither implies the other.
+		//
+		// Environments: write, because every secret the BUILD writes back is scoped
+		// to infra-<env>; a PAT without it 403s on the seal-key write six minutes
+		// after the cluster comes up. This line once said "Secrets", which is the
+		// intuitive answer and the wrong one for that endpoint.
+		//
+		// Secrets: write, because the same PAT is seeded into the CLUSTER
+		// (secret/infra/github-dispatch-token) and the harbor-robot-provisioner
+		// publishes REPO-level HARBOR_* secrets with it; a PAT without THAT 403s on
+		// every five-minute tick and hard-fails converge on the Jobs it leaves
+		// behind. Correcting the first sentence is what left the second grant off
+		// the wizard's pre-filled link for as long as it was.
+		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Environments+Secrets:write"},
 		{"APL_VALUES_REPO_TOKEN", true, true, true, false, "GitHub fine-grained PAT, Contents:write (values+apps repo)"},
 		// REPO-LEVEL (EnvScope false), unlike every other secret here. One instance
 		// has ONE state-encryption passphrase: the key-provider name it writes under
@@ -265,9 +273,15 @@ func PrepopulateVars(vars map[string]string, reqs []Requirement, instance, templ
 // The `validity` map (name → probe verdict, from probeTokenValidities) drives the
 // VALID column; pass nil to omit active probing (the column then reads "unprobed"
 // for every credential).
-func ReportReadiness(reqs []Requirement, secrets, vars map[string]string, instance, template LiveState, validity map[string]tokenprobe.TokenValidity) []string {
+//
+// `capabilities` (name → one verdict per registered scope check, from
+// doctor.ProbeTokenCapabilities) drives the PERMS column. VALID and PERMS answer
+// different questions and a credential can pass one while failing the other —
+// which is the entire reason the second column exists rather than being folded
+// into the first. Pass nil to omit scope probing.
+func ReportReadiness(reqs []Requirement, secrets, vars map[string]string, instance, template LiveState, validity map[string]tokenprobe.TokenValidity, capabilities map[string][]tokenprobe.CapabilityResult) []string {
 	var missing []string
-	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %-14s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID", "PERMS")))
 	for _, r := range reqs {
 		st := instance
 		if r.Template {
@@ -297,7 +311,9 @@ func ReportReadiness(reqs []Requirement, secrets, vars map[string]string, instan
 			req = "REQUIRED"
 		}
 		validPlain, validColor := validCell(r, onGitHub, validity)
-		fmt.Printf("%-30s %-7s %-9s %s %s\n", r.Name, kind, req, padColor(statusPlain, statusColor, 24), validColor(validPlain))
+		permsPlain, permsColor := permsCell(r.Name, capabilities)
+		fmt.Printf("%-30s %-7s %-9s %s %s %s\n", r.Name, kind, req,
+			padColor(statusPlain, statusColor, 24), padColor(validPlain, validColor, 14), permsColor(permsPlain))
 		if r.Required && !onGitHub {
 			missing = append(missing, r.Name)
 		}
@@ -311,7 +327,139 @@ func ReportReadiness(reqs []Requirement, secrets, vars map[string]string, instan
 		}
 		fmt.Printf("  %s %s: %s\n", validGlyph(tv.Status), r.Name, tv.Detail)
 	}
+	// Scope notes, same rule and for the same reason: the verdict that needs
+	// ACTING on gets a full line, and every check of a credential prints its own —
+	// a PAT can hold one required grant and lack the other, and "PERMS ✗ DENIED"
+	// alone does not say which one to go and fix.
+	for _, r := range reqs {
+		for _, cr := range capabilities[r.Name] {
+			switch cr.Status {
+			case tokenprobe.CapDenied, tokenprobe.CapUnknown, tokenprobe.CapRouteRefused:
+				fmt.Printf("  %s %s: %s\n", capGlyph(cr.Status), r.Name, cr.Detail)
+				if h := tokenprobe.CapabilityHint(cr.Name, cr.Op); h != "" && cr.Status == tokenprobe.CapDenied {
+					fmt.Printf("      %s\n", color.Dim("fix: "+h))
+				}
+			}
+		}
+	}
+	// Unasked checks, once per credential.
+	//
+	// THE SKIP DETAIL HAD NO READER. The model was made to carry one CapSkipped
+	// row per registered check, each naming its op and saying where the question
+	// CAN be answered ("gather locally or use `llz ci validate-tokens`") — and
+	// this loop rendered three statuses, none of them CapSkipped, so the whole
+	// string reached nobody. A PERMS cell reading "· unprobed" or "· partial" is
+	// an assertion that something was NOT verified, and the reader's immediate
+	// question is which grant and what to do about it. Producing that answer and
+	// then not printing it is the same shape as probing scope only in CI: the
+	// measurement exists, in a place nobody is looking.
+	//
+	// NOT for a credential that is simply absent (tokenprobe.SkipNotSet): STATUS
+	// already says "✗ missing", and a second line repeating it under every row is
+	// noise on every fresh instance — which is presumably why the arm was left
+	// out, and is a reason to filter rather than to say nothing.
+	for _, r := range reqs {
+		// GROUPED BY REASON, not collapsed to one line per credential. Two checks
+		// on one PAT can go unasked for DIFFERENT reasons — one because no value is
+		// cached, another because its component is not deployed — and the first cut
+		// printed every op under whichever detail happened to come last, attaching
+		// a real explanation to a check it was not about.
+		var order []string
+		byDetail := map[string][]string{}
+		for _, cr := range capabilities[r.Name] {
+			// CapNotApplicable is deliberately absent: "scope NOT verified" is a
+			// statement about a question that was put and not answered, and this is a
+			// question that was never owed. It reaches the column as a dim n/a and says
+			// nothing further.
+			if cr.Status != tokenprobe.CapSkipped || cr.Detail == tokenprobe.SkipNotSet {
+				continue
+			}
+			if _, seen := byDetail[cr.Detail]; !seen {
+				order = append(order, cr.Detail)
+			}
+			byDetail[cr.Detail] = append(byDetail[cr.Detail], cr.Op)
+		}
+		for _, detail := range order {
+			scope := ""
+			if ops := trimEmpty(byDetail[detail]); len(ops) > 0 {
+				scope = " (" + strings.Join(ops, "; ") + ")"
+			}
+			fmt.Printf("  %s %s: scope NOT verified%s — %s\n", color.Dim("·"), r.Name, scope, detail)
+		}
+	}
 	return missing
+}
+
+// permsCell renders a requirement's PERMS column: the worst verdict across every
+// scope check registered for that credential. Long detail goes in the notes below
+// the table.
+//
+// A CREDENTIAL WITH NO REGISTERED CHECK RENDERS BLANK, not "✓". Nothing was
+// verified about its authorization and a tick would say the opposite — the same
+// vacuity rule the validity column follows for a non-credential.
+func permsCell(name string, capabilities map[string][]tokenprobe.CapabilityResult) (string, func(string) string) {
+	rs, ok := capabilities[name]
+	if !ok || len(rs) == 0 {
+		if len(tokenprobe.CapabilityChecksFor(name)) == 0 {
+			return "", color.Dim // no scope requirement to verify — blank column
+		}
+		return "· unprobed", color.Dim
+	}
+	worst, _ := tokenprobe.WorstCapability(rs)
+	switch worst {
+	case tokenprobe.CapNotApplicable:
+		// Every registered check is inapplicable here — the consumer is not
+		// deployed. Dim, and not a warning: there is nothing for the operator to do
+		// and nothing about this configuration that will change.
+		return "· n/a", color.Dim
+	case tokenprobe.CapOK:
+		return "✓ scoped", color.Green
+	case tokenprobe.CapSkipped:
+		// PARTIAL, not "unprobed", when some grants WERE verified — and never a
+		// tick, because the rest were not. Both halves of that sentence matter: a
+		// bare "unprobed" hides work that was done, and a "✓" claims work that
+		// was not.
+		if tokenprobe.AnyStatus(rs, tokenprobe.CapOK) {
+			return "· partial", color.Yellow
+		}
+		return "· unprobed", color.Dim
+	case tokenprobe.CapDenied:
+		return "✗ DENIED", color.Red
+	case tokenprobe.CapRouteRefused:
+		return "⚠ inert", color.Yellow
+	case tokenprobe.CapUnknown:
+		return "⚠ unverified", color.Yellow
+	default:
+		// UNREACHABLE TODAY — every CapabilityStatus has an explicit case above,
+		// CapSkipped included. Kept as the backstop for a status added later, and
+		// it renders the SAFE one: a verdict this function has never seen must not
+		// arrive on screen as a tick. (It used to be labelled "CapSkipped", which
+		// stopped being true when that case got its own arm two above.)
+		return "· unprobed", color.Dim
+	}
+}
+
+// trimEmpty drops the unnamed ops a caller may emit for a credential-wide skip,
+// so the note does not render an empty pair of parentheses.
+func trimEmpty(ss []string) []string {
+	// A NEW SLICE, not ss[:0]. Filtering in place rewrites the caller's backing
+	// array — here the slice held in byDetail — which is safe only because there
+	// is exactly one call and its result is consumed immediately. That is safety
+	// by accident, and the next caller inherits it without being told.
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func capGlyph(s tokenprobe.CapabilityStatus) string {
+	if s == tokenprobe.CapDenied {
+		return color.Red("✗")
+	}
+	return color.Yellow("⚠")
 }
 
 // validCell renders a requirement's VALID column: a short colored verdict. Long

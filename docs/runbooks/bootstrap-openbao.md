@@ -65,24 +65,39 @@ The workflow detects cluster state automatically and chooses the right path:
 > Either form works:
 >
 > - **Fine-grained PAT** (what `llz tokens`' pre-filled link creates): **Actions:
->   write + Environments: write** on the instance repo.
-> - **Classic PAT**: `repo` + `workflow`.
+>   write + Environments: write + Secrets: write** on the instance repo.
+> - **Classic PAT**: `repo` + `workflow` (carries all three).
 >
-> Two traps, both of which fail the same way:
+> Three traps, each failing in a different place:
 >
-> - The fine-grained **"Secrets" permission is NOT enough.** It governs *repo-level*
->   secrets; the `infra-<env>` **environment** secrets this workflow writes are
->   governed by **Environments**.
+> - The fine-grained **"Secrets" permission alone is NOT enough.** It governs
+>   *repo-level* secrets; the `infra-<env>` **environment** secrets this workflow
+>   writes are governed by **Environments**.
+> - **"Environments" alone is not enough either.** This same PAT is seeded to
+>   `secret/infra/github-dispatch-token` and handed to the in-cluster
+>   `harbor-robot-provisioner`, which publishes the **repo-level** `HARBOR_*`
+>   secrets — that needs **Secrets: write**. Without it the CronJob logs
+>   `check repo secret HARBOR_ROBOT_NAME: HTTP 403` every five minutes and
+>   `llz ci converge` hard-fails the bootstrap on its failed Jobs.
 > - The PAT owner must **also be Environment admin** on every `infra-<env>`
 >   environment being written.
 >
-> Get either wrong and repo-level writes still succeed while the `--env`-scoped
-> `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
-> failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
+> `llz doctor --env <env>` probes each grant separately (read-only, against the
+> endpoint its consumer really calls) and reports them in the **PERMS** column;
+> `llz ci validate-tokens` asks the same questions as a preflight inside the run.
+>
+> Get any of them wrong and the run fails somewhere that does not look like a bad
+> token. Without **Environments**, repo-level writes still succeed while the
+> `--env`-scoped `gh secret set` calls 401 — typically surfacing as
+> `bootstrap-openbao.yml` failing its S3 preflight ~5 minutes into a run you
+> started 30 minutes earlier. Without **Secrets**, everything above passes and the
+> `harbor-robot-provisioner` CronJob 403s every five minutes until `llz ci
+> converge` hard-fails the bootstrap ~35 minutes in.
 >
 > Verify the token authenticates at all with `GH_TOKEN=$PAT gh api user`. (That
-> only proves the token is live — it cannot prove the Environments permission, which
-> is why the two traps above are worth re-reading.) Same guidance, adopter-facing:
+> only proves the token is live — it cannot prove either secret permission, which
+> is why the traps above are worth re-reading, and why `llz doctor` probes each
+> grant against the endpoint its consumer really calls.) Same guidance, adopter-facing:
 > [quickstart §4](../quickstart.md#4-build-it--llz-up).
 | *(retired)* `LOKI_S3_*` / `HARBOR_REGISTRY_S3_*` | — | No longer exist: the workflow's `llz ci mint-bootstrap-objkeys` step mints the object-storage keys via the Linode API and seeds OpenBao directly; the in-cluster `linodeCredRotator` rotates them. The credentials never transit GitHub. |
 | *(retired)* `GITEA_BACKUP_S3_ACCESS_KEY` / `GITEA_BACKUP_S3_SECRET_KEY` | — | No longer exist: Gitea is disabled on apl-core v6 (external BYO Git / git-server), so there is no in-cluster Gitea to back up and no backup CronJob to seed. |

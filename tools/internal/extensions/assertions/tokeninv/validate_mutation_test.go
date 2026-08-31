@@ -38,9 +38,9 @@ func TestValidateTokensSummaryCountsAreHonest(t *testing.T) {
 	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 	// LINODE_API_TOKEN validates, so its SCOPE is then probed — which without this
 	// stub is a live request to api.linode.com from a unit test.
-	origCap := LinodeCapabilityProbe
-	t.Cleanup(func() { LinodeCapabilityProbe = origCap })
-	LinodeCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
+	origCap := tokenprobe.LinodeCapabilityProbe
+	t.Cleanup(func() { tokenprobe.LinodeCapabilityProbe = origCap })
+	tokenprobe.LinodeCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
 
 	clearValidatableTokens(t)
 	t.Setenv("LINODE_API_TOKEN", "live")   // required, valid

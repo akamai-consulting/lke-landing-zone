@@ -52,10 +52,24 @@ func NewGitHubSecretWriter(apiBase, token, repo string) (*GitHubSecretWriter, er
 	}, nil
 }
 
+// RepoSecretsPath is the API path of a repo's Actions-secrets collection,
+// api-root-relative (leading slash, no host).
+//
+// EXPORTED SO THE PREFLIGHT CAN PROBE THE ROUTE THIS PACKAGE ACTUALLY CALLS.
+// tokenprobe's capability check for repo-level Secrets: write GETs
+// RepoSecretsPath()+"/public-key" — the same collection SetRepoSecret seals
+// against and RepoSecretExists reads. Spelling the route a second time inside
+// the probe is the failure mode docs/e2e-gates.md names: the two copies agree
+// with each other and, once one of them moves, with nothing in the API. The
+// coupling is tested by calling both sides' real functions
+// (tokenprobe/capability_repo_secrets_test.go).
+func RepoSecretsPath(repo string) string {
+	return "/repos/" + repo + "/actions/secrets"
+}
+
 // SetRepoSecret writes one repo-level Actions secret (sealed-box + idempotent PUT).
 func (w *GitHubSecretWriter) SetRepoSecret(name, value string) error {
-	base := fmt.Sprintf("%s/repos/%s/actions/secrets", w.apiBase, w.repo)
-	return w.sealAndPut(base, name, value)
+	return w.sealAndPut(w.apiBase+RepoSecretsPath(w.repo), name, value)
 }
 
 // SetEnvSecret writes one environment-scoped Actions secret (the infra-<env>
@@ -147,7 +161,7 @@ func (w *GitHubSecretWriter) SetVariable(name, value string) error {
 // exposes secret metadata without the value: 200 = exists, 404 = not). Lets the
 // provisioner detect a lost publication and re-publish without touching Harbor.
 func (w *GitHubSecretWriter) RepoSecretExists(name string) (bool, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/secrets/%s", w.apiBase, w.repo, name)
+	url := w.apiBase + RepoSecretsPath(w.repo) + "/" + name
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return false, err
@@ -186,7 +200,7 @@ func (w *GitHubSecretWriter) RepoSecretExists(name string) (bool, error) {
 func (w *GitHubSecretWriter) SecretUpdatedAt(env, name string) (string, bool, error) {
 	var url string
 	if env == "" {
-		url = fmt.Sprintf("%s/repos/%s/actions/secrets/%s", w.apiBase, w.repo, name)
+		url = w.apiBase + RepoSecretsPath(w.repo) + "/" + name
 	} else {
 		id, err := w.repoID()
 		if err != nil {
