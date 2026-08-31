@@ -470,3 +470,252 @@ func TestScannedNamespacesIsTheAppEstateOnly(t *testing.T) {
 		t.Errorf("scannedNamespaces added monitoring: a platform namespace must not enter the per-namespace scan because one instance-owned resource lives there")
 	}
 }
+
+// ── The compared-but-empty Application ───────────────────────────────────────
+//
+// THE CORPUS IS THE FAILED RUN. akamai/gsap-apl on LLZ v0.0.49, job
+// 99517902800: four platform Applications reported Synced/Healthy with an EMPTY
+// .status.resources — apl-core's global/team gitops shells, values repos that
+// render no manifests and report that same state on every poll forever — plus
+// the escape hatch's instance-custom-istio-system declaring an oauth2-proxy
+// Deployment and two ExternalSecrets in istio-system. Reading `len(Resources)
+// == 0` as "Argo has not compared this app" put all four in platformUnresolved,
+// so platformMayClaim returned true permanently and the per-resource boundary
+// that shipped to demote exactly that istio-system content never fired once.
+//
+// WHY THE GATE IS HERE AND NOT ONLY IN health/ownership_test.go. This is
+// docs/e2e-gates.md ②, a split contract: ParseArgoApp reads
+// `.status.sync.status` into ArgoApp.Sync (one copy of the rule) and ownership's
+// argoCompared decides which of those values means "Argo finished comparing"
+// (the other). A test that constructs `ArgoApp{Sync: "Synced"}` by hand restates
+// the producer's output instead of exercising it — it stays green if
+// ParseArgoApp stops populating Sync, or normalises it, while the shipped
+// boundary goes permanently blind again. These drive the REAL fetch into the
+// REAL index construction health.go performs.
+
+// emptyGitopsShell is one of apl-core's values-only Applications as Argo
+// publishes it: a completed comparison (Synced) declaring nothing, and NO
+// destination namespace — the shape that also set platformUnresolvedAnywhere and
+// widened the old veto to every platform namespace at once.
+func emptyGitopsShell(name string) string {
+	return `{"metadata":{"name":"` + name + `"},"spec":{"project":"default","syncPolicy":{"automated":{}}},` +
+		`"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"}}}`
+}
+
+// uncomparedGitopsShell is the same Application before Argo has diffed it — the
+// state a ComparisonError also leaves it in, and argo.go's own worked example
+// (`gitops-global (Unknown/Healthy) — ComparisonError: failed to list refs`).
+func uncomparedGitopsShell(name string) string {
+	return `{"metadata":{"name":"` + name + `"},"spec":{"project":"default","syncPolicy":{"automated":{}}},` +
+		`"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"}}}`
+}
+
+// hatchIstioSystemJSON is the escape hatch's Application, declaring the
+// istio-system resources that hard-failed the platform gate in the failed run.
+const hatchIstioSystemJSON = `{"metadata":{"name":"instance-custom-istio-system"},` +
+	`"spec":{"project":"instance-custom","syncPolicy":{"automated":{}},"destination":{"namespace":"istio-system"}},` +
+	`"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"resources":[` +
+	`{"group":"apps","kind":"Deployment","namespace":"istio-system","name":"gcp-oauth2-proxy","status":"Synced"},` +
+	`{"group":"external-secrets.io","kind":"ExternalSecret","namespace":"istio-system","name":"gcp-oauth2-client","status":"Synced"},` +
+	`{"group":"external-secrets.io","kind":"ExternalSecret","namespace":"istio-system","name":"gcp-oauth2-cookie","status":"Synced"}` +
+	`]}}`
+
+// boundaryIndex runs converge's REAL Application fetch against a stubbed kubectl
+// and builds the index exactly as runHealthChecks does
+// (NewOwnershipIndex(...).WithPlatformNamespaces(healthNamespaces)), so the gate
+// cannot drift from the shipped wiring by construction.
+func boundaryIndex(t *testing.T, apps ...string) health.OwnershipIndex {
+	t.Helper()
+	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "-n argocd get applications.argoproj.io -o json" {
+			return nil, errors.New("unstubbed")
+		}
+		return items(apps...), nil
+	})
+	return health.NewOwnershipIndex(mustArgoApps(t)).WithPlatformNamespaces(healthNamespaces)
+}
+
+// oauthProxyRef / oauthSecretRef are two of the four instance-custom findings the
+// failed run hard-failed the platform on.
+var (
+	oauthProxyRef  = health.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "istio-system", Name: "gcp-oauth2-proxy"}
+	oauthSecretRef = health.ResourceRef{Group: "external-secrets.io", Kind: "ExternalSecret", Namespace: "istio-system", Name: "gcp-oauth2-client"}
+)
+
+// TestBoundary_ComparedEmptyPlatformAppDoesNotVetoTheInstanceEstate fails if the
+// compared/uncompared discriminator stops being applied — and its inverse arm
+// fails if the guard is simply deleted, so the fix cannot pass by removing it.
+func TestBoundary_ComparedEmptyPlatformAppDoesNotVetoTheInstanceEstate(t *testing.T) {
+	shells := []string{
+		emptyGitopsShell("gitops-global"),
+		emptyGitopsShell("istio-system-istio-artifacts"),
+		emptyGitopsShell("team-admin-values-gitops"),
+		emptyGitopsShell("team-platform-values-gitops"),
+	}
+	idx := boundaryIndex(t, append([]string{hatchIstioSystemJSON}, shells...)...)
+
+	// FAIL CLOSED ON VACUITY. "Not owned" is this index's default answer, so a
+	// fixture that never parsed — a renamed JSON field, a fetch returning nothing
+	// — would make every demotion assertion below pass having examined nothing.
+	// Prove the instance claim actually arrived through ParseArgoApp first.
+	if got := idx.Namespaces(); len(got) != 1 || got[0] != "istio-system" {
+		t.Fatalf("the escape hatch's .status.resources never reached the index: Namespaces() = %v, want [istio-system] — every assertion below would otherwise pass on an empty corpus", got)
+	}
+
+	if got := idx.PlatformUnresolved(); len(got) != 0 {
+		t.Errorf("PlatformUnresolved() = %v, want none — all four are Synced, and an empty .status.resources on a COMPARED Application is the answer ('I own nothing'), not missing evidence", got)
+	}
+	for _, ref := range []health.ResourceRef{oauthProxyRef, oauthSecretRef} {
+		if !idx.Owns(ref) {
+			t.Errorf("%s/%s in %s did not demote — this is the gsap-apl regression: four permanently Synced/empty gitops shells vetoed every platform namespace on every poll, so the per-resource boundary never fired once",
+				ref.Kind, ref.Name, ref.Namespace)
+		}
+	}
+
+	// THE INVERSE. The same four apps mid-comparison publish the same empty
+	// .status.resources and must STILL veto: zero resources is then genuinely
+	// missing evidence, and any of them could own this Deployment. None names a
+	// destination, so this also holds the platformUnresolvedAnywhere arm.
+	uncompared := []string{
+		uncomparedGitopsShell("gitops-global"),
+		uncomparedGitopsShell("istio-system-istio-artifacts"),
+		uncomparedGitopsShell("team-admin-values-gitops"),
+		uncomparedGitopsShell("team-platform-values-gitops"),
+	}
+	blind := boundaryIndex(t, append([]string{hatchIstioSystemJSON}, uncompared...)...)
+	if got := blind.PlatformUnresolved(); len(got) != 4 {
+		t.Errorf("PlatformUnresolved() = %v, want all four — an Application Argo has NOT compared must still be named and must still veto", got)
+	}
+	for _, ref := range []health.ResourceRef{oauthProxyRef, oauthSecretRef} {
+		if blind.Owns(ref) {
+			t.Errorf("%s/%s demoted while a platform Application is UNCOMPARED and names no destination — it has published nothing, so it could own this resource and the instance claim would win uncontested",
+				ref.Kind, ref.Name)
+		}
+	}
+
+	// THE CONTESTED PASS is one `continue` away from the arm being changed, and
+	// is the invariant most likely to break with it: a resource a PLATFORM
+	// Application actually declares stays platform, whatever else is compared.
+	contested := boundaryIndex(t, hatchIstioSystemJSON, emptyGitopsShell("gitops-global"),
+		`{"metadata":{"name":"istio"},"spec":{"project":"default","syncPolicy":{"automated":{}}},`+
+			`"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"resources":[`+
+			`{"group":"apps","kind":"Deployment","namespace":"istio-system","name":"gcp-oauth2-proxy","status":"Synced"}]}}`)
+	if contested.Owns(oauthProxyRef) {
+		t.Error("a resource a PLATFORM Application declares must stay platform — relaxing the empty-app veto must not relax the contested pass with it")
+	}
+	if contested.Contested() != 1 {
+		t.Errorf("Contested() = %d, want 1 — the refused claim must still be reported", contested.Contested())
+	}
+}
+
+// TestBoundary_ParseArgoAppFeedsTheComparisonDiscriminator closes the split
+// contract directly: the value ParseArgoApp extracts from the Application JSON
+// must be the value the boundary keys on. Without this, a change that stopped
+// populating ArgoApp.Sync — or normalised it to a different vocabulary — would
+// send every platform Application back to "uncompared" and switch the boundary
+// permanently off again, while every hand-built unit test stayed green.
+func TestBoundary_ParseArgoAppFeedsTheComparisonDiscriminator(t *testing.T) {
+	// Every value Argo's SyncStatusCode defines, plus the state a fetch that
+	// could not read the field produces. `demotes` is what the boundary must
+	// conclude for a platform Application in that state that declares nothing.
+	cases := []struct {
+		name    string
+		blob    string
+		want    string
+		demotes bool
+		why     string
+	}{
+		{"Synced", `"sync":{"status":"Synced"},`, "Synced", true, "a completed comparison that found nothing to own"},
+		{"OutOfSync", `"sync":{"status":"OutOfSync"},`, "OutOfSync", true, "also a completed comparison — Argo diffed and published what it found"},
+		{"Unknown", `"sync":{"status":"Unknown"},`, "Unknown", false, "Argo has not compared it, so zero resources is missing evidence"},
+		{"absent", ``, "", false, "no .status.sync at all — fail closed on a value the predicate cannot recognise"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shell := `{"metadata":{"name":"gitops-global"},"spec":{"project":"default","syncPolicy":{"automated":{}}},` +
+				`"status":{` + tc.blob + `"health":{"status":"Healthy"}}}`
+
+			// The producer half on its own, so a failure names which side broke
+			// rather than only that the two disagree.
+			withKubectl(t, func(a string) ([]byte, error) {
+				if a != "-n argocd get applications.argoproj.io -o json" {
+					return nil, errors.New("unstubbed")
+				}
+				return items(shell), nil
+			})
+			parsed := mustArgoApps(t)
+			if len(parsed) != 1 {
+				t.Fatalf("fixture parsed to %d Applications, want 1", len(parsed))
+			}
+			if parsed[0].Sync != tc.want {
+				t.Fatalf("ParseArgoApp put Sync=%q in ArgoApp, want %q — the boundary keys on this field, so the producer changing it silently changes the boundary", parsed[0].Sync, tc.want)
+			}
+
+			// The consumer half, over that same real output.
+			idx := boundaryIndex(t, hatchIstioSystemJSON, shell)
+			if got := idx.Namespaces(); len(got) != 1 {
+				t.Fatalf("vacuity: the instance claim never indexed (Namespaces() = %v)", got)
+			}
+			if got := idx.Owns(oauthProxyRef); got != tc.demotes {
+				t.Errorf("Owns(%s/%s) = %v with a platform Application at sync=%q, want %v — %s",
+					oauthProxyRef.Namespace, oauthProxyRef.Name, got, tc.want, tc.demotes, tc.why)
+			}
+			// The report line and the veto must agree: an app is named in
+			// PlatformUnresolved exactly when it is the reason nothing demoted.
+			if named := len(idx.PlatformUnresolved()) > 0; named == tc.demotes {
+				t.Errorf("PlatformUnresolved() = %v at sync=%q while demotion=%v — the report must name an Application exactly when it is vetoing",
+					idx.PlatformUnresolved(), tc.want, tc.demotes)
+			}
+		})
+	}
+}
+
+// TestBoundary_ReportNamesOnlyUncomparedApplications is the reporting half, and
+// the instance side's equivalent of the gate above. Both boundary lines tell the
+// reader the state is transient ("on this poll"), and that is only true of an
+// Application Argo has not compared yet — one that really does resolve on a
+// later poll. A permanently Synced/empty shell listed there sends the reader to
+// wait for something that will never change; a compared instance app listed
+// under "THEIR content still gates the platform" sends them looking for content
+// that does not exist.
+func TestBoundary_ReportNamesOnlyUncomparedApplications(t *testing.T) {
+	idx := boundaryIndex(t,
+		hatchIstioSystemJSON,
+		emptyGitopsShell("gitops-global"),                     // compared, owns nothing → silent
+		uncomparedGitopsShell("istio-system-istio-artifacts"), // not compared → named, vetoing
+		// An instance-owned Application Argo HAS compared that declares nothing.
+		`{"metadata":{"name":"account-health-values"},"spec":{"project":"instance-custom","syncPolicy":{"automated":{}}},`+
+			`"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"}}}`,
+		// One Argo has NOT compared: this one is transient and its content is
+		// genuinely gating meanwhile.
+		`{"metadata":{"name":"dispatch"},"spec":{"project":"instance-custom","syncPolicy":{"automated":{}}},`+
+			`"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"}}}`,
+	)
+
+	if got := idx.PlatformUnresolved(); len(got) != 1 || got[0] != "istio-system-istio-artifacts" {
+		t.Errorf("PlatformUnresolved() = %v, want [istio-system-istio-artifacts] only — gitops-global is Synced and waiting on nothing, so the line's 'on this poll' would be a lie about it", got)
+	}
+	if got := idx.Unresolved(); len(got) != 1 || got[0] != "dispatch" {
+		t.Errorf("Unresolved() = %v, want [dispatch] only — a COMPARED instance Application that declares nothing owns nothing, so 'THEIR content still gates the platform' points the reader at content that does not exist", got)
+	}
+
+	// Asserted on what printHealthSummary actually PRINTS, not on the accessors
+	// twice: the report is the only place an operator meets this state, and the
+	// two lines are the reason the accessors have to be precise.
+	out := captureStdout(t, func() { printHealthSummary(&health.Report{}, idx) })
+	if !strings.Contains(out, "istio-system-istio-artifacts") || !strings.Contains(out, "dispatch") {
+		t.Errorf("the boundary lines did not name the uncompared Applications:\n%s", out)
+	}
+	if strings.Contains(out, "gitops-global") || strings.Contains(out, "account-health-values") {
+		t.Errorf("the report named a COMPARED Application that owns nothing — nothing is waiting on it and nothing of its is gating:\n%s", out)
+	}
+	// The lines must name the CONDITION, because that is what makes their
+	// transience claim true. Guards the wording against a rewrite that
+	// re-conflates the two states in prose while the code keeps them apart.
+	for _, want := range []string{"have not been compared by Argo yet", "Argo has not compared them"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("boundary line no longer says %q — it must name the condition (not compared), not just 'declares no resources':\n%s", want, out)
+		}
+	}
+}

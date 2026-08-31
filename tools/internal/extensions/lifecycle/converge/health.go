@@ -584,8 +584,14 @@ func printHealthSummary(r *health.Report, owned health.OwnershipIndex) {
 	if n := owned.Contested(); n > 0 {
 		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d resource(s) an instance-owned Application declares are ALSO declared by a platform Application — kept gating the platform.", n))
 	}
+	// "ARGO HAS NOT COMPARED THEM" IS THE CONDITION, not "declares no resources",
+	// and the line says so because the difference is what makes "on this poll"
+	// true. A platform Application Argo HAS compared and that owns nothing never
+	// reaches this list — apl-core's global/team gitops shells are Synced with an
+	// empty .status.resources permanently, and while zero resources alone put an
+	// app here the veto could never lift on an instance that runs them.
 	if u := owned.PlatformUnresolved(); len(u) > 0 {
-		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d platform Application(s) declare no resources yet (%s) — the boundary cannot tell what they own, so nothing in a platform namespace is demotable on this poll.", len(u), strings.Join(u, ", ")))
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d platform Application(s) have not been compared by Argo yet (%s) — the boundary cannot tell what they own, so nothing in a platform namespace is demotable on this poll.", len(u), strings.Join(u, ", ")))
 	}
 	// NAMED BEFORE THE OTHER BOUNDARY LINES, because it is the only one an
 	// operator can act on in a minute. Every other state here is the boundary
