@@ -1,6 +1,6 @@
-package tokeninv
+package tokenprobe
 
-// linode_capability_test.go — the CONSUMER half of the route contract, and the
+// capability_linode_test.go — the CONSUMER half of the route contract, and the
 // gate for the discrimination this check exists to make (issue #449).
 //
 // `llz ci assert-k8s-version` warns and PASSES when the LKE-Enterprise version
@@ -57,9 +57,9 @@ func TestTheCatalogProbeAsksTheRouteTheGateActuallyReads(t *testing.T) {
 	want := linode.LKEVersionsPath(linode.LKETierEnterprise)
 	asked := withLinodeRoutes(t, map[string]int{want: 200})
 
-	cr := probeCapability(capCheckFor(t, "LINODE_API_TOKEN"), "tok")
-	if cr.status != capOK {
-		t.Fatalf("200 → status %v, want capOK", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "LINODE_API_TOKEN"), "tok")
+	if cr.Status != CapOK {
+		t.Fatalf("200 → status %v, want CapOK", cr.Status)
 	}
 	if len(*asked) != 1 || (*asked)[0] != want {
 		t.Errorf("probed %v, want exactly [%s] — the second opinion costs a request and must be "+
@@ -76,9 +76,9 @@ func TestARefusalAtBothRoutesIsTheMissingGrant(t *testing.T) {
 		linode.LKEClustersPath:                           401,
 	})
 
-	cr := probeCapability(capCheckFor(t, "LINODE_API_TOKEN"), "tok")
-	if cr.status != capDenied {
-		t.Fatalf("refused at both LKE routes → status %v, want capDenied (this blocks)", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "LINODE_API_TOKEN"), "tok")
+	if cr.Status != CapDenied {
+		t.Fatalf("refused at both LKE routes → status %v, want CapDenied (this blocks)", cr.Status)
 	}
 	// It must rule the ROUTE out — that is what the second probe buys — WITHOUT
 	// asserting the scope explanation it cannot separate from an account-level one.
@@ -86,16 +86,16 @@ func TestARefusalAtBothRoutesIsTheMissingGrant(t *testing.T) {
 	// cause up there refuses both; the verdict is right either way (all of them stop
 	// the cluster apply) but the message must not send an operator to re-scope a PAT
 	// that already carries the grant.
-	if !strings.Contains(cr.detail, "not one fussy route") {
-		t.Errorf("the verdict must say the route has been ruled out; got %q", cr.detail)
+	if !strings.Contains(cr.Detail, "not one fussy route") {
+		t.Errorf("the verdict must say the route has been ruled out; got %q", cr.Detail)
 	}
-	if !strings.Contains(cr.detail, "account-level") {
+	if !strings.Contains(cr.Detail, "account-level") {
 		t.Errorf("the verdict must name the candidate it cannot rule out, or a correctly scoped PAT "+
-			"costs an afternoon; got %q", cr.detail)
+			"costs an afternoon; got %q", cr.Detail)
 	}
 	// Re-scope, never rotate: the validity probe already passed, so the token is live
 	// and minting a replacement with the same gap costs an afternoon.
-	h := capabilityHint("LINODE_API_TOKEN")
+	h := CapabilityHint("LINODE_API_TOKEN", "read this account's LKE-Enterprise version catalog")
 	if !strings.Contains(h, "Read Only") {
 		t.Errorf("the remediation must name the grant to add; got %q", h)
 	}
@@ -111,16 +111,16 @@ func TestAScopedTokenRefusedAtOneRouteReportsTheGateInert(t *testing.T) {
 		linode.LKEClustersPath:                           200,
 	})
 
-	cr := probeCapability(capCheckFor(t, "LINODE_API_TOKEN"), "tok")
-	if cr.status != capRouteRefused {
-		t.Fatalf("scoped-but-refused → status %v, want capRouteRefused — capDenied would block a "+
-			"build on a correctly scoped PAT, capUnknown would lose a reproducible finding", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "LINODE_API_TOKEN"), "tok")
+	if cr.Status != CapRouteRefused {
+		t.Fatalf("scoped-but-refused → status %v, want CapRouteRefused — CapDenied would block a "+
+			"build on a correctly scoped PAT, CapUnknown would lose a reproducible finding", cr.Status)
 	}
 	// The consequence is the payload. A verdict about a credential that the reader
 	// has to connect to a gate three steps later is the silence all over again.
 	for _, want := range []string{"assert-k8s-version", "INERT"} {
-		if !strings.Contains(cr.detail, want) {
-			t.Errorf("the verdict must name %q — what is broken is the CHECK, not the token; got %q", want, cr.detail)
+		if !strings.Contains(cr.Detail, want) {
+			t.Errorf("the verdict must name %q — what is broken is the CHECK, not the token; got %q", want, cr.Detail)
 		}
 	}
 	// Asserted as a POSITIVE, not as the absence of the word "re-scope". The
@@ -128,9 +128,9 @@ func TestAScopedTokenRefusedAtOneRouteReportsTheGateInert(t *testing.T) {
 	// "re-scope it", and the first cut pasted that sentence in wholesale — so the
 	// thing worth pinning is that this arm states the opposite out loud rather than
 	// merely omitting it.
-	if !strings.Contains(cr.detail, "Nothing to re-scope") {
+	if !strings.Contains(cr.Detail, "Nothing to re-scope") {
 		t.Errorf("this token is correctly scoped, and the arm it overrides says otherwise — it must "+
-			"say so explicitly or an operator reads the refusal and goes to mint a PAT: %q", cr.detail)
+			"say so explicitly or an operator reads the refusal and goes to mint a PAT: %q", cr.Detail)
 	}
 }
 
@@ -144,12 +144,12 @@ func TestAnUncorroboratedRefusalIsUnresolvedRatherThanEither(t *testing.T) {
 		linode.LKEClustersPath:                           500,
 	})
 
-	cr := probeCapability(capCheckFor(t, "LINODE_API_TOKEN"), "tok")
-	if cr.status != capUnknown {
-		t.Fatalf("uncorroborated refusal → status %v, want capUnknown", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "LINODE_API_TOKEN"), "tok")
+	if cr.Status != CapUnknown {
+		t.Fatalf("uncorroborated refusal → status %v, want CapUnknown", cr.Status)
 	}
-	if !strings.Contains(cr.detail, "UNRESOLVED") {
-		t.Errorf("the verdict must say the question was not settled; got %q", cr.detail)
+	if !strings.Contains(cr.Detail, "UNRESOLVED") {
+		t.Errorf("the verdict must say the question was not settled; got %q", cr.Detail)
 	}
 }
 
@@ -259,11 +259,11 @@ func TestTheLinodeProbeReportsUnreachableAsZero(t *testing.T) {
 	}
 }
 
-// TestTheInertVerdictRendersAsItsOwnThing — capRouteRefused must not fall through
+// TestTheInertVerdictRendersAsItsOwnThing — CapRouteRefused must not fall through
 // to the default cell, which reads "– not probed": the probe ran, twice, and
 // reached a conclusion.
 func TestTheInertVerdictRendersAsItsOwnThing(t *testing.T) {
-	cell := capabilityCell(capabilityResult{"LINODE_API_TOKEN", capRouteRefused, "the detail"})
+	cell := CapabilityCell(CapabilityResult{Name: "LINODE_API_TOKEN", Status: CapRouteRefused, Detail: "the detail"})
 	if !strings.Contains(cell, "INERT") || !strings.Contains(cell, "the detail") {
 		t.Errorf("the cell must name the state and carry the detail; got %q", cell)
 	}

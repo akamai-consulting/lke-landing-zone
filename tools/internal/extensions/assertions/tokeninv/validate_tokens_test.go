@@ -57,8 +57,8 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 // after the cluster was already provisioned. A VALID but under-scoped credential
 // must fail HERE.
 func TestRunCIValidateTokens_UnderScopedPAT(t *testing.T) {
-	origGH, origCap := tokenprobe.GHPATProbe, GHCapabilityProbe
-	t.Cleanup(func() { tokenprobe.GHPATProbe, GHCapabilityProbe = origGH, origCap })
+	origGH, origCap := tokenprobe.GHPATProbe, tokenprobe.GHCapabilityProbe
+	t.Cleanup(func() { tokenprobe.GHPATProbe, tokenprobe.GHCapabilityProbe = origGH, origCap })
 	// Authenticates cleanly with plenty of life left — exactly the real case.
 	tokenprobe.GHPATProbe = func(_, _ string) (int, string, error) { return 200, "", nil }
 
@@ -71,7 +71,7 @@ func TestRunCIValidateTokens_UnderScopedPAT(t *testing.T) {
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "valid-but-under-scoped")
 
 	// Denied the environment-secret write → blocking, even though it is valid.
-	GHCapabilityProbe = func(_, _, _ string) (int, error) { return 403, nil }
+	tokenprobe.GHCapabilityProbe = func(_, _, _ string) (int, error) { return 403, nil }
 	if err := RunValidate(true); err == nil {
 		t.Error("valid but scope-denied token: err nil, want non-nil (this is the bug)")
 	} else if !strings.Contains(err.Error(), "scope") {
@@ -84,20 +84,20 @@ func TestRunCIValidateTokens_UnderScopedPAT(t *testing.T) {
 	}
 
 	// Authorized → clean run.
-	GHCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
+	tokenprobe.GHCapabilityProbe = func(_, _, _ string) (int, error) { return 200, nil }
 	if err := RunValidate(true); err != nil {
 		t.Errorf("authorized token: err %v, want nil", err)
 	}
 
 	// Ambiguous 404 must NOT block — it cannot be told from "environment not
 	// created yet", and a false denial is worse than the late true positive.
-	GHCapabilityProbe = func(_, _, _ string) (int, error) { return 404, nil }
+	tokenprobe.GHCapabilityProbe = func(_, _, _ string) (int, error) { return 404, nil }
 	if err := RunValidate(true); err != nil {
 		t.Errorf("ambiguous 404: err %v, want nil (warn only)", err)
 	}
 
 	// No GH_REPO/REGION → cannot build the probe → must not block.
-	GHCapabilityProbe = func(_, _, _ string) (int, error) { return 403, nil }
+	tokenprobe.GHCapabilityProbe = func(_, _, _ string) (int, error) { return 403, nil }
 	t.Setenv("GH_REPO", "")
 	t.Setenv("REGION", "")
 	if err := RunValidate(true); err != nil {

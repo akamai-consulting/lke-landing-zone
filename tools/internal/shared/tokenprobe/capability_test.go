@@ -1,8 +1,20 @@
-package tokeninv
+package tokenprobe
 
 import (
 	"strings"
 	"testing"
+)
+
+// testCapCtx builds the probe context the way `llz ci validate-tokens` does, so
+// the tests that set GH_REPO/REGION keep driving the same code path CI drives.
+func testCapCtx() CapContext { return EnvCapContext() }
+
+// The two OPENBAO_SECRETS_WRITE_TOKEN checks, named so assertions say which
+// permission they are about. Both are on ONE credential and they are not
+// interchangeable — that is the whole reason CheckCapabilities returns a slice.
+const (
+	opEnvSecrets  = "write infra-<region> environment secrets"
+	opRepoSecrets = "read/write REPO-level Actions secrets"
 )
 
 // TestClassifyCapabilityStatus pins the verdict table, and specifically the two
@@ -13,22 +25,22 @@ func TestClassifyCapabilityStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		code int
-		want capabilityStatus
+		want CapabilityStatus
 	}{
-		{"authorized", 200, capOK},
-		{"no content", 204, capOK},
-		{"under-scoped", 403, capDenied},
-		{"rejected", 401, capDenied},
-		{"ambiguous", 404, capUnknown},
-		{"unreachable", 0, capUnknown},
-		{"server error", 500, capUnknown},
+		{"authorized", 200, CapOK},
+		{"no content", 204, CapOK},
+		{"under-scoped", 403, CapDenied},
+		{"rejected", 401, CapDenied},
+		{"ambiguous", 404, CapUnknown},
+		{"unreachable", 0, CapUnknown},
+		{"server error", 500, CapUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, detail := classifyCapabilityStatus(tc.code, "do the thing", capREST)
 			if got != tc.want {
 				t.Errorf("code %d: status %v, want %v", tc.code, got, tc.want)
 			}
-			if got != capOK && detail == "" {
+			if got != CapOK && detail == "" {
 				t.Errorf("code %d: want a non-empty detail explaining the verdict", tc.code)
 			}
 		})
@@ -53,9 +65,9 @@ func TestProbeCapability_SkipsWithoutContext(t *testing.T) {
 
 	t.Setenv("GH_REPO", "")
 	t.Setenv("REGION", "")
-	cr := probeCapability(capabilityChecks[0], "tok")
-	if cr.status != capSkipped {
-		t.Errorf("status = %v, want capSkipped", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "OPENBAO_SECRETS_WRITE_TOKEN", opEnvSecrets), "tok")
+	if cr.Status != CapSkipped {
+		t.Errorf("status = %v, want CapSkipped", cr.Status)
 	}
 	if called {
 		t.Error("probed the API without the context to build a path")
@@ -73,14 +85,14 @@ func TestProbeCapability_ProbesTheRealEndpoint(t *testing.T) {
 
 	t.Setenv("GH_REPO", "acme/platform")
 	t.Setenv("REGION", "prod")
-	cr := probeCapability(capabilityChecks[0], "tok")
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "OPENBAO_SECRETS_WRITE_TOKEN", opEnvSecrets), "tok")
 
 	const want = "/repos/acme/platform/environments/infra-prod/secrets/public-key"
 	if gotPath != want {
 		t.Errorf("probed %q, want %q", gotPath, want)
 	}
-	if cr.status != capDenied {
-		t.Errorf("403 → status %v, want capDenied", cr.status)
+	if cr.Status != CapDenied {
+		t.Errorf("403 → status %v, want CapDenied", cr.Status)
 	}
 }
 
@@ -97,14 +109,19 @@ func TestCheckCapability_OnlyRegisteredTokens(t *testing.T) {
 	// It has one now (issue #449) — the version catalog it must be able to read —
 	// so the "no check registered" case is carried by a credential that genuinely
 	// has none.
-	if _, ok := checkCapability("GHCR_READ_TOKEN", "tok"); ok {
-		t.Error("GHCR_READ_TOKEN has no registered scope check, want ok=false")
+	if got := CheckCapabilities(testCapCtx(), "GHCR_READ_TOKEN", "tok"); len(got) != 0 {
+		t.Errorf("GHCR_READ_TOKEN has no registered scope check, got %d result(s)", len(got))
 	}
-	if _, ok := checkCapability("OPENBAO_SECRETS_WRITE_TOKEN", "tok"); !ok {
-		t.Error("OPENBAO_SECRETS_WRITE_TOKEN should have a scope check")
+	// TWO, not one. Both of this PAT's grants are required by different consumers
+	// and a caller that sees only one of them cannot report the other's denial.
+	got := CheckCapabilities(testCapCtx(), "OPENBAO_SECRETS_WRITE_TOKEN", "tok")
+	if len(got) != 2 {
+		t.Fatalf("OPENBAO_SECRETS_WRITE_TOKEN scope checks = %d, want 2 (environment secrets + repo-level secrets)", len(got))
 	}
-	if h := capabilityHint("OPENBAO_SECRETS_WRITE_TOKEN"); h == "" {
-		t.Error("a denial must carry remediation text")
+	for _, cr := range got {
+		if h := CapabilityHint(cr.Name, cr.Op); h == "" {
+			t.Errorf("a denial of %q must carry remediation text", cr.Op)
+		}
 	}
 }
 
@@ -117,7 +134,7 @@ func TestCheckCapability_OnlyRegisteredTokens(t *testing.T) {
 // environment-secret write. Pointing an operator at the Secrets toggle sends
 // them to a control that changes nothing.
 func TestSealKeyHintNamesEnvironmentsPermission(t *testing.T) {
-	h := capabilityHint("OPENBAO_SECRETS_WRITE_TOKEN")
+	h := CapabilityHint("OPENBAO_SECRETS_WRITE_TOKEN", opEnvSecrets)
 	if !strings.Contains(h, "Environments: write") {
 		t.Errorf("hint must name the Environments permission; got %q", h)
 	}
@@ -126,17 +143,75 @@ func TestSealKeyHintNamesEnvironmentsPermission(t *testing.T) {
 	}
 }
 
+// AND IT MUST NOT TELL THE OPERATOR TO WITHHOLD THE OTHER GRANT. This hint read
+// "needs Environments: write — NOT \"Secrets: write\"", which was correct while
+// Environments was the only permission this PAT needed and became the most
+// misleading line the tool could print once the repo-level Secrets check landed:
+// the two checks are on ONE credential, so an Environments denial was answered
+// with advice that fails the other check. Saying "Secrets does not cover
+// environment secrets" is still right and still worth saying; saying it in a way
+// that reads as "do not grant Secrets" is not.
+func TestSealKeyHintDoesNotTellTheOperatorToWithholdSecrets(t *testing.T) {
+	h := CapabilityHint("OPENBAO_SECRETS_WRITE_TOKEN", opEnvSecrets)
+	// It must send them to BOTH grants, since this one credential needs both.
+	if !strings.Contains(h, "Secrets: write as well") {
+		t.Errorf("the hint must say the same PAT also needs Secrets: write; got %q", h)
+	}
+	if !strings.Contains(h, "Grant BOTH") {
+		t.Errorf("the hint must ask for both grants explicitly; got %q", h)
+	}
+	// The negative form that caused this: a bare "NOT Secrets: write" with no
+	// counterweight. Guard the literal, because it is what the sentence collapses
+	// back to under a well-meaning edit.
+	if strings.Contains(h, "— NOT \"Secrets: write\"") {
+		t.Errorf("the hint must not read as an instruction to withhold Secrets: write; got %q", h)
+	}
+}
+
+// THE OTHER FOUR COPIES ARE OUTSIDE THIS PACKAGE and cannot be reached from
+// here, so this asserts what CAN be: that both hints on this one credential point
+// at both grants. A reader who lands on either denial must not come away with
+// half the permission set.
+func TestBothHintsOnThisPATNameBothGrants(t *testing.T) {
+	for _, op := range []string{opEnvSecrets, opRepoSecrets} {
+		h := CapabilityHint("OPENBAO_SECRETS_WRITE_TOKEN", op)
+		if h == "" {
+			t.Fatalf("%q has no hint", op)
+		}
+		if !strings.Contains(h, "Environments: write") {
+			t.Errorf("%q hint must name Environments: write; got %q", op, h)
+		}
+		if !strings.Contains(h, "Secrets") {
+			t.Errorf("%q hint must name the Secrets permission; got %q", op, h)
+		}
+	}
+}
+
 // capCheckFor looks a check up by credential name. Tests must not index
 // capabilityChecks positionally — the order is presentation, not contract, and a
 // new entry would silently repoint an existing assertion at the wrong probe.
-func capCheckFor(t *testing.T, name string) capabilityCheck {
+func capCheckFor(t *testing.T, name string, ops ...string) capabilityCheck {
 	t.Helper()
+	var found []capabilityCheck
 	for _, c := range capabilityChecks {
-		if c.token == name {
-			return c
+		if c.token != name {
+			continue
 		}
+		if len(ops) > 0 && c.op != ops[0] {
+			continue
+		}
+		found = append(found, c)
 	}
-	t.Fatalf("no capability check registered for %q", name)
+	switch len(found) {
+	case 1:
+		return found[0]
+	case 0:
+		t.Fatalf("no capability check registered for %q %v", name, ops)
+	default:
+		// A credential with several checks must be addressed by op. Returning the
+		// first would quietly point an assertion at a probe it was not written for.
+		t.Fatalf("%q has %d checks — pass the op to disambiguate", name, len(found))
+	}
 	return capabilityCheck{}
 }
 
@@ -162,7 +237,7 @@ func TestValuesRepoProbeIsGitRefDiscovery(t *testing.T) {
 
 	t.Setenv("GH_REPO", "acme/platform")
 	t.Setenv("GITHUB_SERVER_URL", "")
-	cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
 
 	const wantPath = "/acme/platform.git/info/refs?service=git-upload-pack"
 	if gotPath != wantPath {
@@ -171,8 +246,8 @@ func TestValuesRepoProbeIsGitRefDiscovery(t *testing.T) {
 	if gotServer != "https://github.com" {
 		t.Errorf("server = %q, want the git host (NOT api.github.com)", gotServer)
 	}
-	if cr.status != capOK {
-		t.Errorf("200 → status %v, want capOK", cr.status)
+	if cr.Status != CapOK {
+		t.Errorf("200 → status %v, want CapOK", cr.Status)
 	}
 }
 
@@ -187,14 +262,14 @@ func TestValuesRepoProbeDeniesOnUnauthorized(t *testing.T) {
 	GitRefsProbe = func(_, _, _ string) (int, error) { return 401, nil }
 
 	t.Setenv("GH_REPO", "acme/platform")
-	cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
-	if cr.status != capDenied {
-		t.Fatalf("401 → status %v, want capDenied", cr.status)
+	cr := probeCapability(testCapCtx(), capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
+	if cr.Status != CapDenied {
+		t.Fatalf("401 → status %v, want CapDenied", cr.Status)
 	}
 	// A live-but-refused token needs re-scoping. "Rotate it" is the wrong advice
 	// and burns an operator's afternoon minting a replacement with the same gap.
-	if strings.Contains(cr.detail, "rotate the token") {
-		t.Errorf("401 detail must not prescribe rotation; got %q", cr.detail)
+	if strings.Contains(cr.Detail, "rotate the token") {
+		t.Errorf("401 detail must not prescribe rotation; got %q", cr.Detail)
 	}
 }
 
@@ -207,8 +282,8 @@ func TestValuesRepoProbeSkipsWithoutRepo(t *testing.T) {
 	GitRefsProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
 
 	t.Setenv("GH_REPO", "")
-	if cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok"); cr.status != capSkipped {
-		t.Errorf("status = %v, want capSkipped", cr.status)
+	if cr := probeCapability(testCapCtx(), capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok"); cr.Status != CapSkipped {
+		t.Errorf("status = %v, want CapSkipped", cr.Status)
 	}
 	if called {
 		t.Error("probed without the context to build a path")
@@ -220,7 +295,7 @@ func TestValuesRepoProbeSkipsWithoutRepo(t *testing.T) {
 // an unauthorized PAT at the git endpoint no matter how it is scoped, and an
 // operator who only re-checks the permission toggle finds nothing wrong.
 func TestValuesRepoHintNamesSSO(t *testing.T) {
-	h := capabilityHint("APL_VALUES_REPO_TOKEN")
+	h := CapabilityHint("APL_VALUES_REPO_TOKEN", capCheckFor(t, "APL_VALUES_REPO_TOKEN").op)
 	if !strings.Contains(h, "Contents: write") {
 		t.Errorf("hint must name the Contents permission; got %q", h)
 	}

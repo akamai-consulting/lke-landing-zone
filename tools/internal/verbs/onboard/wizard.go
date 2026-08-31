@@ -122,16 +122,38 @@ func ghFineGrainedDispatchURL(name, owner string) string {
 // picks the resource owner). A classic repo+workflow PAT also works; this is the
 // least-privilege option.
 //
-// ENVIRONMENTS, not Secrets, is the permission that governs this token's actual
-// job. This pre-fill used to request Actions + Secrets: write, which reads right
-// and is WRONG: the fine-grained "Secrets" permission covers only repo-level
-// Actions secrets (/repos/{o}/{r}/actions/secrets/...), while every secret in
-// catalog() is destined for an infra-<env> ENVIRONMENT secret, and those
-// endpoints — including the public-key GET that `gh secret set` must make before
-// it can encrypt anything — sit under "Environments". So a PAT minted from the
-// old link authenticated fine, passed every preflight, and then 403'd on the
-// first environment-secret write of a first-ever bootstrap. Actions: write stays
-// (the token is also used for workflow dispatch).
+// BOTH SECRET PERMISSIONS, because this PAT has two consumers and they do not
+// share a grant. The history here is a correction of a correction, so it is
+// written out in full — the next reader will otherwise re-derive half of it and
+// delete the other half, which is exactly what happened once already.
+//
+// ENVIRONMENTS: WRITE is what the BUILD needs. This pre-fill originally requested
+// Actions + Secrets: write, which reads right and is not enough: the fine-grained
+// "Secrets" permission covers only repo-level Actions secrets
+// (/repos/{o}/{r}/actions/secrets/...), while every secret in catalog() is
+// destined for an infra-<env> ENVIRONMENT secret, and those endpoints — including
+// the public-key GET that `gh secret set` must make before it can encrypt
+// anything — sit under "Environments". A PAT minted from that link authenticated
+// fine, passed every preflight, and 403'd on the first environment-secret write
+// of a first-ever bootstrap.
+//
+// SECRETS: WRITE IS BACK, for a consumer that did not exist when it was removed.
+// `llz ci bao-seed-all` seeds this same PAT to secret/infra/github-dispatch-token;
+// ESO syncs it into harbor/harbor-provisioner-gh-token; the in-cluster
+// harbor-robot-provisioner CronJob then reads and writes REPO-level secrets with
+// it (HARBOR_ROBOT_NAME, HARBOR_PASSWORD, HARBOR_PULL_*) — the channel a standby
+// peer seeds its own Harbor robots from. Without the grant that CronJob 403s
+// every five minutes, forever, and `llz ci converge` hard-fails the bootstrap on
+// the failed Jobs it leaves in the harbor namespace ~35 minutes into a run.
+//
+// So the rule is not "Environments, NOT Secrets" — that sentence is true of the
+// environment-secret writes it was written about and false as a description of
+// this credential. It needs BOTH, and dropping either one produces a token that
+// authenticates, probes valid, and fails somewhere the operator is not looking.
+// tokenprobe's capability checks now verify each grant separately, so a PAT
+// missing one of them is caught by `llz doctor` rather than by an outage.
+//
+// Actions: write stays (the token is also used for workflow dispatch).
 func ghFineGrainedSecretsWriteURL(name, owner string) string {
 	q := url.Values{}
 	q.Set("name", name)
@@ -141,6 +163,7 @@ func ghFineGrainedSecretsWriteURL(name, owner string) string {
 	q.Set("expires_in", "90")
 	q.Set("actions", "write")
 	q.Set("environments", "write")
+	q.Set("secrets", "write")
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
@@ -161,7 +184,7 @@ func catalog() []secretSpec {
 			Purpose: "GitHub PAT — CI stashes OBJ keys + persists OpenBao unseal keys",
 			Dest:    "infra-<env> environment secret",
 			URL:     ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", ""),
-			Note:    "Fine-grained PAT, Actions: write + ENVIRONMENTS: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT. Environments is the permission that governs infra-<env> environment secrets; the \"Secrets\" permission covers only repo-level secrets and is NOT enough. You must ALSO be Environment admin on every infra-<env> environment.",
+			Note:    "Fine-grained PAT, Actions: write + ENVIRONMENTS: write + SECRETS: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT, which carries all three. The two secret permissions are NOT interchangeable and this token needs both: Environments governs the infra-<env> secrets CI writes back, Secrets governs the repo-level HARBOR_* secrets the in-cluster harbor-robot-provisioner publishes. You must ALSO be Environment admin on every infra-<env> environment.",
 		},
 		{
 			Name:    "APL_VALUES_REPO_TOKEN",

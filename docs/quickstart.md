@@ -757,21 +757,35 @@ Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
 (that's exactly what `OPENBAO_SECRETS_WRITE_TOKEN` is for); `llz` never asks for
 them.
 
-> ⚠️ **`OPENBAO_SECRETS_WRITE_TOKEN` needs `Environments: write`, not `Secrets`.**
-> The wizard's pre-filled link creates a **fine-grained** PAT with **Actions: write
-> + Environments: write** (a classic `repo` + `workflow` PAT also works). Two traps:
+> ⚠️ **`OPENBAO_SECRETS_WRITE_TOKEN` needs `Environments: write` AND `Secrets: write`.**
+> They are different permissions governing different endpoints, this one token has a
+> consumer behind each, and neither implies the other. The wizard's pre-filled link
+> creates a **fine-grained** PAT with **Actions: write + Environments: write +
+> Secrets: write** (a classic `repo` + `workflow` PAT carries all three). Three traps:
 >
-> - The fine-grained **"Secrets" permission covers only *repo-level* secrets and is
->   NOT enough** — `infra-<env>` environment secrets are governed by
->   **Environments**.
+> - **`Environments: write`** governs the `infra-<env>` **environment** secrets CI
+>   writes back (seal key, recovery keys, OBJ keys). The fine-grained "Secrets"
+>   permission does *not* cover these — it covers only *repo-level* secrets.
+> - **`Secrets: write`** governs those repo-level secrets, and the cluster needs
+>   them: this same PAT is seeded to `secret/infra/github-dispatch-token`, and the
+>   in-cluster **`harbor-robot-provisioner`** CronJob publishes `HARBOR_ROBOT_NAME`
+>   / `HARBOR_PASSWORD` / `HARBOR_PULL_*` with it (the channel a standby peer seeds
+>   its Harbor robots from).
 > - You must **also be Environment admin** on every `infra-<env>` environment.
 >
-> Get either wrong and repo-level writes still succeed while the `--env`-scoped
-> `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
-> failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
-> Check the token is live with `GH_TOKEN=$PAT gh api user` (that cannot prove the
-> Environments permission — only that the token works at all). Canonical
-> reference: [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md) →
+> Each one fails in its own place and neither failure looks like a bad token. Without
+> Environments, the `--env`-scoped `gh secret set` calls 401 — typically surfacing as
+> `bootstrap-openbao.yml` failing its S3 preflight ~5 minutes into a run you started
+> 30 minutes earlier. Without Secrets, everything above passes and the provisioner
+> CronJob 403s every five minutes (`check repo secret HARBOR_ROBOT_NAME: HTTP 403`)
+> until `llz ci converge` hard-fails the bootstrap on its failed Jobs, ~35 minutes in.
+>
+> **`llz doctor --env <env>` now checks both**, probing each grant read-only against
+> the endpoint its consumer really calls and printing the verdict in the **PERMS**
+> column — so a PAT missing one of them is caught before the build rather than
+> during it. `GH_TOKEN=$PAT gh api user` proves only that the token is live, never
+> what it is scoped for. Canonical reference:
+> [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md) →
 > "`OPENBAO_SECRETS_WRITE_TOKEN` permissions".
 
 > **Manual alternative.** `llz secrets gather` (paste every credential yourself)

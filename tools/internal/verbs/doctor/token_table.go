@@ -83,3 +83,104 @@ func localValue(r envreq.Requirement, secrets, vars map[string]string) (string, 
 	v, ok := m[r.Name]
 	return v, ok && v != ""
 }
+
+// ProbeTokenCapabilities probes AUTHORIZATION for every requirement whose value
+// is readable locally, and returns the verdicts keyed by credential NAME plus
+// the count of REQUIRED CREDENTIALS that were denied at least one grant.
+//
+// CREDENTIALS, NOT CHECKS, and the distinction is not pedantic: a credential can
+// be refused several grants, and counting the refusals made one under-scoped PAT
+// report as "2 required credential(s) … lack a required permission". The caller
+// renders that number into a sentence whose noun is "credential", so the counter
+// has to mean what the sentence says or the operator goes looking for a second
+// broken token that does not exist. Like ProbeTokenValidities
+// it does not print — envreq.ReportReadiness renders the results as the table's
+// PERMS column.
+//
+// WHY THE LOCAL SIDE NEEDED THIS AT ALL. Authorization probing shipped CI-only,
+// on the reasoning that GitHub never hands a secret VALUE to a laptop. True of a
+// secret that lives only on GitHub — and irrelevant to the ones the operator
+// gathered, which sit in .llz/secrets.env and which the validity probe beside
+// this one has always read from there. So the table said
+//
+//	OPENBAO_SECRETS_WRITE_TOKEN  secret  REQUIRED  ✓ set  ⚠ warn (expires in 10d)
+//
+// about a PAT that could not write the repo-level secrets the cluster needs, and
+// the operator's next command was `llz build`. Every column was accurate; the one
+// that would have said "under-scoped" was not asked. That is the whole defect:
+// not a wrong answer, a question deferred to a place nobody was reading.
+//
+// SKIPPED, NEVER FAILED, WHEN THE VALUE IS NOT LOCAL. A secret set on GitHub but
+// absent from the cache cannot be probed here and reports as much — `llz ci
+// validate-tokens` asks the same catalog in CI where the value IS in the
+// environment.
+func ProbeTokenCapabilities(reqs []envreq.Requirement, secrets, vars map[string]string, instance envreq.LiveState, cc tokenprobe.CapContext) (map[string][]tokenprobe.CapabilityResult, int) {
+	out := map[string][]tokenprobe.CapabilityResult{}
+	denied := 0
+	for _, r := range reqs {
+		val, haveLocal := localValue(r, secrets, vars)
+		if !haveLocal {
+			// Only say something for a credential that HAS a scope requirement —
+			// otherwise every plain variable would grow an empty note.
+			ops := tokenprobe.CapabilityChecksFor(r.Name)
+			if len(ops) == 0 {
+				continue
+			}
+			// INSTANCE STATE EVEN FOR A TEMPLATE-SCOPED REQUIREMENT, which is wrong
+			// the moment one of those gets a capability check. envreq.Requirement.Template
+			// marks a credential that lives on the TEMPLATE repo (the e2e harness's
+			// own), and ReportReadiness picks the template LiveState for those; this
+			// asks the instance, so such a credential would be described as absent
+			// when it is merely elsewhere.
+			//
+			// LEFT AS PARITY, DELIBERATELY. No Template requirement has a registered
+			// check today, so the branch is unreachable, and ProbeTokenValidities
+			// beside it has the identical pre-existing shape — fixing one and not the
+			// other would replace a latent bug with a live inconsistency, and fixing
+			// both means a signature change on a function this branch did not
+			// otherwise touch. Whoever registers the first template-scoped check
+			// should thread the template LiveState through both and delete this note;
+			// it affects the skip WORDING only, never a verdict.
+			detail := tokenprobe.SkipNotSet
+			if instance.Has(r.Name, r.Secret) {
+				detail = "set on GitHub — not in .llz cache; gather locally or use `llz ci validate-tokens`"
+			}
+			// ONE SKIP PER REGISTERED CHECK, each naming its own op. A single
+			// Op-less row would say "we could not ask" about a credential with two
+			// separate grants without saying which two went unasked — and it is the
+			// only result in the model that a hint cannot be looked up for, in a
+			// package that had just been made plural precisely so a credential's
+			// grants stop being spoken about as one thing.
+			skips := make([]tokenprobe.CapabilityResult, 0, len(ops))
+			for _, op := range ops {
+				skips = append(skips, tokenprobe.CapabilityResult{Name: r.Name, Op: op, Status: tokenprobe.CapSkipped, Detail: detail})
+			}
+			out[r.Name] = skips
+			continue
+		}
+		rs := tokenprobe.CheckCapabilities(cc, r.Name, val)
+		if len(rs) == 0 {
+			continue
+		}
+		out[r.Name] = rs
+		// An OPTIONAL credential's denial is reported and does not count: the same
+		// rule `llz ci validate-tokens` applies, so doctor and CI agree on what
+		// stops a build.
+		if !r.Required {
+			continue
+		}
+		if anyDenied(rs) {
+			denied++
+		}
+	}
+	return out, denied
+}
+
+// anyDenied reports whether any of a credential's checks was refused. One
+// credential, one vote — see ProbeTokenCapabilities on why the count is of
+// credentials rather than of refusals. Unexported: it has no caller outside this
+// package, and an exported helper nothing needs is API surface someone has to
+// keep working.
+func anyDenied(rs []tokenprobe.CapabilityResult) bool {
+	return tokenprobe.AnyStatus(rs, tokenprobe.CapDenied)
+}

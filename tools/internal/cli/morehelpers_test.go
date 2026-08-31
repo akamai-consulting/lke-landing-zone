@@ -137,7 +137,7 @@ func TestReportReadiness(t *testing.T) {
 
 	var missing []string
 	out := captureStdout(t, func() {
-		missing = envreq.ReportReadiness(reqs, secrets, vars, instance, template, nil)
+		missing = envreq.ReportReadiness(reqs, secrets, vars, instance, template, nil, nil)
 	})
 	if !containsString(missing, "CACHED_VAR") || !containsString(missing, "MISSING_VAR") {
 		t.Errorf("missing = %v, want CACHED_VAR and MISSING_VAR", missing)
