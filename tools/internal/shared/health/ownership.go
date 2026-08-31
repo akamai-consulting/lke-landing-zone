@@ -128,11 +128,23 @@ type OwnershipIndex struct {
 	// is switched off entirely while any platform Application is unresolved, since
 	// then there is no evidence to veto WITH.
 	instanceNamespaces map[string]bool
-	// platformUnresolved names PLATFORM Applications that declare no resources.
-	// Argo publishes an empty .status.resources for an Application it has not
-	// compared, so such an app's resources are missing from the contested pass and
-	// an instance claim on one would win. See platformMayClaim for the blast
-	// radius that opens.
+	// platformUnresolved names PLATFORM Applications Argo has NOT COMPARED and
+	// that therefore declare no resources. Such an app's resources are missing
+	// from the contested pass and an instance claim on one would win. See
+	// platformMayClaim for the blast radius that opens.
+	//
+	// ZERO RESOURCES IS NOT ENOUGH ON ITS OWN — it conflates two opposite states,
+	// and reading it alone made this veto permanent on akamai/gsap-apl. An app
+	// Argo has not compared publishes nothing because there is no answer yet;
+	// a COMPARED app that publishes nothing is telling you the answer, and it is
+	// "I own nothing". Four apl-core gitops shells (gitops-global,
+	// istio-system-istio-artifacts, team-admin-values-gitops,
+	// team-platform-values-gitops) are Synced/Healthy with an empty
+	// .status.resources on every poll forever — global/team values with no
+	// rendered manifests. Vetoing on them is not "wait for evidence", it is
+	// waiting for evidence that has already arrived, so the boundary could never
+	// demote anything in a platform namespace on that instance. argoCompared is
+	// the discriminator; it fails closed on any value it does not recognise.
 	platformUnresolved []string
 	// platformUnresolvedNS are the destination namespaces of those Applications —
 	// the only evidence available about where the resources they did not publish
@@ -170,12 +182,45 @@ type OwnershipIndex struct {
 	// PLATFORM Application declares too. They stay platform; the count exists so
 	// the report can say the boundary was asked to move something it refused to.
 	contested int
-	// unresolved names instance-owned Applications that declare NO resources —
-	// an Application Argo has not yet compared (or cannot compare) publishes an
-	// empty .status.resources, so its children cannot be attributed to it THIS
-	// poll and gate the platform as if they were platform's. Reported so a
-	// converge that hard-fails on one poll and passes on the next is explicable.
+	// unresolved names instance-owned Applications Argo has NOT COMPARED — such an
+	// Application publishes an empty .status.resources, so its children cannot be
+	// attributed to it THIS poll and gate the platform as if they were platform's.
+	// Reported so a converge that hard-fails on one poll and passes on the next is
+	// explicable.
+	//
+	// SAME DISCRIMINATOR AS platformUnresolved, and for the same reason. A
+	// COMPARED instance app with an empty .status.resources owns nothing, so
+	// nothing of its is gating and there is nothing to explain — naming it would
+	// tell a reader to go looking for content that does not exist. Only the
+	// genuinely uncompared case is transient, which is what the report's "on this
+	// poll" claims about it.
 	unresolved []string
+}
+
+// argoCompared reports whether Argo has finished a comparison for this
+// Application — i.e. whether its .status.resources is an ANSWER rather than an
+// absence of one.
+//
+// THIS IS THE WHOLE FIX. Reading `len(a.Resources) == 0` alone conflates "Argo
+// has not looked yet" with "Argo looked and there is nothing here", and only the
+// first justifies a veto. Argo's SyncStatusCode has exactly three values:
+// "Synced" and "OutOfSync" are comparison VERDICTS; "Unknown" is what Argo
+// publishes while it has not compared — the state argo.go's own worked example
+// documents (`gitops-global (Unknown/Healthy) — ComparisonError: failed to list
+// refs`), and the state a ComparisonError leaves an app in.
+//
+// EVERYTHING ELSE IS "NOT COMPARED", deliberately. An empty string (no
+// .status.sync at all, a brand-new Application, a fetch that could not parse the
+// field) and any value a future Argo adds both land in the default arm and keep
+// the veto. Enumerating the verdicts rather than excluding "Unknown" is what
+// makes the unknown-unknowns fail closed.
+func argoCompared(a ArgoApp) bool {
+	switch a.Sync {
+	case "Synced", "OutOfSync":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewOwnershipIndex builds the index from every instance-owned Application's
@@ -203,13 +248,18 @@ func NewOwnershipIndex(apps []ArgoApp) OwnershipIndex {
 	platform := idx.platformDeclared
 	for _, a := range apps {
 		if !IsInstanceOwnedApp(a) {
-			// A platform Application that declares nothing cannot defend anything.
+			// A platform Application Argo has not COMPARED cannot defend anything.
 			// The instance side already refuses to claim in this state; the platform
 			// side has to record it, because the resources it would have protected
 			// are exactly the ones an instance claim could now take. Its DESTINATION
 			// bounds where those resources could be — an app with no destination
 			// bounds nothing, which is the fail-closed reading.
-			if len(a.Resources) == 0 {
+			//
+			// BOTH HALVES ARE REQUIRED. Zero resources on its own is not evidence of
+			// anything: a compared app that declares nothing has ANSWERED, and
+			// vetoing on its answer is what made this guard permanent rather than
+			// transient on akamai/gsap-apl. See argoCompared and platformUnresolved.
+			if len(a.Resources) == 0 && !argoCompared(a) {
 				idx.platformUnresolved = append(idx.platformUnresolved, a.Name)
 				if a.DestNamespace == "" {
 					idx.platformUnresolvedAnywhere = true
@@ -230,7 +280,12 @@ func NewOwnershipIndex(apps []ArgoApp) OwnershipIndex {
 			continue
 		}
 		if len(a.Resources) == 0 {
-			idx.unresolved = append(idx.unresolved, a.Name)
+			// Same discriminator as the platform arm. A compared instance app that
+			// declares nothing owns nothing — reporting it as "still gating the
+			// platform" points a reader at content that does not exist.
+			if !argoCompared(a) {
+				idx.unresolved = append(idx.unresolved, a.Name)
+			}
 			continue
 		}
 		for _, res := range a.Resources {
@@ -369,16 +424,45 @@ func (i OwnershipIndex) Namespaces() []string {
 	return out
 }
 
-// PlatformUnresolved names platform Applications that declared no resources, so
-// the contested pass could not see what they own.
+// PlatformUnresolved names platform Applications Argo has not compared, so the
+// contested pass could not see what they own. A COMPARED platform Application
+// that declares nothing is not here: it owns nothing, and there is nothing for
+// the contested pass to have missed.
 func (i OwnershipIndex) PlatformUnresolved() []string { return i.platformUnresolved }
+
+// PlatformUnresolvedAnywhere reports whether one of the uncompared platform
+// Applications names no destination, so nothing bounds it and the veto covers
+// every platform namespace rather than a named few.
+//
+// EXPORTED SO THE REPORT CAN STATE THE TRUE SCOPE. The boundary line used to say
+// "nothing in a platform namespace is demotable", which is wrong in both
+// directions: with a bounded veto the OTHER platform namespaces still demote on
+// that same poll, and separately the app-estate inference is off EVERYWHERE
+// while this list is non-empty (see Owns), which that sentence never mentioned.
+// A reader debugging a team-namespace failure got no line explaining it at all.
+func (i OwnershipIndex) PlatformUnresolvedAnywhere() bool { return i.platformUnresolvedAnywhere }
+
+// PlatformUnresolvedNamespaces lists the destination namespaces that bound the
+// veto — the namespaces demotion is actually off in when the veto is bounded.
+// Empty when PlatformUnresolvedAnywhere is true, where the scope is instead
+// every platform namespace.
+func (i OwnershipIndex) PlatformUnresolvedNamespaces() []string {
+	out := make([]string, 0, len(i.platformUnresolvedNS))
+	for ns := range i.platformUnresolvedNS {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Contested is how many resources an instance-owned Application claimed that a
 // platform Application claims too — refused, and still gating.
 func (i OwnershipIndex) Contested() int { return i.contested }
 
-// Unresolved names the instance-owned Applications that declared no resources,
-// so their content could not be attributed to them on this scan.
+// Unresolved names the instance-owned Applications Argo has not compared, so
+// their content could not be attributed to them on this scan and gates the
+// platform meanwhile. A COMPARED instance Application that declares nothing is
+// not here — it has no content to attribute.
 func (i OwnershipIndex) Unresolved() []string { return i.unresolved }
 
 // Owns reports whether an instance-owned Application — and no platform one —
@@ -415,18 +499,25 @@ func (i OwnershipIndex) Owns(ref ResourceRef) bool {
 	// every namespace a platform Application actually has a resource in; a
 	// reserved namespace returned above; a platform Application's own claim on
 	// this exact resource beats it; and it is off entirely while any platform
-	// Application is unresolved — an app that published no resources could have
+	// Application is UNCOMPARED — an app Argo has not diffed yet could have
 	// declared this one, and a namespace-shaped guess is not the place to
-	// overrule that.
+	// overrule that. (A compared platform app that declares nothing is not in
+	// that list: it has answered, and its answer is "not mine".)
 	if len(i.platformUnresolved) > 0 {
 		return false
 	}
 	return i.instanceNamespaces[ref.Namespace] && !i.platformDeclared[ref]
 }
 
-// platformMayClaim reports whether an unresolved PLATFORM Application could have
+// platformMayClaim reports whether an UNCOMPARED PLATFORM Application could have
 // declared a resource in this namespace, in which case nothing there is
 // demotable this poll.
+//
+// "THIS POLL" IS LOAD-BEARING and only true because of argoCompared. While zero
+// resources alone qualified, four permanently-empty apl-core gitops shells kept
+// this returning true on every poll forever — a guard that reads as transient
+// and is in fact structural. An uncompared app really does resolve on a later
+// poll, so the veto really is transient now.
 //
 // SCOPED TO THE DESTINATION, not to every platform namespace. The blanket form
 // meant one Application mid-comparison — routine during a bootstrap, when Argo is

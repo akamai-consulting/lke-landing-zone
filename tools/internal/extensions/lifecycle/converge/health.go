@@ -584,8 +584,27 @@ func printHealthSummary(r *health.Report, owned health.OwnershipIndex) {
 	if n := owned.Contested(); n > 0 {
 		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d resource(s) an instance-owned Application declares are ALSO declared by a platform Application — kept gating the platform.", n))
 	}
+	// "ARGO HAS NOT COMPARED THEM" IS THE CONDITION, not "declares no resources",
+	// and the line says so because the difference is what makes it transient. A
+	// platform Application Argo HAS compared and that owns nothing never reaches
+	// this list — apl-core's global/team gitops shells are Synced with an empty
+	// .status.resources permanently, and while zero resources alone put an app
+	// here the veto could never lift on an instance that runs them.
+	//
+	// THE SCOPE IS STATED, NOT GUESSED. The previous wording ("nothing in a
+	// platform namespace is demotable") was wrong in both directions: a veto
+	// bounded to one destination leaves the OTHER platform namespaces demotable on
+	// that same poll, and — the half nobody could see — Owns switches the
+	// app-estate inference off EVERYWHERE while this list is non-empty, so a
+	// team-namespace failure was gating for a reason the report never printed.
 	if u := owned.PlatformUnresolved(); len(u) > 0 {
-		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), fmt.Sprintf("%d platform Application(s) declare no resources yet (%s) — the boundary cannot tell what they own, so nothing in a platform namespace is demotable on this poll.", len(u), strings.Join(u, ", ")))
+		scope := "every platform namespace (one of them names no destination, so nothing bounds it)"
+		if !owned.PlatformUnresolvedAnywhere() {
+			scope = "their destination namespace(s): " + strings.Join(owned.PlatformUnresolvedNamespaces(), ", ")
+		}
+		msg := fmt.Sprintf("%d platform Application(s) have not been compared by Argo yet (%s) — the boundary cannot tell what they own. Demotion is off in %s; and anywhere in the app estate, a resource no Application declares stays platform until they resolve (direct claims still demote). Transient: it clears when Argo finishes comparing them.",
+			len(u), strings.Join(u, ", "), scope)
+		fmt.Printf("  %s %s\n", color.Yellow("boundary:"), msg)
 	}
 	// NAMED BEFORE THE OTHER BOUNDARY LINES, because it is the only one an
 	// operator can act on in a minute. Every other state here is the boundary

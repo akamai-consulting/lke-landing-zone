@@ -8,8 +8,21 @@ import (
 )
 
 // app builds an ArgoApp the way ParseArgoApp would, for the ownership tests.
+//
+// IT LEAVES Sync EMPTY, WHICH MEANS "ARGO HAS NOT COMPARED THIS APP" — see
+// argoCompared. Every existing caller that passes no resources means exactly
+// that (a ComparisonError, or an Application Argo has not reached yet), so the
+// zero value is the right default here. A test about an app Argo HAS compared
+// must say so: use comparedApp, or set Sync on the literal.
 func app(name, project string, res ...ResourceRef) ArgoApp {
 	return ArgoApp{Name: name, Project: project, Resources: res}
+}
+
+// comparedApp builds an ArgoApp Argo has finished comparing — the state whose
+// empty .status.resources is an ANSWER ("I own nothing") rather than an absence
+// of one.
+func comparedApp(name, project string, res ...ResourceRef) ArgoApp {
+	return ArgoApp{Name: name, Project: project, Sync: "Synced", Health: "Healthy", Resources: res}
 }
 
 func deployRef(ns, name string) ResourceRef {
@@ -741,7 +754,7 @@ func TestOwns_InstanceNamespaceInference(t *testing.T) {
 	// One unresolved platform Application and the inference has nothing to veto
 	// with, so it switches off — while the DIRECT claim survives, because that one
 	// is evidence.
-	blind := NewOwnershipIndex([]ArgoApp{instance, platform, {Name: "mid-compare", Project: "platform"}}).
+	blind := NewOwnershipIndex([]ArgoApp{instance, platform, {Name: "mid-compare", Project: "platform", Sync: "Unknown"}}).
 		WithPlatformNamespaces([]string{"harbor", "istio-system"})
 	if blind.Owns(undeclared) {
 		t.Errorf("the inference must be off while a platform Application has published nothing")
@@ -765,7 +778,7 @@ func TestPlatformMayClaim_ScopedToTheDestination(t *testing.T) {
 	oauth := ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "istio-system", Name: "gcp-oauth2-proxy"}
 	ns := []string{"harbor", "istio-system", "argocd"}
 
-	bounded := NewOwnershipIndex([]ArgoApp{instance, {Name: "harbor-harbor", Project: "platform", DestNamespace: "harbor"}}).WithPlatformNamespaces(ns)
+	bounded := NewOwnershipIndex([]ArgoApp{instance, {Name: "harbor-harbor", Project: "platform", Sync: "Unknown", DestNamespace: "harbor"}}).WithPlatformNamespaces(ns)
 	if !bounded.Owns(oauth) {
 		t.Errorf("an unresolved platform app destined for harbor must not veto istio-system")
 	}
@@ -773,7 +786,7 @@ func TestPlatformMayClaim_ScopedToTheDestination(t *testing.T) {
 		t.Errorf("it must still veto its OWN destination")
 	}
 
-	unbounded := NewOwnershipIndex([]ArgoApp{instance, {Name: "mystery", Project: "platform"}}).WithPlatformNamespaces(ns)
+	unbounded := NewOwnershipIndex([]ArgoApp{instance, {Name: "mystery", Project: "platform", Sync: "Unknown"}}).WithPlatformNamespaces(ns)
 	if unbounded.Owns(oauth) {
 		t.Errorf("an unresolved platform app with NO destination bounds nothing, so the veto must still cover every platform namespace")
 	}
@@ -835,5 +848,142 @@ func TestMisprojected_QuietWhenTheProjectIsSet(t *testing.T) {
 	}
 	if !idx.Owns(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "team-gsap", Name: "undeclared-operand"}) {
 		t.Errorf("with nothing misprojected the estate's namespace inference must be on")
+	}
+}
+
+// ── The compared-but-empty Application ───────────────────────────────────────
+//
+// TestOwns_ComparedPlatformAppWithNoResourcesDoesNotVeto is the gate for the
+// state that made this whole boundary inert on akamai/gsap-apl (LLZ v0.0.49).
+// The per-resource demotion shipped, and then never fired once: four platform
+// Applications — apl-core's global/team gitops shells — are Synced/Healthy with
+// an EMPTY .status.resources on every poll forever, because they are values
+// repos that render no manifests. Reading `len(Resources) == 0` alone put all
+// four in platformUnresolved, so platformMayClaim returned true permanently and
+// nothing in a platform namespace could ever be demoted. Four instance-owned
+// istio-system failures hard-failed the platform gate as a result.
+//
+// The distinction is between an app Argo has NOT COMPARED (zero resources is
+// missing evidence — veto) and one it HAS (zero resources is the answer — do
+// not veto). Both arms are asserted here so the fix cannot pass by weakening
+// the guard.
+func TestOwns_ComparedPlatformAppWithNoResourcesDoesNotVeto(t *testing.T) {
+	oauth := deployRef("istio-system", "gcp-oauth2-proxy")
+	hatch := app("instance-custom-istio-system", InstanceCustomProject, oauth)
+	ns := []string{"argocd", "harbor", "istio-system"}
+
+	// The shells as the failed run reported them: Synced/Healthy, no resources,
+	// and NO destination namespace — which under the old rule also set
+	// platformUnresolvedAnywhere, widening the veto to every platform namespace.
+	shells := []ArgoApp{
+		comparedApp("gitops-global", "default"),
+		comparedApp("istio-system-istio-artifacts", "default"),
+		comparedApp("team-admin-values-gitops", "default"),
+		comparedApp("team-platform-values-gitops", "default"),
+	}
+
+	idx := NewOwnershipIndex(append([]ArgoApp{hatch}, shells...)).WithPlatformNamespaces(ns)
+
+	// FAIL CLOSED ON VACUITY. If the instance claim never reached the index — a
+	// renamed field, a fixture that stopped parsing — every assertion below would
+	// pass for the wrong reason, because "not owned" is the default answer.
+	if got := idx.Namespaces(); len(got) != 1 || got[0] != "istio-system" {
+		t.Fatalf("fixture never indexed the instance claim: Namespaces() = %v, want [istio-system]", got)
+	}
+	if got := idx.PlatformUnresolved(); len(got) != 0 {
+		t.Errorf("PlatformUnresolved() = %v, want none — a COMPARED Application that declares nothing has answered; it is not missing evidence", got)
+	}
+	if !idx.Owns(oauth) {
+		t.Error("a compared platform Application that owns nothing must not veto the demotion — this is the gsap-apl regression: four Synced/empty gitops shells kept the boundary switched off on every poll forever")
+	}
+
+	// THE INVERSE, so the fix cannot pass by disabling the guard. The same four
+	// apps mid-comparison still veto: zero resources is then genuinely missing
+	// evidence, and one of them could own this Deployment.
+	uncompared := make([]ArgoApp, len(shells))
+	for i, sh := range shells {
+		sh.Sync = "Unknown" // what Argo publishes before it has diffed, and on a ComparisonError
+		uncompared[i] = sh
+	}
+	blind := NewOwnershipIndex(append([]ArgoApp{hatch}, uncompared...)).WithPlatformNamespaces(ns)
+	if got := blind.PlatformUnresolved(); len(got) != 4 {
+		t.Errorf("PlatformUnresolved() = %v, want all four — an uncompared platform app must still be named", got)
+	}
+	if blind.Owns(oauth) {
+		t.Error("an UNCOMPARED platform Application must still veto: it has published nothing, so it could own this resource and an instance claim would win uncontested")
+	}
+
+	// DestNamespace == "" plus uncompared is the widening arm, and it is what the
+	// shells' shape would have hit. It must survive for the genuinely uncompared
+	// case: an app that names no destination bounds nothing.
+	anywhere := NewOwnershipIndex([]ArgoApp{hatch, {Name: "mystery", Project: "default", Sync: "Unknown"}}).
+		WithPlatformNamespaces(ns)
+	if anywhere.Owns(oauth) {
+		t.Error("an uncompared platform app with no destination bounds nothing, so the veto must still reach every platform namespace")
+	}
+	// FAIL CLOSED ON THE UNRECOGNISED. argoCompared enumerates the comparison
+	// VERDICTS rather than excluding "Unknown", so a value no one anticipated —
+	// a future Argo status, a truncated fetch — keeps the veto instead of
+	// silently demoting the platform's own content.
+	for _, weird := range []string{"", "Unknown", "Comparing", "Error", "synced"} {
+		idx := NewOwnershipIndex([]ArgoApp{hatch, {Name: "gitops-global", Project: "default", Sync: weird}}).
+			WithPlatformNamespaces(ns)
+		if idx.Owns(oauth) {
+			t.Errorf("Sync=%q is not a comparison verdict; the veto must hold (fail closed on values the predicate does not recognise)", weird)
+		}
+	}
+
+	// OutOfSync IS a verdict — Argo compared, found a difference, and published
+	// what it found. An app that owns nothing and is OutOfSync for its own
+	// reasons still owns nothing.
+	drifting := NewOwnershipIndex([]ArgoApp{hatch, {Name: "gitops-global", Project: "default", Sync: "OutOfSync"}}).
+		WithPlatformNamespaces(ns)
+	if !drifting.Owns(oauth) {
+		t.Error("OutOfSync is a completed comparison; an OutOfSync app declaring nothing owns nothing and must not veto")
+	}
+}
+
+// TestOwns_ContestedStillWinsOverAComparedEmptyPlatformApp — the contested pass
+// is the invariant this change is most likely to break, because it lives one
+// `continue` away from the arm being edited. A resource a PLATFORM Application
+// actually declares stays platform however many instance apps claim it, and the
+// compared-but-empty relaxation must not reach it: the relaxation is about apps
+// that declare NOTHING, and this one declares the resource.
+func TestOwns_ContestedStillWinsOverAComparedEmptyPlatformApp(t *testing.T) {
+	istiod := deployRef("istio-system", "istiod")
+	idx := NewOwnershipIndex([]ArgoApp{
+		app("instance-custom-istio-system", InstanceCustomProject, istiod),
+		comparedApp("istio", "default", istiod), // the platform's own, compared and declaring it
+		comparedApp("gitops-global", "default"), // compared and empty — no longer a veto
+	}).WithPlatformNamespaces([]string{"istio-system"})
+
+	if idx.Owns(istiod) {
+		t.Error("a resource a PLATFORM Application declares stays platform — removing the empty-app veto must not remove the contested pass with it")
+	}
+	if idx.Contested() != 1 {
+		t.Errorf("Contested() = %d, want 1 — the refused claim must still be reported", idx.Contested())
+	}
+}
+
+// TestUnresolved_OnlyNamesAppsArgoHasNotCompared is the instance-side half. The
+// same conflation fed idx.unresolved, whose report line tells the reader that
+// "THEIR content still gates the platform on this poll" — a claim that is only
+// true while Argo has not compared the app. A compared instance Application that
+// declares nothing has no content to gate, and naming it sends a reader looking
+// for resources that do not exist.
+func TestUnresolved_OnlyNamesAppsArgoHasNotCompared(t *testing.T) {
+	idx := NewOwnershipIndex([]ArgoApp{
+		app("dispatch", InstanceCustomProject),                      // ComparisonError: not compared
+		comparedApp("account-health-values", InstanceCustomProject), // compared, owns nothing
+		comparedApp("account-health", InstanceCustomProject, deployRef("team-gsap", "account-health")),
+	})
+	// Vacuity: the corpus must actually contain the compared/empty app, or the
+	// assertion below passes on an empty list for the wrong reason.
+	if got := idx.Namespaces(); len(got) != 1 || got[0] != "team-gsap" {
+		t.Fatalf("fixture never indexed the declaring app: Namespaces() = %v, want [team-gsap]", got)
+	}
+	got := idx.Unresolved()
+	if len(got) != 1 || got[0] != "dispatch" {
+		t.Errorf("Unresolved() = %v, want [dispatch] only — a COMPARED instance Application that declares nothing owns nothing and is not 'still gating on this poll'", got)
 	}
 }

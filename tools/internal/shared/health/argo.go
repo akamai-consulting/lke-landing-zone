@@ -41,10 +41,17 @@ type ArgoApp struct {
 	// DestNamespace is .spec.destination.namespace — where this Application puts
 	// what it does not namespace itself.
 	//
-	// IT IS ONLY READ WHEN Resources IS EMPTY. An Application Argo has not compared
-	// publishes nothing, so the ownership index has to assume it could own
-	// something; the destination is the only evidence available about WHERE. An
-	// empty value means "could be anywhere", which is the fail-closed reading. See
+	// TWO READS, AND THEY ARE NOT THE SAME. NewOwnershipIndex reads it
+	// UNCONDITIONALLY on every platform Application, to mark the namespace
+	// platformOccupied — an app that declares into a namespace holds it whether or
+	// not Argo has compared the app yet.
+	//
+	// The second read is the narrow one: it bounds the veto for a platform
+	// Application that declares no resources AND that Argo has NOT compared (see
+	// argoCompared). Such an app publishes nothing, so the index has to assume it
+	// could own something and the destination is the only evidence about WHERE; an
+	// empty value means "could be anywhere", which is the fail-closed reading. A
+	// COMPARED app with no resources owns nothing and never reaches that path. See
 	// OwnershipIndex.platformMayClaim.
 	DestNamespace string
 }
