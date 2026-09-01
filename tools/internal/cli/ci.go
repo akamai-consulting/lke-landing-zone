@@ -143,6 +143,7 @@ func ciCmd() *cobra.Command {
 	// …and the check that asks the second question: not "could Argo compare it"
 	// but "did the value reach the object, and if not, CAN it".
 	c.AddCommand(assertplatform.OverlayAppliedCmd())
+	c.AddCommand(assertplatform.OverlayAppliabilityCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in

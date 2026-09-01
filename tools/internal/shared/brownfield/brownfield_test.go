@@ -73,18 +73,42 @@ const syncedOwner = `{"metadata":{"name":"monitoring-loki"},
     "source":{"helm":{"values":"ingester:\n  persistence:\n    enabled: true\n    claims:\n    - name: data\n      size: 5Gi\n  resources:\n    limits:\n      cpu: \"1\"\n      memory: 3Gi\n    requests:\n      cpu: 100m\n      memory: 512Mi\n"}}},
   "status":{"sync":{"status":"Synced"},"health":{"status":"Progressing"},"conditions":[]}}`
 
+// statefulSetRefusal is what a real apiserver returned for the WAL-claim change
+// on the cluster this whole migration was written for. Every test below describes
+// a BROWNFIELD cluster — one where the migration is genuinely needed — so this is
+// the honest answer to the appliability probe createOnlyStillHolds sends before
+// deleting anything. A runner that answered "accepted" instead would be
+// describing a cluster on which the migration must NOT run.
+const statefulSetRefusal = `The StatefulSet "loki-ingester" is invalid: spec: Forbidden: updates to ` +
+	`statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', ` +
+	`'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden`
+
 // testDeps is a Deps whose clock does not sleep, so the recreate wait runs at
 // test speed. Its runner answers the OWNER read — every path that deletes checks
-// first — and returns empty for anything else.
+// first — and the pre-delete appliability probe, and returns empty for anything
+// else.
 func testDeps() Deps { return testDepsWithOwner(syncedOwner, true) }
 
 func testDepsWithOwner(owner string, answered bool) Deps {
+	return testDepsWith(owner, answered, func(...string) (string, bool) {
+		return statefulSetRefusal, false
+	})
+}
+
+// testDepsWith lets a case answer the pre-delete probe differently — the arm that
+// decides whether an irreversible delete happens at all.
+func testDepsWith(owner string, answered bool, probe func(...string) (string, bool)) Deps {
 	now := time.Now()
 	return Deps{
 		Kubectl: func(args ...string) (string, bool) {
 			for _, a := range args {
 				if a == "application.argoproj.io" {
 					return owner, answered
+				}
+			}
+			for _, a := range args {
+				if a == "--dry-run=server" {
+					return probe(args...)
 				}
 			}
 			return "", true

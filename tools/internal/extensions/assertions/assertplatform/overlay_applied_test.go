@@ -53,8 +53,8 @@ const statefulSetRefusal = `The StatefulSet "loki-ingester" is invalid: spec: Fo
 func withLiveObject(t *testing.T, raw string, absent, answered bool) {
 	t.Helper()
 	prev := readLiveObject
-	readLiveObject = func(string, string, string) ([]byte, bool, bool) {
-		return []byte(raw), absent, answered
+	readLiveObject = func(string, string, string) ([]byte, bool, bool, string) {
+		return []byte(raw), absent, answered, "stubbed kubectl said nothing"
 	}
 	t.Cleanup(func() { readLiveObject = prev })
 }

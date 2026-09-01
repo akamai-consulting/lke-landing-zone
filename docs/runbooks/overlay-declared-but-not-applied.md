@@ -91,7 +91,7 @@ that failed, or the checks on whether Argo would put the object back: an operato
 can know something this code does not about whether a second attempt is
 worthwhile, and cannot know what an unanswered apiserver would have said.
 
-Four more checks stand in front of the delete: no poll-level evidence that Argo is wedged (a repo-server
+Five more checks stand in front of the delete: no poll-level evidence that Argo is wedged (a repo-server
 cache auth split, an apply stuck on the annotation limit); the Application that
 OWNS the object is `Synced` with no spec error; that Application **self-heals**
 (`syncPolicy.automated.selfHeal` — a cluster-side deletion is drift, and nothing
@@ -181,6 +181,50 @@ declared path is mapped in `clusterspec.OverlayFields()` or exempted in
 `OverlayUnmapped()` with a reason, and a create-time-only field also names the
 brownfield migration that lands it. `TestEveryDeclaredOverlayPathIsMappedOrExempt`
 fails a pull request that does neither.
+
+### What checks the `CreateOnly` flag itself
+
+Those guards check the flag is used CONSISTENTLY — a create-only field names a
+migration, a mutable one does not. Neither asks whether the classification is
+**true**, and it is a hand-set boolean: the next field the apiserver happens to
+fix at create time gets `CreateOnly: false` by omission and reproduces the outage
+below. Two things ask an apiserver instead.
+
+`llz ci assert-overlay-appliability` is the PR-time half, run in the kind lane of
+`lint.yml`. It builds each mapped object in its **pre-overlay** shape, server
+-dry-run-patches every declared change, and fails if the apiserver disagrees with
+the map in either direction — a field declared mutable that is refused, or a field
+declared `CreateOnly` that is accepted. The second is not pedantry: an
+over-declared `CreateOnly` is a migration that deletes and recreates a live object
+to land a value an ordinary patch would have landed.
+
+    # The fixtures carry NO Namespace objects — the lane they run in owns those, so
+    # the namespaces they land in must already exist. `--print-namespaces` lists them
+    # rather than leaving this recipe to go stale against a future row.
+    for ns in $(llz ci assert-overlay-appliability --print-namespaces); do
+      kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+    done
+    llz ci assert-overlay-appliability --emit-fixtures --out /tmp/fixtures.json
+    kubectl apply -f /tmp/fixtures.json      # a THROWAWAY cluster — this writes objects
+    llz ci assert-overlay-appliability
+
+The fixture is seeded from each scalar row's `Prior`, the chart default a
+pre-overlay object carries, so the probe tests `default → declared` — the
+transition a brownfield cluster actually performs — rather than `absent → set`,
+which anything gated on a transition would accept.
+`TestEveryScalarRowsPriorIsWhatTheRecordedBrownfieldObjectCarries` holds `Prior`
+to `clusterspec/testdata/live/loki-ingester.brownfield.json`; if apl-core moves a
+chart default, re-record that file and correct `Prior` with it.
+
+The runtime half is in the migration itself: `createOnlyStillHolds` re-asks the
+question of the **live** object immediately before the orphan delete, and refuses
+the delete if the apiserver accepts the change — or if it cannot tell. A PR-time
+gate protects the next edit to the field map; an instance runs whatever table
+shipped in its binary, so the destructive step verifies its own premise.
+
+A skipped row is reported as `skip`, not `ok`, and the pass line says how many
+rows went unprobed. If you see that, the row's `Prior` equals its declared value
+and the apiserver was never asked about it.
 
 ## Worked example — Loki's WAL (`049-loki-wal-pvc`)
 

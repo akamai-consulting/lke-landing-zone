@@ -71,6 +71,7 @@ package brownfield
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -630,7 +631,7 @@ func RunMigration(d Deps, w capability.Writer, id string, confirmed, dryRun, for
 	if err := recordAttempt(w, id, d.Now()); err != nil {
 		return err
 	}
-	if err := recreate(w, target.Migration, f); err != nil {
+	if err := recreate(d, w, target.Migration, f); err != nil {
 		clearAttempt(w, id)
 		return err
 	}
@@ -953,9 +954,12 @@ func strategySupported(m Migration) error {
 		"a repair for a live object", m.ID, m.Strategy)
 }
 
-func recreate(w capability.Writer, m Migration, f clusterspec.OverlayField) error {
+func recreate(d Deps, w capability.Writer, m Migration, f clusterspec.OverlayField) error {
 	switch m.Strategy {
 	case StrategyOrphanRecreate:
+		if err := createOnlyStillHolds(d, f); err != nil {
+			return fmt.Errorf("%s: %w", m.ID, err)
+		}
 		if _, err := w.DeleteOrphan(f.Namespace, f.Kind, f.Name); err != nil {
 			return fmt.Errorf("%s: deleting %s %s/%s (--cascade=orphan): %w",
 				m.ID, f.Kind, f.Namespace, f.Name, err)
@@ -965,6 +969,143 @@ func recreate(w capability.Writer, m Migration, f clusterspec.OverlayField) erro
 		return fmt.Errorf("%s declares strategy %q, which nothing here implements — refusing to guess at "+
 			"a repair for a live object", m.ID, m.Strategy)
 	}
+}
+
+// ── the claim, checked against the cluster it is about to act on ─────────────
+
+// migrationProbe server-dry-run-patches the LIVE object. Its own seam, and not
+// readObject's, for the reason the appliability lane keeps its two apart: a test
+// double installed for a read must not answer for a write-shaped probe.
+var migrationProbe = func(d Deps, f clusterspec.OverlayField, patch string) (out string, accepted bool) {
+	args := migrationProbeArgs(f, patch)
+	// THE DRY-RUN FLAG IS CHECKED, NOT ASSUMED. This argv is one token away from a
+	// real write against whatever cluster the kubeconfig points at, and unlike the
+	// sibling probe in assertplatform it does not pass through a declared
+	// cluster-read handle that would refuse it. A local invariant is the cheaper
+	// half of the same guarantee: a later edit that drops the flag fails here rather
+	// than mutating a live StatefulSet from the middle of a safety check.
+	for _, a := range args {
+		if a == "--dry-run=server" {
+			return d.Kubectl(args...)
+		}
+	}
+	return "migrationProbe built a patch argv with no --dry-run=server; refusing to run it", false
+}
+
+// migrationProbeArgs is the argv, in one place so a test can assert what it
+// contains without shelling out.
+func migrationProbeArgs(f clusterspec.OverlayField, patch string) []string {
+	return []string{"-n", f.Namespace, "patch", f.Kind, f.Name,
+		"--dry-run=server", "-o", "json", "-p", patch}
+}
+
+// ProbeInconclusive marks a refusal to delete that came from not being able to
+// ASK, rather than from an answer.
+//
+// IT EXISTS SO ONE EXTRA APISERVER CALL CANNOT TURN A POLL INTO A FAILURE. Before
+// this check, a 5xx or a webhook timeout on the migration path simply meant the
+// delete was attempted; now it means the delete is refused, and reporting that as
+// an ERROR would fail a whole converge run on a blip — a new red-flake surface on
+// the e2e path, introduced by a guard meant to make things safer. Converge is a
+// poll loop: "could not ask" is a reason to look again, not a reason to stop. A
+// permission denial or an unclassified refusal is NOT this — those are answers,
+// and they stay fatal.
+type ProbeInconclusive struct{ Err error }
+
+func (p ProbeInconclusive) Error() string { return p.Err.Error() }
+func (p ProbeInconclusive) Unwrap() error { return p.Err }
+
+// IsProbeInconclusive reports whether an error is the could-not-ask kind.
+func IsProbeInconclusive(err error) bool {
+	var p ProbeInconclusive
+	return errors.As(err, &p)
+}
+
+// createOnlyStillHolds asks the apiserver whether this field really is fixed at
+// create time — on the real object, immediately before deleting it.
+//
+// THE PR-TIME GATE CANNOT COVER THIS, and that is the whole reason it exists.
+// `llz ci assert-overlay-appliability` asks a kind apiserver whether each
+// CreateOnly claim is true, which protects the NEXT change to the field map. An
+// instance runs whatever table shipped in its binary, so a row that was wrong when
+// it shipped reaches a cluster that never sees the gate — and "the guard would
+// have caught it" is not something a cluster can check. UnmappedOverlayPaths two
+// files over is deliberately run at BOTH times for exactly this reason; the claim
+// that DELETES A LIVE STATEFULSET had only the PR-time half.
+//
+// IT IS THE SAME QUESTION, ASKED WHERE IT IS ACTED ON. A brownfield object exists
+// and lacks the field, so dry-run-patching it with the declared value IS the
+// appliability probe. If the apiserver accepts, the value could have been patched
+// in and the delete is a destructive repair for a problem that does not exist.
+//
+// FAIL-CLOSED, AND THE ASYMMETRY IS THE ARGUMENT. Refusing costs a migration that
+// does not run, with a message naming why, which an operator can act on. Deleting
+// costs a live workload's controller on the strength of a claim nothing verified,
+// which nobody can undo. So an unverifiable probe refuses too.
+// migrationRawValues is the seam the pre-delete check reads the declared overlay
+// through. A var for exactly the reason the appliability lane made
+// overlayRawValuesFor one: reading clusterspec.AplAppRawValues() directly pins
+// every test to the REAL apl-overlay, where every shipped row has a _rawValues
+// entry — so the arm below that refuses a row whose app declares none is
+// unreachable from a test, and an unreachable fail-closed arm is one that can be
+// flipped to "proceed" with the whole suite green. Measured: it could, and this is
+// the arm standing between a wrong `App` string and DeleteOrphan on a live object.
+var migrationRawValues = clusterspec.AplAppRawValues
+
+func createOnlyStillHolds(d Deps, f clusterspec.OverlayField) error {
+	rv, ok := migrationRawValues()[f.App]
+	if !ok {
+		return fmt.Errorf("the overlay declares no _rawValues for app %s, so this migration's CreateOnly "+
+			"claim cannot be checked against the cluster — refusing to delete %s %s/%s on a claim "+
+			"nothing can confirm", f.App, f.Kind, f.Namespace, f.Name)
+	}
+	declared, ok := clusterspec.RawValue(rv, f.Value...)
+	if !ok {
+		return fmt.Errorf("the overlay declares no %s, so this migration's CreateOnly claim cannot be "+
+			"checked against the cluster — refusing to delete %s %s/%s on a claim nothing can confirm",
+			clusterspec.OverlayFieldPath(f), f.Kind, f.Namespace, f.Name)
+	}
+	patch, err := f.Patch(rv)
+	if err != nil {
+		return fmt.Errorf("could not build the probe that would confirm %s is create-only (%v) — "+
+			"refusing to delete %s %s/%s on a claim nothing can confirm",
+			clusterspec.OverlayFieldPath(f), err, f.Kind, f.Namespace, f.Name)
+	}
+	// THE PROBE MUST BE ABOUT THIS ROW'S FIELD, and the PR-time lane says why in the
+	// same words: a StatefulSet's immutability refusal is a WHOLE-SPEC message,
+	// byte-identical for any non-whitelisted spec key, so a CREATE-ONLY verdict on
+	// its own establishes "the patch touched sts.spec outside the mutable whitelist",
+	// not "this field is create-only". Without this, a patch aimed at an unrelated
+	// key drew the identical refusal and CLEARED the delete — the same false green
+	// the lane closes, reproduced here because only one half had the check.
+	if err := clusterspec.PatchTargetsField(patch, f, declared); err != nil {
+		return fmt.Errorf("cannot confirm %s is create-only before deleting %s %s/%s: %w. "+
+			"Whatever the apiserver says about that patch is evidence about a DIFFERENT field",
+			clusterspec.OverlayFieldPath(f), f.Kind, f.Namespace, f.Name, err)
+	}
+	out, accepted := migrationProbe(d, f, patch)
+	if accepted {
+		return fmt.Errorf("%s is declared CreateOnly, but this cluster's apiserver ACCEPTED the change "+
+			"as an ordinary patch to the existing %s %s/%s. Deleting it would recreate a live workload's "+
+			"controller to land a value a patch would have landed. Refusing. Either the field map's "+
+			"CreateOnly is wrong for this apiserver version, or the row's Patch is not sending what it "+
+			"claims — `llz ci assert-overlay-appliability` is the PR-time half of this question",
+			clusterspec.OverlayFieldPath(f), f.Kind, f.Namespace, f.Name)
+	}
+	if !health.IsImmutableFieldRejection(out) {
+		err := fmt.Errorf("could not confirm %s is create-only before deleting %s %s/%s: the apiserver "+
+			"refused the probe for a reason this does not classify as immutability, which may be a "+
+			"permission or transport fault rather than a verdict about the field. 'Could not tell' is "+
+			"not 'go ahead and delete'. The apiserver said: %s",
+			clusterspec.OverlayFieldPath(f), f.Kind, f.Namespace, f.Name, health.RefusalText(out))
+		// A BLIP IS NOT A VERDICT. Marked inconclusive so converge looks again on the
+		// next poll instead of failing the run; a 403 or any other answer stays fatal.
+		if health.IsTransientFetchError(out) {
+			return ProbeInconclusive{Err: err}
+		}
+		return err
+	}
+	return nil
 }
 
 // ── the unattended path ──────────────────────────────────────────────────────
@@ -1082,7 +1223,15 @@ func ApplyPending(d Deps, w capability.Writer, attempted map[string]bool) ApplyR
 			r.Errs = append(r.Errs, err)
 			continue
 		}
-		if err := recreate(w, st.Migration, f); err != nil {
+		if err := recreate(d, w, st.Migration, f); err != nil {
+			if IsProbeInconclusive(err) {
+				// The cluster did not answer the pre-delete probe. Nothing was deleted, so
+				// the attempt record must not stand — and this is a poll, not a failure.
+				clearAttempt(w, st.Migration.ID)
+				r.Inconclusive = append(r.Inconclusive, st.Migration.ID)
+				fmt.Printf("::notice::brownfield migration %s deferred: %v\n", st.Migration.ID, err)
+				continue
+			}
 			// THE RECORD SAYS "WE DELETED THIS OBJECT", so a delete that did not happen
 			// must not leave one. Without this, a transient refusal — a 5xx, a webhook,
 			// an RBAC blip — permanently disables the repair behind a message claiming

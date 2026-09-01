@@ -9,7 +9,7 @@ package assertplatform
 //
 // It has since grown a `nudge-and-reap` TRANSITION (two lanes really do mutate;
 // the capability layer surfaced it) and a `k8s-version` preflight holding two
-// grants, one of which leaves the machine. Six bindings now, and the header says
+// grants, one of which leaves the machine. NINE bindings now, and the header says
 // so rather than leaving a reader to discover it in the declaration — the reason
 // this extension was worth putting on the record survives the growth, but the
 // count was evidence and evidence goes stale.
@@ -29,6 +29,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	assertion:verified   "argo-app"         [cluster-read]
 //	assertion:verified   "argo-comparisons" [cluster-read]
 //	assertion:verified   "overlay-applied"  [cluster-read]
+//	assertion:configured "overlay-appliability" [cluster-read]
 //	assertion:verified   "instance-custom"  [cluster-read]
 //	transition:converged "nudge-and-reap"   [cluster-read cluster-write]
 //	assertion:configured "apl-version"      [read-repo]
@@ -49,14 +50,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // than files, so they are assertions; they read them before provisioning, so they
 // bind `configured`.
 //
-// SIX BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
+// NINE BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
 // CAPABILITY rather than count, and three of these do hold identical grants — so
 // on that rule alone they could collapse. They are named separately because their
 // STATES differ (the two preflights are `configured`, the rest `verified`), and
 // once the set is split at all, naming the siblings is what keeps the listing
 // legible. Collapsing them would also hide that they fail independently: each is
 // wired into a different CI lane and a reader of `llz extension list` should see
-// six things that can go red, not one.
+// nine things that can go red, not one.
 //
 // The grants are no longer uniform either, which is the other reason the split
 // earns itself: `k8s-version` is the only lane here that leaves the machine, and
@@ -115,6 +116,30 @@ func Extension() extension.Extension {
 				Kind:   extension.Assertion,
 				Name:   "overlay-applied",
 				State:  extension.Verified,
+				Grants: []extension.Grant{extension.ClusterRead},
+			},
+			{
+				// THE PR-TIME HALF OF overlay-applied's QUESTION, and the reason it is a
+				// separate binding rather than a mode of that one: they run against
+				// different clusters for different purposes. overlay-applied points at
+				// PRODUCTION and asks whether a value landed. This points at a kind cluster
+				// holding generated pre-overlay fixtures and asks whether the field map's
+				// CreateOnly claim is TRUE — a question about this repo's code, answered by
+				// an apiserver because no static reading of YAML can answer it.
+				//
+				// `configured` rather than `verified`, on apl-version's argument: it is a
+				// statement about how the landing zone is CONFIGURED, made before any real
+				// infrastructure exists, and deliberately runnable on a PR. Nothing about a
+				// production platform is being observed.
+				//
+				// cluster-READ, like the lane it complements, and for the same reason:
+				// `patch --dry-run=server` persists nothing and capability.Permits
+				// classifies it as a read. The fixtures ARE a write, and they are applied
+				// by the kind workflow's own kubectl rather than by this verb — which is
+				// what keeps the grant honest instead of convenient.
+				Kind:   extension.Assertion,
+				Name:   "overlay-appliability",
+				State:  extension.Configured,
 				Grants: []extension.Grant{extension.ClusterRead},
 			},
 			{

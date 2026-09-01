@@ -1631,7 +1631,15 @@ categories:
     #                       the --yes recreate that lands it. Both live in
     #                       lifecycle/bootstrapcluster, beside prepare-apl-upgrade,
     #                       which is the one-shot they generalise.
-    budget: 1951
+    #   1,952 / 129 files  +1 the AddCommand for `llz ci assert-overlay-appliability`
+    #                       — the PR-time half of assert-overlay-applied. That lane
+    #                       asks a PRODUCTION cluster whether a declared value
+    #                       landed; this one asks a kind apiserver whether the field
+    #                       map's CreateOnly claim is TRUE, because create-time
+    #                       immutability is a property of apiserver validation and
+    #                       nothing static can read it off this repo. Fixtures,
+    #                       probe and grading are all in assertions/assertplatform.
+    budget: 1952
     exact: true
     include:
       - "tools/internal/cli/*.go"

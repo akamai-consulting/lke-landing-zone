@@ -33,6 +33,28 @@ const convergeMigratedSTS = `{"apiVersion":"apps/v1","kind":"StatefulSet",
     "limits":{"cpu":"1","memory":"3Gi"},"requests":{"cpu":"100m","memory":"512Mi"}}}]}},
     "volumeClaimTemplates":[{"metadata":{"name":"data"}}]}}`
 
+// convergeSTSRefusal is what a real apiserver returns for the WAL-claim change on
+// a brownfield StatefulSet. The migration server-dry-run-patches the live object
+// before it will delete anything — the runtime half of the CreateOnly claim — so
+// every fake cluster below has to answer that probe, and a cluster where the
+// migration is genuinely needed answers with a refusal. A stub that let the probe
+// look ACCEPTED would be describing a cluster on which this migration must not
+// run, and the guard would (correctly) refuse the delete.
+const convergeSTSRefusal = `The StatefulSet "loki-ingester" is invalid: spec: Forbidden: updates to ` +
+	`statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', ` +
+	`'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden`
+
+// isAppliabilityProbe reports whether these args are the pre-delete dry run rather
+// than one of the reads around it.
+func isAppliabilityProbe(args []string) bool {
+	for _, a := range args {
+		if a == "--dry-run=server" {
+			return true
+		}
+	}
+	return false
+}
+
 // recordingMigrationWriter counts the one mutation this path may make.
 type recordingMigrationWriter struct {
 	capability.Writer
@@ -72,6 +94,9 @@ func withMigrationClusterFailing(t *testing.T, obj string, deleteErr error) *rec
 	t.Helper()
 	w := &recordingMigrationWriter{Writer: capability.Denied(), failWith: deleteErr}
 	withDepsExec(t, func(_ string, args ...string) ([]byte, error) {
+		if isAppliabilityProbe(args) {
+			return nil, errors.New(convergeSTSRefusal)
+		}
 		for _, a := range args {
 			if a == "application.argoproj.io" {
 				return []byte(convergeSyncedOwner), nil
@@ -95,6 +120,9 @@ func withMigrationClusterThatNeverRecreates(t *testing.T) *recordingMigrationWri
 	t.Helper()
 	w := &recordingMigrationWriter{Writer: capability.Denied()}
 	withDepsExec(t, func(_ string, args ...string) ([]byte, error) {
+		if isAppliabilityProbe(args) {
+			return nil, errors.New(convergeSTSRefusal)
+		}
 		for _, a := range args {
 			if a == "application.argoproj.io" {
 				return []byte(convergeSyncedOwner), nil
@@ -295,6 +323,11 @@ func TestAnInconclusiveReadDoesNotBurnTheOncePerRunAttempt(t *testing.T) {
 			if a == "application.argoproj.io" {
 				return []byte(convergeSyncedOwner), nil
 			}
+		}
+		// The pre-delete appliability probe is not an object read and must not spend
+		// one — the transient under test is on the GET.
+		if isAppliabilityProbe(args) {
+			return nil, errors.New(convergeSTSRefusal)
 		}
 		objectReads++
 		if objectReads == 1 {
@@ -499,6 +532,9 @@ func TestATransientlyAbsentObjectDoesNotStopTheRunLooking(t *testing.T) {
 			if a == "pods" {
 				return []byte(""), nil
 			}
+		}
+		if isAppliabilityProbe(args) {
+			return nil, errors.New(convergeSTSRefusal)
 		}
 		objectReads++
 		if objectReads == 1 {
