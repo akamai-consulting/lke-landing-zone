@@ -1091,7 +1091,11 @@ func TestNoChecksAtAllNamesTheQueuedRunFirst(t *testing.T) {
 // ...but when OTHER checks did appear, the filter/rename explanation is the right
 // one and must not be buried under the queue story.
 func TestSomeChecksButNotOursStillPointsAtTheFilter(t *testing.T) {
-	f := &fakeForge{t: t, checkPolls: []string{`[{"name":"Promotion pipeline up to date","state":"SUCCESS"}]`}}
+	// A check name this verb does NOT wait for — it became one when
+	// `Promotion pipeline up to date`, the name this fixture used to carry, joined
+	// DefaultPRGateChecks. A fixture whose "other" check is secretly one of ours
+	// tests the wrong branch.
+	f := &fakeForge{t: t, checkPolls: []string{`[{"name":"Plan Cluster (PR)","state":"SUCCESS"}]`}}
 	defer f.install()()
 
 	err := RunAssertInstancePRGates(gatesBaseOpts())
@@ -1101,7 +1105,7 @@ func TestSomeChecksButNotOursStillPointsAtTheFilter(t *testing.T) {
 	if strings.Contains(err.Error(), "has not STARTED") {
 		t.Errorf("checks DID appear, so the run plainly started: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Promotion pipeline up to date") {
+	if !strings.Contains(err.Error(), "Plan Cluster (PR)") {
 		t.Errorf("the checks that did appear should be listed: %v", err)
 	}
 }
@@ -1218,5 +1222,117 @@ func TestCheckSeverityOrdersFailureOverPendingOverInconclusiveOverSuccess(t *tes
 	// default branch — an unknown state is not evidence of success.
 	if rank("SOMETHING_NEW") != rank("FAILURE") {
 		t.Error("an unknown terminal state must rank as a failure, not be treated as benign")
+	}
+}
+
+// ── checks this verb was not asked about ─────────────────────────────────────
+
+// withExtra renders the all-pass payload plus one check that is NOT in
+// DefaultPRGateChecks — a delivered gate the list has not been told about, which
+// is the state `Promotion pipeline up to date` was in for four releases.
+func withExtra(name, state string) string {
+	return strings.TrimSuffix(allPass, "]") +
+		fmt.Sprintf(`,{"name":%q,"state":%q}]`, name, state)
+}
+
+// THE REGRESSION, PINNED. Every asserted check passed and an unasserted delivered
+// one FAILED, and the verb printed "All 3 PR-gated CI check(s) passed" — the exact
+// shape of release-e2e v0.0.50, where `call / Promotion pipeline up to date` was
+// the only red job in the fixture repo's run and the lane went green over it.
+func TestAnUnassertedCheckThatFailedIsNotIgnored(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{withExtra("call / Some Other Delivered Gate", "FAILURE")}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("a delivered check that RAN AND FAILED must fail the verb even when the wanted set is green — " +
+			"a check this verb does not name is still a check on the PR")
+	}
+	if !strings.Contains(err.Error(), "call / Some Other Delivered Gate=FAILURE") {
+		t.Errorf("the failing check and its state should be named, got: %v", err)
+	}
+}
+
+// THE CONTROL FOR THE ABOVE, and it is what stops the widening from turning every
+// unfinished sibling into a red release. An unasserted check that never settles is
+// not a verdict about anything: the wanted set passed, so the run passed.
+func TestAnUnassertedPendingCheckDoesNotFailTheRun(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{withExtra("call / Apply Cluster", "IN_PROGRESS")}}
+	defer f.install()()
+
+	if err := RunAssertInstancePRGates(gatesBaseOpts()); err != nil {
+		t.Fatalf("an unasserted check still running is not a failing gate and not a timeout: %v", err)
+	}
+}
+
+// The grace wait EXISTS TO READ A LATER POLL, so this drives one: the sibling is
+// still running when the wanted checks settle and is FAILED one poll later. With
+// the old exit condition the verb returned on the first poll and never saw it.
+func TestTheGraceWaitReadsASiblingThatSettlesLate(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{
+		withExtra("call / Promotion pipeline up to date (renamed)", "IN_PROGRESS"),
+		withExtra("call / Promotion pipeline up to date (renamed)", "FAILURE"),
+	}}
+	defer f.install()()
+
+	err := RunAssertInstancePRGates(gatesBaseOpts())
+	if err == nil {
+		t.Fatal("the sibling failed on the second poll — returning on the first is the blindness this fixes")
+	}
+	if !strings.Contains(err.Error(), "(renamed)=FAILURE") {
+		t.Errorf("expected the late failure to be named, got: %v", err)
+	}
+}
+
+// ...and the grace is BOUNDED. A sibling that never settles must not spend the
+// whole retry budget: 60 polls at 20s is 20 minutes of release-e2e wall clock
+// bought to learn nothing about a check this verb never asserted.
+func TestTheGraceForUnassertedChecksIsBounded(t *testing.T) {
+	f := &fakeForge{t: t, checkPolls: []string{withExtra("call / Apply Cluster", "IN_PROGRESS")}}
+	defer f.install()()
+
+	o := gatesBaseOpts()
+	o.Retries = 40
+	if err := RunAssertInstancePRGates(o); err != nil {
+		t.Fatalf("the wanted checks all passed: %v", err)
+	}
+	// One poll to settle the wanted set, then at most extraSettlePolls more.
+	if max := 1 + extraSettlePolls; f.polls > max {
+		t.Errorf("polled %d times waiting on an unasserted check; the grace is meant to cap it at %d "+
+			"(the whole %d-poll budget would be spent on a check this verb does not assert)",
+			f.polls, max, o.Retries)
+	}
+	if f.polls < 2 {
+		t.Errorf("polled %d time(s) — the loop did not wait at all, so the grace is not being spent "+
+			"and TestTheGraceWaitReadsASiblingThatSettlesLate passes for the wrong reason", f.polls)
+	}
+}
+
+// observedChecks takes the worst row per name, for the reason partitionChecks
+// does: a re-run leaves both attempts in the payload and order is not ours to
+// trust. Without it a stale SUCCESS ahead of the FAILURE that replaced it would
+// speak for the check — a false green in the branch built to end one.
+func TestObservedChecksTakesTheWorstRowForARepeatedName(t *testing.T) {
+	raw := []byte(`[{"name":"A","state":"SUCCESS"},{"name":"A","state":"FAILURE"},{"name":"B","state":"SUCCESS"}]`)
+	all, err := observedChecks(raw)
+	if err != nil {
+		t.Fatalf("observedChecks: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected one row per name, got %d: %+v", len(all), all)
+	}
+	if all[0].Name != "A" || all[0].State != "FAILURE" {
+		t.Errorf("the worst row for a repeated name should win, got %+v", all[0])
+	}
+	if len(failures(all)) != 1 {
+		t.Errorf("the repeated failing check should be counted once as a failure: %+v", failures(all))
+	}
+}
+
+// Garbage in must not read as "no checks failed" — the same fail-closed rule the
+// wanted-set parser follows.
+func TestObservedChecksRejectsGarbage(t *testing.T) {
+	if _, err := observedChecks([]byte("<html>not json</html>")); err == nil {
+		t.Fatal("unparseable output must be an error, not an empty (green) observation")
 	}
 }
