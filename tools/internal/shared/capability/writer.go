@@ -1,6 +1,6 @@
 package capability
 
-// Writer is what `cluster-write` actually entitles a binding to: eight named
+// Writer is what `cluster-write` actually entitles a binding to: nine named
 // operations, not "any kubectl verb that mutates".
 //
 // THE SHAPES ARE MEASURED, NOT INVENTED. Every mutating call site in
@@ -20,6 +20,18 @@ package capability
 //	apply -f - (manifest on stdin)                  2   assert-network's probe ns, broad-pat drill
 //	create -f - (manifest on stdin)                 1   assert-platform's health Workflow
 //
+// PLUS ONE THE CENSUS COULD NOT HAVE SEEN, because nothing did it yet:
+//
+//	delete <kind> <name> --cascade=orphan           1   brownfield migration
+//
+// DeleteOrphan is a SEPARATE OPERATION rather than an argument to Delete, and the
+// separation is the safety. `delete sts loki-ingester` takes the ingest path down
+// with it; `delete sts loki-ingester --cascade=orphan` leaves every pod running
+// and removes only the object, so Argo can recreate it with the claim template a
+// live StatefulSet would refuse. One flag apart, and the difference between a
+// migration and an outage — a reviewer should not have to spot it inside an argv,
+// and a caller should not be able to forget it.
+//
 // KEEP THE COUNT AND THE INTERFACE IN STEP. The number is restated here, in three
 // sentences in capability.go, and in the refusal message Permits() hands a caller
 // — five places, so a stale one tells a developer needing ApplyStdin to use a set
@@ -28,8 +40,8 @@ package capability
 //
 // WHY THIS IS TIGHTER THAN A VERB CHECK. A verb check makes `cluster-write` mean
 // any mutating kubectl subcommand: `drain`, `taint`, `exec ... -- sh -c`, `delete
-// namespace` on anything. This means these eight shapes with these arguments.
-// Four of the eight writers are `assert-*` extensions whose entire mutation is
+// namespace` on anything. This means these nine shapes with these arguments.
+// Four of the nine writers are `assert-*` extensions whose entire mutation is
 // "refresh an Argo app" or "delete the fixture I just created", and after this
 // they are structurally incapable of anything else.
 //
@@ -92,6 +104,19 @@ type Writer interface {
 	// Delete removes a resource, with --ignore-not-found. target may be a name or
 	// a `-l selector` pair supplied as two arguments.
 	Delete(ns, kind string, target ...string) ([]byte, error)
+	// DeleteOrphan removes ONE named resource while leaving its children running
+	// (`--cascade=orphan`). It is the recreate half of a brownfield migration: a
+	// field the API server fixes at create time can only be changed by deleting the
+	// object, and for a StatefulSet holding a workload that has to happen WITHOUT
+	// taking the pods with it — Argo recreates the object, it adopts the running
+	// pods by selector, and rolling them onto the new spec stays a separate,
+	// deliberate step.
+	//
+	// NAME ONLY, NEVER A SELECTOR. Delete accepts `-l x=y` because its callers
+	// clean up fixtures they created; this one acts on live infrastructure, where
+	// a selector that matched more than intended is not recoverable by re-running
+	// anything.
+	DeleteOrphan(ns, kind, name string) ([]byte, error)
 	// PatchMerge applies a JSON MERGE patch (`--type merge`), not a strategic one.
 	//
 	// THE DISTINCTION IS NOT COSMETIC, and the example this comment used to cite
@@ -285,6 +310,22 @@ func (w writer) Delete(namespace, kind string, target ...string) ([]byte, error)
 	return w.exec("kubectl", append(a, "--ignore-not-found")...)
 }
 
+func (w writer) DeleteOrphan(namespace, kind, name string) ([]byte, error) {
+	// AN EMPTY NAME IS NOT A NAME. safeArg only refuses a leading `-`, so ""
+	// survives it and `kubectl delete statefulset --cascade=orphan` in a namespace
+	// is a delete of every StatefulSet in it. Delete guards the same case for the
+	// same reason; this operation is the one with no undo.
+	if name == "" {
+		return nil, fmt.Errorf("capability: DeleteOrphan needs a name — a bare `delete %s --cascade=orphan` "+
+			"would orphan every %s in %s", kind, kind, namespace)
+	}
+	if err := firstErr(safeArg("namespace", namespace), safeArg("kind", kind), safeArg("name", name)); err != nil {
+		return nil, err
+	}
+	a := append(ns(namespace), "delete", kind, name, "--cascade=orphan", "--ignore-not-found")
+	return w.exec("kubectl", a...)
+}
+
 func (w writer) PatchMerge(namespace, kind, name, patchJSON string) ([]byte, error) {
 	if err := firstErr(safeArg("namespace", namespace), safeArg("kind", kind), safeArg("name", name)); err != nil {
 		return nil, err
@@ -348,6 +389,7 @@ func (d deniedWriter) Annotate(_, _, _, _ string) ([]byte, error) { return nil, 
 func (d deniedWriter) Delete(_, _ string, _ ...string) ([]byte, error) {
 	return nil, d.PermitsWrite()
 }
+func (d deniedWriter) DeleteOrphan(_, _, _ string) ([]byte, error)  { return nil, d.PermitsWrite() }
 func (d deniedWriter) PatchMerge(_, _, _, _ string) ([]byte, error) { return nil, d.PermitsWrite() }
 func (d deniedWriter) RolloutRestart(_, _ string) ([]byte, error)   { return nil, d.PermitsWrite() }
 func (d deniedWriter) CreateToken(_, _, _ string) ([]byte, error)   { return nil, d.PermitsWrite() }

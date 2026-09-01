@@ -34,8 +34,10 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
@@ -114,9 +116,19 @@ type bootstrapClusterOpts struct {
 // apl-values migration Job); now/sleep make the deadline loops testable.
 type bootstrapDeps struct {
 	kubectl func(args ...string) (string, bool)
-	apply   func(stdinYAML, fieldManager string, force bool) (string, bool)
-	now     func() time.Time
-	sleep   func(time.Duration)
+	// kubectlOut is kubectl with STDOUT ONLY on success — the shape a JSON decoder
+	// needs, and the one `kubectl` above cannot give: it is cigate.RunCombined, so
+	// an apiserver warning on stderr lands in the same buffer as the object.
+	//
+	// A SEPARATE FIELD RATHER THAN A REPLACEMENT, because every other caller in this
+	// package classifies kubectl's diagnostic text and would lose it. Nil falls back
+	// to kubectl, which keeps the struct literals in the tests working — and is why
+	// the brownfield report reads through a seam those tests already stub instead of
+	// shelling out to whatever cluster the machine is pointed at.
+	kubectlOut func(args ...string) (string, bool)
+	apply      func(stdinYAML, fieldManager string, force bool) (string, bool)
+	now        func() time.Time
+	sleep      func(time.Duration)
 }
 
 // RunBootstrapCluster is the single (managed App Platform) bootstrap path. LLZ
@@ -173,6 +185,13 @@ func RunBootstrapCluster(f BootstrapFlags) error {
 	if f.DryRun {
 		return dryRunBootstrap(o, kubeconfigPath)
 	}
+	// EVERY ROUTE TO THE CLUSTER, not just the one bootstrapDeps owns. The
+	// brownfield report reads through the ambient environment (see migrationDeps),
+	// so without this an operator running `--kubeconfig A` would be told about
+	// migrations on whatever cluster the process was already pointed at. Read-only
+	// there, so the cost is a wrong answer rather than a wrong write — but a wrong
+	// answer about which cluster needs a StatefulSet recreated is not much better.
+	defer PinKubeconfig(kubeconfigPath)()
 	return bootstrapCluster(o, NewBootstrapDeps(kubeconfigPath))
 }
 
@@ -186,6 +205,21 @@ func NewBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 				cmd.Env = cigate.EnvWithKubeconfig(kubeconfigPath)
 			}
 			return cigate.RunCombined(cmd)
+		},
+		// THROUGH THE DECLARED CLUSTER-READ HANDLE, not a private exec.Command and not
+		// the raw seam. Two reasons it is this and not something more direct: a direct
+		// seam call hands this package an unconstrained process runner whatever its
+		// binding says (TestNoNewSeamGlobalCalls refuses it), and the capability
+		// Writer that performs the orphan delete reaches the cluster the same way — so
+		// a reader taking a different route could be checking a cluster the writer is
+		// not about to act on. The kubeconfig reaches both through PinKubeconfig.
+		kubectlOut: func(args ...string) (string, bool) {
+			out, err := capability.MustCluster(Extension().MustBindingOf(
+				extension.Transition, extension.Provisioned)).Run(args...)
+			if err != nil {
+				return kubectlprobe.ErrText(err), false
+			}
+			return string(out), true
 		},
 		apply: func(stdinYAML, fieldManager string, force bool) (string, bool) {
 			args := []string{"apply", "--server-side", "--field-manager=" + fieldManager}
@@ -285,6 +319,13 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// assert it eagerly, every apply, while we already hold a kubeconfig. Idempotent,
 	// and self-retiring: 6.1.x's own chart sets the same annotation.
 	PrepareAplUpgradeBestEffort(d)
+
+	// …and the general form of the same question: which declared overlay changes
+	// can this cluster's EXISTING objects not accept? On a fresh cluster the answer
+	// is always none — every object is created in its final shape — so this costs a
+	// read and says nothing. On a brownfield one it is the only place the site is
+	// told, because Argo reports such a change as Synced.
+	ReportMigrationsBestEffort(d)
 
 	// Point the managed apl-core at LLZ's github values branch (BYO Git) and enable the
 	// default apps (harbor/loki/grafana/kyverno) so apl-core INSTALLS them and LLZ's

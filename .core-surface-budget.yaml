@@ -1625,7 +1625,13 @@ categories:
     #                       change to separate "nothing delivered it" from "the API
     #                       server will never accept it". The field map is in
     #                       clusterspec; the gate is in assertplatform.
-    budget: 1950
+    #   1,951 / 129 files  +1 one AddCommand registering both brownfield-migration
+    #                       verbs — the report that runs on every bootstrap so a
+    #                       site says what undelivered change it is carrying, and
+    #                       the --yes recreate that lands it. Both live in
+    #                       lifecycle/bootstrapcluster, beside prepare-apl-upgrade,
+    #                       which is the one-shot they generalise.
+    budget: 1951
     exact: true
     include:
       - "tools/internal/cli/*.go"

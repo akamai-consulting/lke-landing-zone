@@ -467,6 +467,10 @@ func ciCmd() *cobra.Command {
 	// runnable so an operator can assert it on a cluster ahead of a managed upgrade
 	// without re-running a bootstrap.
 	c.AddCommand(bootstrapcluster.PrepareAplUpgradeCmd())
+	// The generalisation of prepare-apl-upgrade: an overlay change a live object
+	// cannot accept in place needs a recreate, and every site has to learn it is
+	// carrying one. The report runs on every bootstrap; the recreate takes --yes.
+	c.AddCommand(bootstrapcluster.BrownfieldMigrationsCmd(), bootstrapcluster.BrownfieldMigrateCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(templatecommit.AssertImageFreshCmd())

@@ -96,6 +96,7 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertregistry=62 \
 	internal/extensions/lifecycle/atrest=89 \
 	internal/shared/clusterspec=88 \
+	internal/shared/brownfield=83 \
 	internal/extensions/lifecycle/clusteraccess=71 \
 	internal/shared/cigate=33 \
 	internal/extensions/lifecycle/converge=75 \

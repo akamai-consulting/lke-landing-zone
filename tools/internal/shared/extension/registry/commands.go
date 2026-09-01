@@ -147,6 +147,8 @@ var commands = []Command{
 	{"assertsuite", assertsuite.Cmd},
 	{"atrest", atrest.AtRestGuardCmd},
 	{"bootstrapcluster", bootstrapcluster.BootstrapClusterCmd},
+	{"bootstrapcluster", bootstrapcluster.BrownfieldMigrateCmd},
+	{"bootstrapcluster", bootstrapcluster.BrownfieldMigrationsCmd},
 	{"bootstrapcluster", bootstrapcluster.PrepareAplUpgradeCmd},
 	{"budget", budget.CoreSurfaceCmd},
 	{"budget", budget.UntestableLOCCmd},

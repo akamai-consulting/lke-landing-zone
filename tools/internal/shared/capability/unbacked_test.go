@@ -89,7 +89,12 @@ var grantHandleMarkers = map[string][]string{
 //
 // EDITING THIS DOWN IS THE POINT. A conversion deletes its line in the same commit.
 var unbackedGrants = map[string]bool{
-	"bootstrapcluster/ClusterWrite":  true,
+	// bootstrapcluster/ClusterWrite WAS HERE AND HAS BEEN PAID DOWN. The package
+	// mutated through a raw kubectl runner, so its cluster-write grant entitled a
+	// handle nobody built. The brownfield migration's recreate goes through
+	// capability.MustWriter/DeleteOrphan instead — which is what makes the one
+	// destructive call in this package a named operation a reviewer can grep for,
+	// rather than an argv one flag away from taking the ingest path down.
 	"bootstrapcluster/SecretCustody": true,
 	"chartpublish/CloudMutate":       true,
 	"clusteraccess/ClusterWrite":     true,
