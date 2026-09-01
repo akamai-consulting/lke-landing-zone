@@ -100,6 +100,13 @@ spec:
             - --reconcile-sc-demote
             - --reconcile-openbao-gauges
             - --reconcile-token-inventory
+            # overlay-delivery: publish whether each mapped apl-overlay value is
+            # actually on the live object, and whether a brownfield migration is
+            # pending. Read-only. It runs HERE rather than only in CI because the
+            # failure it measures cannot occur on a cluster the CI lane just built —
+            # every object there was created in its final shape. See
+            # docs/e2e-gates.md, "The configuration no lane runs".
+            - --reconcile-overlay-delivery
             # volume-tags: heal the block-storage-retain StorageClass's volumeTags —
             # this cluster's `lke<id>` ownership tag included — onto any Linode Volume
             # that lacks them. A class stamps its tags inside CreateVolume, so this lane

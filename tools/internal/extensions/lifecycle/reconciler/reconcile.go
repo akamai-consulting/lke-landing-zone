@@ -64,6 +64,8 @@ type reconcileFlags struct {
 	esRecoveryResync    int
 	reconcileAplOverlay bool
 	aplOverlayInterval  int
+	reconcileOverlayDel bool
+	overlayDelInterval  int
 }
 
 type reconcileOpts struct {
@@ -93,6 +95,8 @@ type reconcileOpts struct {
 	esRecoveryResync    time.Duration
 	reconcileAplOverlay bool
 	aplOverlayInterval  time.Duration
+	reconcileOverlayDel bool
+	overlayDelInterval  time.Duration
 }
 
 // openbaoBootstrapGrace wraps the read-only openbao-gauges sample so an
@@ -504,6 +508,22 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			binding:  "openbao-gauges",
 			interval: o.openbaoInterval,
 			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return reconcilelanes.SampleOpenBao(ctx, reg, time.Now()) }),
+		})
+	}
+	if o.reconcileOverlayDel {
+		recs = append(recs, reconciler{
+			name:     "overlay-delivery",
+			ext:      "reconcile-actions",
+			binding:  "overlay-delivery",
+			interval: o.overlayDelInterval,
+			// Read-only (GETs the objects the overlay field map names), so NOT gated —
+			// every replica may publish the same gauges harmlessly. Interval-driven
+			// rather than watch-driven on purpose: the question is "is the value there",
+			// and a value that has been missing for an hour is exactly as interesting as
+			// one that went missing a second ago.
+			run: func(ctx context.Context) error {
+				return reconcilelanes.SampleOverlayDelivery(ctx, reconcilelanes.Fenced("overlay-delivery", client), reg)
+			},
 		})
 	}
 	if o.reconcileTokens {

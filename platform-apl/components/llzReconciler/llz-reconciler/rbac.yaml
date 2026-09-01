@@ -77,6 +77,22 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list"]
+  # NOT A CLUSTER-SCOPED RESOURCE, and the exception is argued rather than assumed
+  # — see the rule this file states above about what belongs in this ClusterRole.
+  # overlay-delivery: GET the objects clusterspec.OverlayFields() names, to publish
+  # whether each declared apl-overlay value is actually on them. get ONLY — the lane
+  # is read-only by construction and never lists, watches or patches.
+  #
+  # CLUSTER-SCOPED RATHER THAN A ROLE PER NAMESPACE, because the namespaces are the
+  # FIELD MAP's to choose: a Role in `monitoring` would silently 403 the day a row
+  # names an object anywhere else, and a 403 reads to the lane as "could not tell",
+  # which is exactly the answer this whole family of checks exists to stop
+  # producing. Widening the KINDS is a different matter and is deliberately not
+  # pre-granted: a row naming a Service or a Job needs a line here, and the lane
+  # failing loudly is how that gets noticed.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
   # sc-demote: watch StorageClasses (cluster-scoped resource) and rewrite
   # is-default-class→false on the Flux-promoted retain class. patch can't be
   # resourceName-scoped alongside the list/watch it shares the rule with.

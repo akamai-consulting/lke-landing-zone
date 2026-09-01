@@ -111,6 +111,8 @@ func Cmd() *cobra.Command {
 				openbaoInterval:     time.Duration(o.openbaoInterval) * time.Second,
 				reconcileTokens:     o.reconcileTokens,
 				tokensInterval:      time.Duration(o.tokensInterval) * time.Second,
+				reconcileOverlayDel: o.reconcileOverlayDel,
+				overlayDelInterval:  time.Duration(o.overlayDelInterval) * time.Second,
 				reconcileSCDemote:   o.reconcileSCDemote,
 				scDemoteResync:      time.Duration(o.scDemoteResync) * time.Second,
 				scDemoteName:        o.scDemoteName,
@@ -159,6 +161,8 @@ func Cmd() *cobra.Command {
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
 	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
 	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
+	f.BoolVar(&o.reconcileOverlayDel, "reconcile-overlay-delivery", false, "enable the overlay-delivery gauges (read-only; publishes whether each mapped apl-overlay value is actually on the live object, and whether a brownfield migration is pending)")
+	f.IntVar(&o.overlayDelInterval, "overlay-delivery-interval", 300, "seconds between overlay-delivery samples")
 	f.BoolVar(&o.reconcileTokens, "reconcile-token-inventory", false, "enable the CI-token expiry gauges (read-only; re-exposes the llz-token-inventory ConfigMap the token-inventory job writes)")
 	f.IntVar(&o.tokensInterval, "token-inventory-interval", 60, "seconds between token-inventory ConfigMap samples")
 	f.BoolVar(&o.reconcileSCDemote, "reconcile-sc-demote", false, "enable the StorageClass default-demote watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")

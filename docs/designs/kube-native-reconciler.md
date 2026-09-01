@@ -103,6 +103,25 @@ controller). CronJob deletions follow once each reconciler proves out per the
   `openbao-health` (seal) + `loki-objkey-rotation-health` checks. Off by default;
   enabling it per-env needs OpenBao egress + adding the pod to the chart's
   `allowedClientPods` (documented on the Deployment) — the auth role already ships.
+- **overlay-delivery.** A read-only lane
+  ([`overlay_delivery.go`](../../tools/internal/extensions/lifecycle/reconcilelanes/overlay_delivery.go))
+  publishing `llz_overlay_field_delivered{app,path,object}` and
+  `llz_brownfield_migration_pending{id,path}`: for every path in
+  `clusterspec.OverlayFields()`, is the value the apl-overlay declares actually on
+  the live object? It exists **because CI cannot see this one**. The e2e battery
+  runs against a cluster the code under test just created, where every object was
+  born in its final shape — and the failure being measured only happens when a
+  declared field has to be applied to an object that PREDATES it, which the API
+  server refuses for a create-time field. Argo computes its diff by
+  dry-run-applying, so that refusal produces no diff and the Application reads
+  `Synced`. This is the same blind spot `docs/e2e-gates.md` names for Terraform
+  under "The configuration no lane runs: an upgrade over existing state", and the
+  same cheaper answer it argues for there: report on the real clusters rather than
+  gate on a synthetic one. Each site samples itself, so "how many of our clusters
+  are carrying an undelivered change?" has an answer. The lane never dry-runs
+  (that is a write-shaped request it holds no grant for); `llz ci
+  assert-overlay-applied` is where an undelivered value gets its reason —
+  unappliable, or simply not delivered yet.
 - **sc-demote (this branch).** The sixth CronJob conversion, and a **correction**:
   `sc-default-patcher` is **not** a deletion candidate. The Kyverno
   `sc-default-demote` policy is admission-only (`background: false`,

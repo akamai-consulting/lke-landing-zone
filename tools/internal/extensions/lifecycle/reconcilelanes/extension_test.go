@@ -48,7 +48,7 @@ func TestNoLaneHoldsAnotherLanesCapability(t *testing.T) {
 // outside the model — so it joined this extension. The count is asserted rather
 // than derived on purpose: a lane appearing here should be a decision someone
 // made, not a number that quietly moved.
-func TestFiveNamedInvariantsAreDistinct(t *testing.T) {
+func TestEveryNamedInvariantIsDistinct(t *testing.T) {
 	e := Extension()
 	seen := map[string]bool{}
 	for _, b := range e.Bindings {
@@ -67,8 +67,12 @@ func TestFiveNamedInvariantsAreDistinct(t *testing.T) {
 		}
 		seen[b.Name] = true
 	}
-	if len(seen) != 5 {
-		t.Fatalf("want five named lanes, got %d: %v", len(seen), seen)
+	// SIX SINCE overlay-delivery. The number is not the property — the property is
+	// that every lane is a NAMED invariant at `operating`, checked above, so that
+	// the fence each one gets is its own. The count stays as a tripwire for a lane
+	// arriving without anyone reading this file.
+	if len(seen) != 6 {
+		t.Fatalf("want six named lanes, got %d: %v", len(seen), seen)
 	}
 
 	// And the names are load-bearing, not decorative: strip them and the model
