@@ -61,7 +61,7 @@ func TestRunConvergeBudgetIsSecondsAndPollsCountUp(t *testing.T) {
 
 	var err error
 	// budget=3600s is nowhere near spent; interval/retry-delay 0 keep it instant.
-	stderr := captureStderr(t, func() { err = runConverge(3600, 0, 0, ScopePlatform) })
+	stderr := captureStderr(t, func() { err = runConverge(3600, 0, 0, ScopePlatform, false) })
 
 	if err == nil {
 		t.Fatalf("runConverge = nil, want the hard-fail verdict (polls seen: %d)", poll)

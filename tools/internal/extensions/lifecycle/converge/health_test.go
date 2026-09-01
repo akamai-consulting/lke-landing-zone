@@ -647,7 +647,7 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	// the unreachable branch — never the twice-in-a-row hard-fail abort. budget=0
 	// trips the deadline immediately; retry-delay=0 keeps it from sleeping.
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
-	if err := runConverge(0, 0, 0, ScopePlatform); err == nil {
+	if err := runConverge(0, 0, 0, ScopePlatform, false); err == nil {
 		t.Errorf("unreachable + exhausted budget => err %v, want non-nil", err)
 	}
 }
@@ -686,7 +686,7 @@ func TestRunConvergeHardFailRecheckConvergedStops(t *testing.T) {
 		healthResult{code: 1, nonOK: []string{"loki-0"}}, // hard fail — re-check
 		healthResult{code: 0},                            // re-check: converged
 	)
-	if err := runConverge(3600, 0, 0, ScopePlatform); err != nil {
+	if err := runConverge(3600, 0, 0, ScopePlatform, false); err != nil {
 		t.Fatalf("runConverge = %v, want nil (the re-check converged)", err)
 	}
 	if *calls != 3 {
@@ -698,7 +698,7 @@ func TestRunConvergeHardFailRecheckConvergedStops(t *testing.T) {
 // a re-check that is STILL hard is terminal, not another lap of the poll loop.
 func TestRunConvergeHardFailTwiceAborts(t *testing.T) {
 	withConvergePoll(t, healthResult{code: 1}, healthResult{code: 1})
-	err := runConverge(3600, 0, 0, ScopePlatform)
+	err := runConverge(3600, 0, 0, ScopePlatform, false)
 	if err == nil || !strings.Contains(err.Error(), "hard-failed twice in a row") {
 		t.Errorf("runConverge = %v, want the twice-in-a-row hard-fail abort", err)
 	}
@@ -718,7 +718,7 @@ func TestRunConvergeHardFailRecheckInProgressKeepsPolling(t *testing.T) {
 		healthResult{code: 2}, // re-check: in-progress, not a verdict
 		healthResult{code: 0}, // …so the loop polls on, and THIS is the verdict
 	)
-	if err := runConverge(3600, 0, 0, ScopePlatform); err != nil {
+	if err := runConverge(3600, 0, 0, ScopePlatform, false); err != nil {
 		t.Errorf("runConverge = %v, want nil — the loop polled on and converged", err)
 	}
 	if *calls != 3 {
@@ -732,7 +732,7 @@ func TestRunConvergeHardFailRecheckInProgressKeepsPolling(t *testing.T) {
 // broken — the one shape the mode was tuned for.
 func TestRunConvergeHardFailDoesNotRecheckPastTheBudget(t *testing.T) {
 	calls := withConvergePoll(t, healthResult{code: 1}, healthResult{code: 0})
-	err := runConverge(0, 0, 0, ScopePlatform)
+	err := runConverge(0, 0, 0, ScopePlatform, false)
 	if err == nil || !strings.Contains(err.Error(), "budget exhausted") {
 		t.Errorf("runConverge = %v, want the budget-exhausted hard-fail error", err)
 	}
