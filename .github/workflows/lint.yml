@@ -457,6 +457,60 @@ jobs:
       - name: Server-side dry-run of the rendered charts
         run: kubectl apply --dry-run=server -f rendered/
 
+      # ── overlay appliability ─────────────────────────────────────────────────
+      # THE FAILURE THIS PREVENTS. clusterspec.OverlayField.CreateOnly is a HAND-SET
+      # boolean, and the two Go guards around it only check that it is used
+      # CONSISTENTLY — a CreateOnly field must name a migration, a mutable one must
+      # not. Neither asks an API server whether the classification is TRUE. So an
+      # overlay entry whose field the apiserver fixes at create time ships with
+      # CreateOnly:false by omission, and on every cluster whose object predates it
+      # Argo dry-run-applies, is refused, produces NO DIFF, and reports Synced —
+      # discarding that value and every other change to the same object with it.
+      # That is the 16-day Loki OOM crashloop (PR #537), and nothing static can
+      # catch it: create-time immutability is a property of the apiserver's
+      # validation, not of anything in this repo. So the gate asks one.
+      #
+      # BROWNFIELD-ONLY BY NATURE, which is why no e2e lane sees it — a fresh
+      # cluster CREATES each object in its final shape and never meets the
+      # transition. The fixtures are what supply the "already exists" half.
+      #
+      # Two steps because the verb is declared cluster-READ: it dry-run-patches
+      # (which persists nothing), and the fixtures are applied by kubectl here
+      # rather than by llz, so the grant stays honest.
+      # One command per step, and the emit writes a FILE rather than piping into
+      # kubectl. NOT because a pipe would fail open HERE — `defaults.run.shell: bash`
+      # at the top of this file makes GitHub invoke every `run:` with `-eo pipefail`,
+      # so in THIS workflow a pipeline would carry llz's status correctly. The reason
+      # is that the verb is documented and reproduced by hand, on shells that have no
+      # such default: `llz … | kubectl apply -f -` takes kubectl's status, and kubectl
+      # given empty stdin exits 0, so a verb that refused to emit leaves the lane
+      # probing an absent object and surfaces as a confusing red two steps on. Keeping
+      # the workflow and the runbook on the same shape means the form an operator
+      # copies is the form that is safe everywhere.
+      - name: Emit pre-overlay fixtures
+        run: '"$GITHUB_WORKSPACE/bin/llz" ci assert-overlay-appliability --emit-fixtures --out "$RUNNER_TEMP/overlay-fixtures.json"'
+
+      # THE FIXTURES CARRY NO NAMESPACE OBJECTS, deliberately — the "Create
+      # namespaces" step above owns those. An earlier version emitted one per target
+      # carrying only metadata.name, and applying it three-way-merged every other
+      # field away: verified live, `monitoring` lost `monitoring: enabled` and its
+      # -20 sync-wave — before the VAP and Kyverno admission gates below run in this
+      # same job. (It did NOT lose a PSA label, as this note used to say:
+      # llz-cluster-foundation declares `monitoring` with `restricted: false`, so the
+      # rendered namespace has none.) `--server-side` does not avoid it either
+      # (kubectl migrates the client-side last-applied annotation on takeover).
+      #
+      # WHICH NAMESPACES THE LANE THEN OWES is not left to this comment:
+      # TestEveryFixtureNamespaceIsOneTheLaneActuallyCreates compares
+      # assertplatform.FixtureNamespaces() against the "Create namespaces" step
+      # above, so a new overlay row in a namespace nothing creates fails at `go test`
+      # instead of six minutes into CI in a step named for the apply.
+      - name: Apply pre-overlay fixtures
+        run: kubectl apply -f "$RUNNER_TEMP/overlay-fixtures.json"
+
+      - name: Overlay appliability gate
+        run: '"$GITHUB_WORKSPACE/bin/llz" ci assert-overlay-appliability'
+
       # ── VAP admission gate (llz-wave-health-guard) ───────────────────────────
       # Apply the wave-health ValidatingAdmissionPolicy (the kind apiserver COMPILES
       # its CEL — a syntax error fails here, which kubeconform + the Go allowlist test

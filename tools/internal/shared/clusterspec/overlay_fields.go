@@ -38,7 +38,10 @@ package clusterspec
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -47,7 +50,8 @@ import (
 type OverlayMatch int
 
 const (
-	// MatchScalar compares the declared leaf to the delivered leaf as strings.
+	// MatchScalar compares the declared leaf to the delivered leaf through
+	// OverlayScalarEqual — by VALUE for a quantity, as text for anything else.
 	MatchScalar OverlayMatch = iota
 	// MatchNonEmptyList reads a declared `true` as "this list must have entries".
 	// It is what a chart toggle that GATES a structure looks like from the
@@ -85,6 +89,26 @@ type OverlayField struct {
 	// `containers[name=ingester]` — for a list keyed by name.
 	Live  []string
 	Match OverlayMatch
+	// Prior is what a PRE-OVERLAY object carries at Live — the chart's own default,
+	// as observed on a cluster that predates this value.
+	//
+	// IT EXISTS BECAUSE "ABSENT" IS NOT THE TRANSITION A BROWNFIELD CLUSTER MAKES.
+	// The appliability gate builds a fixture and asks the apiserver whether the
+	// declared change can be applied to it. If the fixture simply OMITS the field,
+	// the probe tests absent→set; a real cluster performs default→declared. Those
+	// are the same question only for a field whose immutability is unconditional.
+	// They differ for anything gated on a transition — a CRD schema's
+	// `self == oldSelf` rule, a quantity that may grow but not shrink, a field
+	// settable once and then fixed — where absent→set is ACCEPTED and
+	// default→declared is refused. A row like that would be graded APPLIABLE and
+	// ship, which is the false green this whole gate exists to prevent.
+	//
+	// REQUIRED FOR MatchScalar, and the emitter refuses a row without it rather
+	// than quietly falling back to omission. MatchNonEmptyList needs none: a
+	// presence toggle's pre-overlay state genuinely IS the absent list (the
+	// brownfield loki-ingester has no volumeClaimTemplates key at all), so there
+	// nothing is the honest fixture rather than a gap in one.
+	Prior any
 	// CreateOnly marks a field the API server fixes at create time, so a change
 	// to it cannot be applied to an object that already exists. It must name a
 	// Migration — a row that says "this cannot be applied in place" and does not
@@ -117,13 +141,17 @@ const LokiIngesterContainer = "ingester"
 // OverlayFields is the mapping table. Ordered so a report reads app by app.
 func OverlayFields() []OverlayField {
 	return []OverlayField{
-		lokiIngesterResource("limits", "memory",
+		// THE PRIOR VALUES ARE OBSERVED, NOT GUESSED. They are what
+		// testdata/live/loki-ingester.brownfield.json recorded off the cluster this
+		// gate was written for — apl-core's own chart defaults, the shape every
+		// instance that predates the overlay is actually running.
+		lokiIngesterResource("limits", "memory", "1Gi",
 			"the ingester OOMs replaying its WAL at the chart default; this limit bounds the replay spike"),
-		lokiIngesterResource("limits", "cpu",
+		lokiIngesterResource("limits", "cpu", "500m",
 			"500m made replay needlessly slow; 1 CPU roughly halves the not-ready window"),
-		lokiIngesterResource("requests", "memory",
+		lokiIngesterResource("requests", "memory", "512Mi",
 			"the requests stay modest (burstable) so the limit is what bounds the spike, not the schedule"),
-		lokiIngesterResource("requests", "cpu",
+		lokiIngesterResource("requests", "cpu", "250m",
 			"as above — the request is the schedule, the limit is the bound"),
 		{
 			App:             "loki",
@@ -167,10 +195,11 @@ func OverlayFields() []OverlayField {
 // with the claim template below and Argo's diff is computed per object. Rows that
 // can only ever fail for a reason belonging to a DIFFERENT row are what make the
 // contagion visible instead of inferable.
-func lokiIngesterResource(section, resource, why string) OverlayField {
+func lokiIngesterResource(section, resource, prior, why string) OverlayField {
 	return OverlayField{
 		App:             "loki",
 		Value:           []string{"ingester", "resources", section, resource},
+		Prior:           prior,
 		Kind:            "statefulset",
 		OwnerApp:        "monitoring-loki",
 		APIGroupVersion: "apps/v1",
@@ -463,8 +492,179 @@ func OverlayFieldDelivered(f OverlayField, declared any, live map[string]any) (m
 			return false, "(absent)", true
 		}
 		got := fmt.Sprintf("%v", v)
-		return got == fmt.Sprintf("%v", declared), got, true
+		return OverlayScalarEqual(v, declared), got, true
 	}
+}
+
+// ── comparing two scalars the way the apiserver would ────────────────────────
+
+// OverlayScalarEqual reports whether a delivered scalar is the declared one.
+//
+// IT IS NOT A STRING COMPARE, AND THAT IS THE WHOLE POINT. The apiserver
+// CANONICALISES quantities on the way in: patch `3072Mi` and read back `3Gi`,
+// patch `1000m` and read back `1`. Measured against the same v1.34.8 apiserver
+// the appliability lane runs on. A `%v` compare therefore reports a correctly
+// delivered value as undelivered the moment anyone writes a non-canonical
+// spelling in appvalues.yaml — and this function has three readers who each turn
+// that into a different kind of damage:
+//
+//	assert-overlay-applied        a permanently red lane on a converged cluster
+//	the appliability probe        "ACCEPTED the probe and the value did NOT land",
+//	                              which blames the row's Patch for the apiserver's
+//	                              own normalisation
+//	the migration precondition    "is this field still undelivered" answers YES
+//	                              forever, so `llz ci converge` recreates a live
+//	                              StatefulSet on every platform-scope run with no
+//	                              terminating condition
+//
+// The third is why this is not cosmetic. Quantities compare by VALUE; everything
+// else still compares as text, because for a non-quantity the exact spelling is
+// what the object carries and a looser comparison would start hiding real drift.
+//
+// A SUFFIX IS WHAT MAKES IT A QUANTITY, and without that rule the promise above is
+// not kept. An earlier version took the quantity path for anything that parsed as
+// a number, so "2.10" == "2.1", "1.0" == "1" and "0755" == "755" — a chart
+// version, an image tag, a file mode or a label value compared NUMERICALLY and
+// reported as delivered against a different live string. No declared value today
+// is shaped that way, so it was a latent false green rather than a live one.
+// Requiring at least one side to carry a UNIT OR AN EXPONENT keeps every case this
+// exists for (3072Mi vs 3Gi, 1000m vs 1, 1Gi vs 1073741824, 3e9 vs 3000000000) and
+// returns everything else to the text compare the doc promises. Both markers are
+// things no chart version, image tag or file mode carries; a bare decimal is not.
+func OverlayScalarEqual(delivered, declared any) bool {
+	ds, dq, dok := quantityRat(delivered)
+	cs, cq, cok := quantityRat(declared)
+	if dok && cok && (dq || cq) {
+		return ds.Cmp(cs) == 0
+	}
+	return scalarText(delivered) == scalarText(declared)
+}
+
+// scalarText is how a scalar is spelled, for BOTH halves of OverlayScalarEqual.
+//
+// THE TWO HALVES DISAGREED ABOUT NUMBERS. quantityRat normalises a float64 with
+// FormatFloat('f', -1, 64) while the text fallback used %v, which switches to
+// exponent form around 1e7 — so a live JSON number of 3000000000 rendered
+// "3e+09" against a declared "3000000000" and could never match. Both readings
+// have to come from one place, for the same reason OverlayFieldDelivered does:
+// this feeds assert-overlay-applied, the appliability probe, and the migration
+// precondition, and the last of those answering "still undelivered" forever is a
+// live StatefulSet recreated on every platform-scope run with no terminating
+// condition.
+func scalarText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// quantitySuffixes are Kubernetes' resource.Quantity multipliers, binary and
+// decimal. Transcribed from the apiserver's own set rather than invented: a
+// suffix this table does not know falls back to a text compare, which is the
+// safe direction — it can report a false MISMATCH (a loud red someone fixes) but
+// never a false match.
+var quantitySuffixes = map[string][2]int64{
+	// suffix: {base, exponent}
+	"":   {1, 0},
+	"n":  {1000, -3},
+	"u":  {1000, -2},
+	"m":  {1000, -1},
+	"k":  {1000, 1},
+	"M":  {1000, 2},
+	"G":  {1000, 3},
+	"T":  {1000, 4},
+	"P":  {1000, 5},
+	"E":  {1000, 6},
+	"Ki": {1024, 1},
+	"Mi": {1024, 2},
+	"Gi": {1024, 3},
+	"Ti": {1024, 4},
+	"Pi": {1024, 5},
+	"Ei": {1024, 6},
+}
+
+// quantityPartsRe splits a quantity into its number and its suffix. validate.go's
+// quantityRe answers "is this shaped like a quantity" for the spec validator; this
+// one has to CAPTURE the two halves, so it is a second expression over the same
+// grammar rather than a second opinion about it.
+//
+// THE GRAMMAR IS THE APISERVER'S, NOT A TIDY SUBSET OF IT. resource.Quantity
+// accepts a sign, and a decimal exponent, and PRESERVES the spelling it was given
+// — so a live object can carry `3e9` where the overlay declares `3000000000` and
+// mean the identical thing. An earlier version refused both forms, fell back to a
+// text compare, and reported a correctly delivered value as UNDELIVERED, which in
+// the migration precondition is a recreate with no terminating condition. It also
+// omitted `n` and `u`, which are the apiserver's own canonical output for anything
+// sub-milli (`1.5m` comes back as `1500u`).
+//
+// NO TrimSpace. resource.Quantity rejects surrounding whitespace outright, so
+// accepting it here would vouch for a declared value the apiserver will refuse as
+// malformed — a false MATCH, which the earlier comment claimed was impossible.
+var quantityPartsRe = regexp.MustCompile(`^([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)([A-Za-z]*)$`)
+
+// quantityRat parses a Kubernetes quantity into an exact rational, or reports
+// that the value is not one.
+//
+// EXACT, NOT FLOAT. 1Gi is 1073741824 and 1000m is 1; comparing those through
+// float64 would work today and stop working for a large enough Ti value, which is
+// the kind of bug that surfaces once, in production, on somebody's storage row.
+// The second return says the text carried a QUANTITY MARKER — a unit suffix or an
+// exponent — which is what lets the caller keep a bare decimal on the text path.
+func quantityRat(v any) (r *big.Rat, marked, ok bool) {
+	var s string
+	switch t := v.(type) {
+	case string:
+		s = t
+	case int:
+		s = strconv.Itoa(t)
+	case int64:
+		s = strconv.FormatInt(t, 10)
+	case float64:
+		s = strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		// bool, nil, a map, a slice — not a quantity, and never coerced into one.
+		return nil, false, false
+	}
+	m := quantityPartsRe.FindStringSubmatch(s)
+	if m == nil {
+		return nil, false, false
+	}
+	mult, known := quantitySuffixes[m[2]]
+	if !known {
+		// A suffix this table does not recognise falls back to a text compare, which
+		// can report a false MISMATCH (a loud red someone fixes) but never a false
+		// match. Note `K` lands here deliberately: Kubernetes spells kilo `k`.
+		return nil, false, false
+	}
+	// SetString handles the exponent form, so the two halves of the grammar stay in
+	// one place rather than being re-implemented here.
+	r, parsed := new(big.Rat).SetString(m[1])
+	if !parsed {
+		return nil, false, false
+	}
+	scale := new(big.Rat).SetInt64(1)
+	base := new(big.Rat).SetInt64(mult[0])
+	exp := mult[1]
+	neg := exp < 0
+	if neg {
+		exp = -exp
+	}
+	for i := int64(0); i < exp; i++ {
+		scale.Mul(scale, base)
+	}
+	marked = m[2] != "" || strings.ContainsAny(m[1], "eE")
+	if neg {
+		return r.Quo(r, scale), marked, true
+	}
+	return r.Mul(r, scale), marked, true
 }
 
 // ── the paths deliberately left unmapped ─────────────────────────────────────
@@ -536,4 +736,197 @@ func UnmappedOverlayPaths() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ── coupling a row's probe to the row it claims to test ──────────────────────
+
+// patchTargetsLive reports whether a row's Patch actually writes at the row's own
+// Live path.
+//
+// IT CHECKS THREE THINGS, and each closes a measured false green: that the patch
+// writes AT the row's path, that it writes the DECLARED VALUE there, and that it
+// writes NOTHING ELSE.
+//
+// WITHOUT IT, Patch AND Live ARE INDEPENDENT AND A GREEN ROW PROVES NOTHING.
+// StatefulSet's refusal is a WHOLE-SPEC message — "updates to statefulset spec
+// for fields other than 'replicas', 'ordinals', 'template', … are forbidden" —
+// emitted byte-identically for ANY non-whitelisted spec key. Measured: repointing
+// the WAL-claim row's Patch at {"spec":{"serviceName":"…"}} still graded
+// `loki.ingester.persistence.enabled is CREATE-ONLY, as declared` and exited 0.
+// So a CREATE-ONLY verdict on its own establishes "the patch touched sts.spec
+// outside the mutable whitelist", not "this field is create-only". The two are
+// the same claim only when the patch is known to be about this field, and this is
+// what knows it.
+//
+// STRUCTURAL, AND DELIBERATELY SO. It reads the patch the row builds rather than
+// asking the cluster, because the refused path has no object to read back — the
+// apiserver returns an error, not a result. So this is the only check available
+// on the arm where the false green lives.
+func PatchTargetsField(patch string, f OverlayField, declared any) error {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(patch), &m); err != nil {
+		return fmt.Errorf("the row's Patch is not valid JSON: %w", err)
+	}
+	if _, found, missed := LiveValue(m, f.Live); missed || !found {
+		return fmt.Errorf("the row's Patch does not write anything at %s, the path this row claims to "+
+			"test. Whatever the apiserver says about that patch is evidence about a DIFFERENT field — "+
+			"and for a StatefulSet the immutability refusal is a whole-spec message, so an unrelated "+
+			"spec key produces the identical text and would grade CREATE-ONLY", strings.Join(f.Live, "."))
+	}
+	// THE RIGHT PATH IS NOT YET THE RIGHT PROBE. A patch can write at the row's own
+	// Live path and send something other than the declared value — and on the
+	// REFUSED arm nothing downstream can notice, because a refusal returns an error
+	// and not an object for probeLandedTheValue to read. So the value is checked
+	// here, offline, where it is checkable on both arms.
+	if match, sent, readable := OverlayFieldDelivered(f, declared, m); !readable {
+		return fmt.Errorf("the row's Patch writes something at %s that this row cannot read back "+
+			"(%s) — a probe whose own payload is unreadable is evidence about nothing",
+			strings.Join(f.Live, "."), sent)
+	} else if !match {
+		return fmt.Errorf("the row's Patch writes %s at %s, not the declared %v. The apiserver's answer "+
+			"would be about a value nobody declared, and on the refused arm there is no returned object "+
+			"to notice it with", sent, strings.Join(f.Live, "."), declared)
+	}
+	// AND IT MUST WRITE NOTHING ELSE. Containment is not exclusivity: StatefulSet's
+	// refusal is one whole-spec message emitted byte-identically for ANY
+	// non-whitelisted spec key, so a patch carrying the row's own field PLUS one
+	// unrelated key is refused for the unrelated key and grades "CREATE-ONLY, as
+	// declared". Measured: adding `"podManagementPolicy": "Parallel"` beside the WAL
+	// claim template produced exactly that, and exit 0. A selector key needed to
+	// ADDRESS the row's field (a container's `name`) is not another write and is
+	// excluded by extraPatchWrites itself.
+	if extra := extraPatchWrites(m, 0, f.Live, "", "", false); len(extra) > 0 {
+		sort.Strings(extra)
+		return fmt.Errorf("the row's Patch also writes %s, which this row does not claim to test. A "+
+			"StatefulSet's immutability refusal is a WHOLE-SPEC message, identical for any "+
+			"non-whitelisted spec key — so an unrelated key alone produces a CREATE-ONLY verdict and "+
+			"the row would vouch for it. Send only %s", strings.Join(extra, ", "), strings.Join(f.Live, "."))
+	}
+	return nil
+}
+
+// extraPatchWrites lists every leaf the patch writes that is NOT the row's own
+// field. It walks the patch and the row's Live path together: `i` is how far into
+// Live the walk has got, and `allow` is the selector key that addressed the
+// current level, which is part of the address rather than a second write.
+//
+// Reaching the end of Live means this subtree IS the payload, and it is not
+// descended into: for MatchNonEmptyList the payload is a whole list of claim
+// templates, and every field inside one of those is the row's own business.
+//
+// WHAT COUNTS AS "ELSE" IS NARROWER THAN IT LOOKS, and getting that wrong is a
+// false RED that blocks a legitimate row months from now. Once the walk has
+// entered the list ELEMENT the row selects, other keys in that element are not a
+// second write — they are how the element is addressed and how it is made valid:
+//
+//	the API's merge key    a Service port list merges on `port`, not on `name`, so
+//	                       the only correct strategic-merge patch for a
+//	                       `ports[name=http-metrics].targetPort` row carries `port`
+//	                       too. Rejecting it would push the author to the patch
+//	                       that mis-targets the list.
+//	a co-required sibling  the apiserver refuses `requests > limits`, so a row
+//	                       raising requests past the fixture's limit can only be
+//	                       expressed as a patch carrying both. Rejecting that makes
+//	                       the row unfixable: every patch is refused by one side or
+//	                       the other.
+//
+// Neither can produce a spurious CREATE-ONLY verdict, which is the thing this
+// check exists to prevent: they live inside a list the row already targets, and
+// for a StatefulSet everything under spec.template is in the mutable whitelist.
+// A key at a MAP level the walk passes through is a different matter — that is the
+// measured false green (`spec.podManagementPolicy` beside
+// `spec.volumeClaimTemplates`), and it stays refused.
+func extraPatchWrites(node any, i int, live []string, cur, allow string, inElement bool) []string {
+	if i == len(live) {
+		return nil
+	}
+	m, ok := node.(map[string]any)
+	if !ok {
+		// The patch's shape diverges from Live before reaching it. LiveValue already
+		// refused this patch above; returning the position keeps the message honest if
+		// that check is ever reordered.
+		return []string{cur}
+	}
+	key, sel, hasSel := strings.Cut(live[i], "[")
+	var out []string
+	for k, v := range m {
+		at := strings.TrimPrefix(cur+"."+k, ".")
+		if k != key {
+			if allow != "" && k == allow {
+				continue // the selector key that addresses this row's field
+			}
+			if inElement {
+				// ONLY THE ELEMENT'S OWN TOP-LEVEL KEYS, not everything beneath them. The
+				// exemption is for a merge key and a co-required sibling — both scalars sitting
+				// directly on the element. Carrying it down to arbitrary depth switched the
+				// check off for the whole subtree: measured, the real loki row's patch plus
+				// `image: evil`, plus a nested sibling, plus a null-delete, plus
+				// `"$patch":"replace"` were all accepted. That was safe only because everything
+				// under a StatefulSet's spec.template really is mutable — a Kind-specific
+				// argument generalised to every future row.
+				if _, deeper := v.(map[string]any); !deeper {
+					continue
+				}
+			}
+			out = append(out, patchLeaves(v, at)...)
+			continue
+		}
+		if !hasSel {
+			out = append(out, extraPatchWrites(v, i+1, live, at, "", inElement)...)
+			continue
+		}
+		field, wantVal, ok := strings.Cut(strings.TrimSuffix(sel, "]"), "=")
+		list, isList := v.([]any)
+		if !ok || !isList {
+			out = append(out, patchLeaves(v, at)...)
+			continue
+		}
+		// ONLY THE FIRST MATCH IS THE PAYLOAD, because LiveValue selects
+		// the first match and stops. Treating every match as payload let a patch carry
+		// the row's own field TWICE with two different values: the value check read the
+		// first, and this saw nothing extra. Later matches are extra writes.
+		matched := false
+		for n, e := range list {
+			el := fmt.Sprintf("%s[%d]", at, n)
+			em, isMap := e.(map[string]any)
+			if s, _ := em[field].(string); isMap && s == wantVal && !matched {
+				matched = true
+				out = append(out, extraPatchWrites(em, i+1, live, el, field, true)...)
+				continue
+			}
+			// An element the row does not select — or a second element claiming to be it
+			// — is a write to something other than this row's field.
+			out = append(out, patchLeaves(e, el)...)
+		}
+	}
+	return out
+}
+
+// patchLeaves names every leaf under a subtree the row does not claim.
+func patchLeaves(node any, cur string) []string {
+	switch t := node.(type) {
+	case map[string]any:
+		var out []string
+		for k, v := range t {
+			out = append(out, patchLeaves(v, strings.TrimPrefix(cur+"."+k, "."))...)
+		}
+		if len(out) == 0 {
+			return []string{cur} // an empty object still writes at cur
+		}
+		return out
+	default:
+		return []string{cur}
+	}
+}
+
+// PriorOnObject renders what a live object carries at a row's Live path, for the
+// gate that checks a fixture is in its PRE-OVERLAY shape. "(absent)" when the path
+// resolves to nothing — itself a shape a fixture can wrongly be in, and the one
+// that reports as better coverage than the correct shape.
+func PriorOnObject(f OverlayField, live map[string]any) any {
+	v, found, missed := LiveValue(live, f.Live)
+	if missed || !found {
+		return "(absent)"
+	}
+	return v
 }
