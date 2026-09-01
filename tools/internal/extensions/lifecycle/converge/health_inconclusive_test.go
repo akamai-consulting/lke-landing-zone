@@ -25,11 +25,26 @@ import (
 // contract is "an unreadable cluster is not converged", and any wording change
 // should be free to happen without touching this test.
 func TestSectionsRefuseSilentGreen(t *testing.T) {
-	orig := deps.Exec
-	t.Cleanup(func() { deps.Exec = orig })
-	deps.Exec = func(_ string, _ ...string) ([]byte, error) {
+	// withExecOutput, NOT a bare deps.Exec swap — the same correction
+	// TestAnsweredEmptyStaysGreen carries below, and TestPerNamespaceSectionsRefuseSilentGreen
+	// was written with from the start. This test predates both and never got it.
+	//
+	// THE SEAM IT WAS MISSING MADE IT ENVIRONMENT-DEPENDENT. Half these sections read
+	// through internal/kubectlprobe, which holds its own Exec. Stubbing only deps.Exec
+	// left the rest shelling out to whatever cluster the developer's kubeconfig points
+	// at — so on a machine with a REACHABLE cluster the sections got real answers,
+	// reported Converged, and this test failed; on a machine with none, kubectl errored
+	// and it passed. CI has no cluster, so it was permanently green there and red on
+	// any workstation with a live context, which is the shape that reads as flakiness.
+	//
+	// It also meant the test spent its time in real kubectl subprocesses, with retries
+	// — hence the Retries/Delay clamp below, matching every other test in this file.
+	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
 		return nil, errors.New("the connection to the server was refused")
-	}
+	})
+	prevRetries, prevDelay := kubectlprobe.Retries, kubectlprobe.Delay
+	kubectlprobe.Retries, kubectlprobe.Delay = 1, 0
+	t.Cleanup(func() { kubectlprobe.Retries, kubectlprobe.Delay = prevRetries, prevDelay })
 
 	sections := []struct {
 		name string
