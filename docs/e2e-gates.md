@@ -55,10 +55,13 @@ Neither subsystem was individually wrong. Their **coupling** was, and no test
 covered the coupling, because each side's tests exercised its own copy of the
 rule.
 
-## The two archetypes
+## The three archetypes
 
-Everything above reduces to two shapes. When you add a behavior, ask which one it
-is — most behaviors worth gating are one of them.
+Everything above reduces to three shapes. When you add a behavior, ask which one
+it is — most behaviors worth gating are one of them. The third arrived later than
+the other two and from a different direction: not a delivery that never happened,
+but one the cluster **refused**, in a way that made every status field say it had
+succeeded.
 
 ```mermaid
 flowchart TB
@@ -78,10 +81,17 @@ flowchart TB
         A2 ==>|"✅ <b>GATE HERE</b><br/>feed A's REAL output into<br/>B's REAL predicate"| B2
     end
 
+    subgraph UA["③ Unappliable change — B already exists, and cannot become what A declares"]
+        direction LR
+        A3["<b>A</b> overlay declares<br/>a create-time field"] -->|"rendered, compared"| B3["<b>B</b> live object<br/>that predates it"]
+        B3 -.->|"❌ the API REFUSES the apply;<br/>Argo's diff is that apply,<br/>so no diff is produced"| S3["sync.status: Synced<br/><i>the previous verdict</i>"]
+        B3 ==>|"✅ <b>GATE HERE</b><br/>read the field back off B, and<br/>dry-run the change to learn WHY"| G3["is it there —<br/>and CAN it be?"]
+    end
+
     classDef good fill:#e6f4ea,stroke:#34a853,stroke-width:2px,color:#111;
     classDef bad fill:#fce8e6,stroke:#ea4335,color:#111;
-    class G1 good;
-    class CFG1,H1 bad;
+    class G1,G3 good;
+    class CFG1,H1,S3 bad;
 ```
 
 The green edges are the gates. Both naive alternatives in ① stay green while the
@@ -125,6 +135,57 @@ Pin the **exclusions** too. A destructive selector must keep saying no: the
 reaper test asserts that an unrelated volume never matches and that relabeled
 volumes stay out of scope without `--env`. A gate that only proves "matches more"
 is one bad edit away from matching everything.
+
+### Unappliable change — B already exists, and cannot become what A declares
+
+A field the API server fixes at CREATE time: a StatefulSet's
+`volumeClaimTemplates`, `serviceName` or selector; a Service's `clusterIP`; a Job
+spec; a PVC shrink; StorageClass `parameters`. The declaration is correct and the
+apply is impossible.
+
+**What makes it its own archetype is that the impossibility produces the green.**
+Argo CD computes its diff by dry-run-applying the desired state
+(`ServerSideDiff=true` — see `clusterspec.CompareOptions` for why that is on).
+When the apply is refused, no diff is produced; with no diff the Application
+reads `Synced`; with nothing out of sync `selfHeal` never fires. Three checks
+stayed green through a 16-day Loki outage on exactly this: the overlay file held
+the right value, the rendered Helm values held the right value, and Argo said
+Synced.
+
+**And the refusal is per OBJECT, so it is contagious.** One unappliable field
+discards the whole diff for that object, including perfectly mutable fields
+sharing it. Loki's 3Gi memory limit — `spec.template`, applied happily on its own
+— went undelivered for weeks because it shared a StatefulSet with a WAL claim
+template that could not be added in place.
+
+**Gate by reading the field back off the object, then dry-running the change.**
+`llz ci assert-overlay-applied` does both: the read-back says whether the value
+landed, and the server dry run separates *the cluster would take this, nothing
+delivered it* from *the cluster will never take this*. A dry run is a read
+(`capability.Permits` lets `patch --dry-run=server` through a cluster-read
+handle), so the gate is safe to point at production — which matters, because
+production is the only place this archetype exists.
+
+**Greenfield cannot see it, by construction.** A fresh cluster creates each
+object in its final shape, so there is no transition to reject, and every e2e
+lane here force-pushes a fresh instantiation (see "The configuration no lane
+runs", below — this is that blind spot's Kubernetes twin, and it bit first). That
+is why the durable answer is a REPORTING lane on real clusters: the reconciler's
+`overlay-delivery` gauges publish per-field delivery from inside every adopter's
+cluster, which is the older state CI cannot manufacture.
+
+**Declaring the remedy is part of declaring the field.** A mapped field that is
+create-time-only names the brownfield migration that lands it, and a migration is
+pending exactly while the field is undelivered — there is no ledger to disagree
+with the object. A gate that can only say "this will never apply" has kept the
+actionable half to itself.
+
+**And the remedy runs itself.** `llz ci converge` applies pending migrations on
+the platform scope, once per run, beside its two existing self-heals: this is a
+fault no amount of polling clears, because the desired state is correct and the
+cluster is correct to refuse it. Only migrations declared safe to automate run
+unattended — the recreate is `--cascade=orphan`, so the pods keep running — and
+the disruptive half (rolling those pods onto the new spec) is never automated.
 
 ## Doctrine every gate follows
 
@@ -280,6 +341,13 @@ tears it down afterwards (`e2e-instantiate.yml`). So the only configuration the
 release gate has ever exercised is greenfield — a cluster created by the code
 being tested. Nothing plans or applies a new template against state an **older**
 release created, which is where every adopter lives from their second day on.
+
+The Kubernetes layer has already been bitten by this, which is archetype ③
+above: an overlay field that a live object refuses, reported as Synced, on the
+one configuration no lane runs. The answer there was a gate that dry-runs against
+real clusters plus a reconciler lane that samples them continuously — worth
+knowing before building the Terraform half, because the shape of the fix
+transfers even though the tooling does not.
 
 That is the same blind spot `llz ci assert-adopter-pin` was written for, one
 layer down. That one closed the *pin* half: e2e pins the instance, `TF_IMAGE` and

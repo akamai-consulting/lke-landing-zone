@@ -16,6 +16,7 @@ are read by operators who do not have this repo checked out, often mid-incident.
 | An in-cluster alert is firing and you need the response for it | [reconciler-alerts](reconciler-alerts.md) |
 | A recreated cluster will not converge; the values repo still has the old `apl-<env>` branch | [apl-branch-recreate-wedge](apl-branch-recreate-wedge.md) |
 | apl-core is not picking up values, or you need to know how values reach the cluster | [apl-values-propagation](apl-values-propagation.md) |
+| The overlay declares a value, Argo says `Synced`, and the object does not have it | [overlay-declared-but-not-applied](overlay-declared-but-not-applied.md) |
 | Leftover Linode Volumes after a destroy, or a bill for storage nothing is using | [orphan-volume-cleanup](orphan-volume-cleanup.md) |
 | A Volume's label differs from its PV's `volumeHandle` (it will fail to mount on the next attach) | [volume-labels](volume-labels.md) |
 | An apply is refused because it would replace your Object Storage buckets | [bucket-prefix-rename](bucket-prefix-rename.md) |

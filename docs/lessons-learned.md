@@ -355,6 +355,16 @@ default against, not something to "clean up." Version-specific notes (apl-core
   `curlimages/curl` against the Otomi-signed wildcard cert → exit 60, init loops
   forever. A Kyverno mutation adds `-k`; only surfaces *after* the Gateway NP
   selector is fixed.
+- **Argo CD reports a REFUSED apply as `Synced`.** With `ServerSideDiff=true` the
+  comparison target is a server-side apply dry run. If the API server rejects that
+  apply — adding `volumeClaimTemplates` to a live StatefulSet, changing a Service
+  `clusterIP`, any create-time field on an object that already exists — no diff is
+  produced, so the Application keeps its previous verdict and `selfHeal` never
+  fires. The rejection is per OBJECT, so it also discards every other change to
+  that object, including mutable ones. Greenfield never sees it (each object is
+  created in its final shape), which is why nothing in e2e catches it. Detect with
+  `llz ci assert-overlay-applied`; remedy with `llz ci brownfield-migrate`; the
+  full write-up is [runbooks/overlay-declared-but-not-applied](runbooks/overlay-declared-but-not-applied.md).
 - **Loki S3 wiring** (apl-core): Loki runs in `monitoring` (not grafana); needs
   `_rawValues.loki.schemaConfig.object_store: s3` (the chart won't derive it),
   creds at `singleBinary.extraEnvFrom` (no top-level `extraEnvFrom`), and the
