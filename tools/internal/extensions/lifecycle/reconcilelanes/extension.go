@@ -22,9 +22,10 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	invariant:operating [cluster-read, cluster-write]                sc-demote
 //	invariant:operating [cluster-read, cluster-write]                argo-nudge
 //	invariant:operating [cluster-read, cluster-write]                es-store-recovery
+//	invariant:operating [cluster-read]                               overlay-delivery
 //	invariant:operating [cluster-read, secret-custody]               openbao-gauges
 //
-// WHY THE SPLIT IS LOAD-BEARING, in one number: collapse these five into a single
+// WHY THE SPLIT IS LOAD-BEARING, in one number: collapse these six into a single
 // binding and it must hold the UNION — `cluster-write` *and* `secret-custody`. The
 // OpenBao sampler would then carry permission to patch StorageClasses and Argo
 // Applications, and the three cluster lanes would carry an OpenBao token. Neither
@@ -120,6 +121,17 @@ func Extension() extension.Extension {
 				// on their own; this force-syncs them once the store recovers.
 				Kind: extension.Invariant, Name: "es-store-recovery",
 				State: extension.Operating, Grants: cluster,
+			},
+			{
+				// Publishes whether each mapped apl-overlay value is actually ON the
+				// object. READ-ONLY, and deliberately without the write-shaped dry-run
+				// that would say whether an undelivered value is even appliable — that
+				// question belongs to `llz ci assert-overlay-applied`, which holds a
+				// handle for it. This lane exists because the class it measures only
+				// occurs on clusters older than the change, which is the one
+				// configuration no e2e lane runs.
+				Kind: extension.Invariant, Name: "overlay-delivery",
+				State: extension.Operating, Grants: []extension.Grant{extension.ClusterRead},
 			},
 			{
 				// Read-only by construction: seal state and credential rotation age.

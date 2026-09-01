@@ -1,0 +1,48 @@
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "Application",
+  "metadata": {
+    "name": "monitoring-loki",
+    "namespace": "argocd"
+  },
+  "spec": {
+    "project": "default",
+    "syncPolicy": {
+      "automated": {
+        "allowEmpty": false,
+        "prune": true,
+        "selfHeal": true
+      },
+      "syncOptions": [
+        "ServerSideApply=true"
+      ]
+    },
+    "destination": {
+      "namespace": "monitoring",
+      "server": "https://kubernetes.default.svc"
+    },
+    "source": {
+      "repoURL": "https://github.com/linode/apl-core.git",
+      "path": "charts/loki",
+      "targetRevision": "v6.0.0",
+      "helm": {
+        "releaseName": "loki",
+        "values": "backend:\n    replicas: 0\nchunksCache:\n    enabled: false\ncompactor:\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 128Mi\ndeploymentMode: Distributed\ndistributor:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    replicas: 1\n    resources:\n        limits:\n            cpu: 500m\n            memory: 512Mi\n        requests:\n            cpu: 150m\n            memory: 128Mi\ngateway:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    image:\n        repository: docker/nginxinc/nginx-unprivileged\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 64Mi\nglobal:\n    dnsService: coredns\n    image:\n        registry: mirror.registry.linodelke.net\n    priorityClassName: otomi-critical\nindexGateway:\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 64Mi\ningester:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    maxUnavailable: 1\n    persistence:\n        claims:\n            - accessModes:\n                  - ReadWriteOnce\n              name: data\n              size: 5Gi\n              storageClass: block-storage-retain\n        enabled: true\n    replicas: 3\n    resources:\n        limits:\n            cpu: \"1\"\n            memory: 3Gi\n        requests:\n            cpu: 100m\n            memory: 512Mi\n    zoneAwareReplication:\n        enabled: false\nloki:\n    commonConfig:\n        replication_factor: 1\n    image:\n        repository: docker/grafana/loki\n    ingester:\n        chunk_encoding: snappy\n    podAnnotations:\n        sidecar.istio.io/inject: \"false\"\n    querier:\n        max_concurrent: 4\n    schemaConfig:\n        configs:\n            - from: 2020-09-07\n              index:\n                  period: 24h\n                  prefix: index_\n              object_store: s3\n              schema: v13\n              store: tsdb\n    storage:\n        bucketNames:\n            admin: gsap-apl-loki-chunks-prod\n            chunks: gsap-apl-loki-chunks-prod\n            ruler: gsap-apl-loki-chunks-prod\n        s3:\n            backoff_config:\n                max_period: 5s\n                min_period: 2s\n            http_config:\n                idle_conn_timeout: 90s\n                insecure_skip_verify: true\n            s3: https://us-ord-1.linodeobjects.com\n            s3ForcePathStyle: true\n    storage_config:\n        tsdb_shipper:\n            active_index_directory: /var/loki/tsdb_index\n            cache_location: /var/loki/tsdb_index_cache\n            cache_ttl: 24h\n    structuredConfig:\n        limits_config:\n            discover_service_name:\n                - app\n                - deployment\n                - service\n                - application\n                - app_name\n                - name\n                - app_kubernetes_io_name\n                - container\n                - container_name\n                - k8s_container_name\n                - component\n                - workload\n                - job\n                - k8s_job_name\n            otlp_config:\n                resource_attributes:\n                    attributes_config:\n                        - action: index_label\n                          attributes:\n                              - app\n                              - component\n                              - container\n                              - deployment\n                              - namespace\n                              - node_name\n                    ignore_defaults: true\nlokiCanary:\n    enabled: false\nmemcachedExporter:\n    enabled: false\nmonitoring:\n    serviceMonitor:\n        enabled: true\n        labels:\n            prometheus: system\nquerier:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 144Mi\nqueryFrontend:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    extraContainers:\n        - args:\n              - run\n              - --port=3101\n              - --loki-server=http://localhost:3100\n              - --auth-config=/etc/reverse-proxy-conf/authn.yaml\n          image: mirror.registry.linodelke.net/docker/k8spin/loki-multi-tenant-proxy:v1.0.0\n          name: reverse-proxy\n          ports:\n              - containerPort: 3101\n                name: auth\n                protocol: TCP\n          resources:\n              limits:\n                  cpu: 100m\n                  memory: 32Mi\n              requests:\n                  cpu: 50m\n                  memory: 16Mi\n          volumeMounts:\n              - mountPath: /etc/reverse-proxy-conf\n                name: reverse-proxy-auth-config\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    extraPorts:\n        - name: http\n          port: 3101\n          protocol: TCP\n          targetPort: http\n    extraVolumes:\n        - name: reverse-proxy-auth-config\n          secret:\n              secretName: reverse-proxy-auth-config\n    podAnnotations:\n        checksum/team-config: 781a4ed4ad76d983cf80a8ce0f9fcf283cde39de53b3dd8f9517f4fea362e3d0\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 64Mi\nqueryScheduler:\n    autoscaling:\n        enabled: false\n        maxReplicas: 3\n        minReplicas: 1\n        targetCPUUtilizationPercentage: 80\n        targetMemoryUtilizationPercentage: 80\n    extraEnvFrom:\n        - secretRef:\n              name: loki-s3-linode-credentials\n    replicas: 1\n    resources:\n        limits:\n            cpu: 200m\n            memory: 256Mi\n        requests:\n            cpu: 50m\n            memory: 64Mi\nread:\n    replicas: 0\nresultsCache:\n    enabled: false\nruler:\n    enabled: false\nsidecar:\n    image:\n        repository: quay/kiwigrid/k8s-sidecar\n    resources:\n        limits:\n            cpu: 100m\n            memory: 100Mi\n        requests:\n            cpu: 50m\n            memory: 50Mi\nsingleBinary:\n    replicas: 0\ntest:\n    enabled: false\nwrite:\n    replicas: 0\n"
+      }
+    }
+  },
+  "status": {
+    "sync": {
+      "status": "Synced"
+    },
+    "health": {
+      "status": "Progressing"
+    },
+    "conditions": [],
+    "operationState": {
+      "phase": "Succeeded",
+      "finishedAt": "2026-08-11T00:19:51Z"
+    },
+    "reconciledAt": "2026-08-31T20:32:33Z"
+  }
+}

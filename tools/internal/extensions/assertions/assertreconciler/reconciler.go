@@ -64,6 +64,7 @@ var reconcileFlagLane = map[string]string{
 	"--reconcile-openbao-gauges":    "openbao-gauges",
 	"--reconcile-token-inventory":   "token-inventory",
 	"--reconcile-apl-overlay":       "apl-overlay",
+	"--reconcile-overlay-delivery":  "overlay-delivery",
 }
 
 // lanesFromDeploymentArgs extracts the enabled lane names from a reconciler

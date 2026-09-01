@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/brownfield"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 
@@ -168,7 +169,7 @@ func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
 // ::error:: annotations stay direct stderr writes: GitHub parses an annotation
 // only at the start of a line, and a returned error is printed behind main.go's
 // "llz: " prefix.
-func runConverge(budget, interval, retryDelay int, scope string) error {
+func runConverge(budget, interval, retryDelay int, scope string, brownfieldMigrate bool) error {
 	deadline := time.Now().Add(time.Duration(budget) * time.Second)
 	st := newConvergeState()
 	// The converge loop itself is the retry for the cluster probes — a transient
@@ -219,6 +220,18 @@ func runConverge(budget, interval, retryDelay int, scope string) error {
 	var prevAttempt int
 	redisRealigned := false
 	crdAnnotationsStripped := false
+	// Which brownfield migrations this run has already tried. Per migration rather
+	// than a single flag — see brownfield.ApplyPending — and it doubles as the
+	// record that keeps a failed repair from being re-attempted every poll.
+	migrationsAttempted := map[string]bool{}
+	migrationFailed := ""
+	migrationsSettled := false
+	migrationsReported := false
+	// Migrations this run DELETED an object for. The health scan cannot tell us
+	// whether the recreate landed — the whole premise of this work is that it
+	// cannot see an undelivered field — so the run may not report convergence until
+	// these are re-read and say DONE.
+	var migrationsApplied []string
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
@@ -265,8 +278,131 @@ func runConverge(budget, interval, retryDelay int, scope string) error {
 			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
 			deps.StripOversizedCRDLastApplied()
 		}
+		// Self-heal an overlay change the cluster has REFUSED. A field the API server
+		// fixes at create time cannot be applied to an object that already exists, and
+		// because Argo computes its diff by dry-run-applying, the refusal produces no
+		// diff — the Application reads Synced and every other change to that object is
+		// discarded with it. Nothing converges its way out of that: the desired state
+		// is correct, the cluster is correct about refusing it, and the only repair is
+		// to recreate the object.
+		//
+		// So converge does it, for the same reason it realigns argocd-redis and strips
+		// an oversized CRD annotation: this loop's job is to DRIVE the platform to
+		// convergence, and a fault only a write can clear is one it should clear rather
+		// than poll past. `--cascade=orphan` leaves the pods running, and only
+		// migrations declared Auto run unattended (brownfield.ApplyPending) — a repair
+		// that would take a workload down waits for a human and says so.
+		//
+		// ONCE PER RUN, and safe if it does not complete: an object mid-recreate is
+		// ABSENT, which the precondition reads as nothing-to-do, so neither a later
+		// poll nor the next converge run re-deletes it.
+		//
+		// PLATFORM SCOPE ONLY, like the other two. An apps-scope run gates an app
+		// team's content on behalf of an app team; letting it recreate platform
+		// objects inverts the boundary the scope exists to draw.
+		//
+		// NOT WHILE ARGO CANNOT SYNC. The two blocks above have just told us whether
+		// the repo-server is locked out of its cache or an apply is wedged on the
+		// annotation limit — and the recreate DEPENDS on Argo putting the object
+		// back. Deleting into either of those states leaves the workload with no
+		// controller for the rest of the run and repairs nothing, so the migration
+		// waits for a poll where neither is true. It costs one poll interval in the
+		// case where both faults are present, and that case is exactly the one where
+		// acting would do harm.
+		//
+		// THE VERDICT IN HAND PREDATES THE DELETE. `step` came from the poll at the
+		// top of this iteration; if a migration was applied, the object it names is
+		// gone as of a moment ago and that verdict can no longer speak for the
+		// cluster. A DONE read against pre-delete state would return success from
+		// this very iteration, having just deleted a StatefulSet — the loop must
+		// re-poll instead of consuming it. The two older self-heals never met this
+		// because they only fire on a poll that was NOT Done.
+		//
+		// A SPENT BUDGET STARTS NO NEW WORK. `--budget 0` is the report-only
+		// snapshot this file documents elsewhere, and a snapshot that deletes a
+		// StatefulSet is not one. More generally: there is no honest reason to begin
+		// a repair the run has no time left to observe — the pods keep serving
+		// either way, and the next run picks it up.
+		//
+		// NOR ON A HARD-FAILED POLL. `step` is in hand here, and a hard failure is the
+		// loop about to re-check and possibly abort — the declaration promises this
+		// never runs where Argo has just been shown unable to sync, and a hard fail is
+		// the broadest form of that. It also keeps the `continue` below from
+		// discarding a hard-fail strike and the long-pole bookkeeping that goes with
+		// it. A migration deferred this way lands on the next poll that is merely
+		// in-progress, which the deferral tests pin.
+		// OBSERVE EVEN WHEN NOT REPAIRING. `--brownfield-migrate=false` says it
+		// "observes and reports without recreating anything", and skipping the whole
+		// block made it observe nothing — an operator who turned the repair off to
+		// keep a window lost the report that tells them a window is needed.
+		if scope == ScopePlatform && !brownfieldMigrate && !migrationsReported {
+			// LATCH ON A CONCLUSIVE SCAN ONLY, the same rule the repair block below
+			// follows: a first poll whose object read failed would otherwise silence the
+			// report for the whole run, which is the failure this flag exists to avoid.
+			migrationsReported = reportBrownfieldOnly()
+		}
+		if scope == ScopePlatform && brownfieldMigrate && !migrationsSettled &&
+			step != health.ConvergeRetryHard && step != health.ConvergeUnreachable &&
+			!res.redisAuthSplit && !res.annotationWedge && !time.Now().After(deadline) {
+			applied, ids, failed, settled := applyBrownfieldMigrations(migrationsAttempted)
+			// NOTHING LEFT THAT A LATER POLL COULD CHANGE — every migration is done, not
+			// here, or already attempted — so stop re-scanning. Each scan is a read per
+			// migration plus the owner and pod lookups behind it, and on a default budget
+			// this loop asks sixty times for an answer that cannot move.
+			migrationsSettled = settled
+			migrationsApplied = append(migrationsApplied, ids...)
+			if failed != "" {
+				migrationFailed = failed
+			}
+			if applied > 0 {
+				time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
+				// THE DEADLINE BOUNDS THIS BRANCH TOO. `continue` skips the switch, which
+				// is where every other path checks it, so without this the run overruns
+				// its budget by an interval plus a whole 35-58s scan — the same overrun
+				// the hard-fail re-check was fixed for. The repair still happened and the
+				// pods are still serving; what has run out is the time to watch Argo put
+				// the object back.
+				if time.Now().After(deadline) {
+					fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted just after applying a brownfield "+
+						"migration — Argo has not been given time to recreate the object. The pods are still "+
+						"running; re-run converge, or check the owning Application synced.\n", budget)
+					return fmt.Errorf("budget of %ds exhausted just after a brownfield migration was applied", budget)
+				}
+				continue
+			}
+		}
 		switch step {
 		case health.ConvergeDone:
+			// A REPAIR THAT FAILED IS NOT A CONVERGED CLUSTER, whatever the scan says.
+			// The health scan sees the object as it was BEFORE the attempt — unchanged,
+			// because the delete was refused — so it has no way to report the failure,
+			// and an ::error:: annotation does not fail a step. Converge's exit code is
+			// the only thing that does.
+			if err := failedMigrationVerdict(migrationFailed); err != nil {
+				return err
+			}
+			// A HEALTH SCAN CANNOT SEE A RECREATE THAT DID NOT HAPPEN, which is the
+			// premise of this whole mechanism turned back on itself. After an orphan
+			// delete the pods keep running and Argo's Application status can still read
+			// Synced/Healthy from before, so the very next scan says Done — with the
+			// StatefulSet gone. Nothing would retry afterwards either: the attempt is
+			// latched for the run, and an absent object reads "nothing to migrate here"
+			// for every run after it. So the run waits for the object to come BACK,
+			// carrying the value, and the budget bounds that wait like any other.
+			if waiting := pendingRecreates(migrationsApplied); len(waiting) > 0 {
+				fmt.Fprintf(os.Stderr, "::notice::the cluster reports converged, but %d recreated object(s) "+
+					"have not come back carrying what they were migrated for (%s) — still polling\n",
+					len(waiting), strings.Join(waiting, ", "))
+				if time.Now().After(deadline) {
+					fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted waiting for Argo to recreate "+
+						"%s after a brownfield migration. The pods keep serving; check the owning "+
+						"Application synced\n", budget, strings.Join(waiting, ", "))
+					return fmt.Errorf("brownfield migration applied but %s was not recreated within %ds",
+						strings.Join(waiting, ", "), budget)
+				}
+				time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
+				continue
+			}
 			// Every poll is a full health scan (no memoized skips), so the DONE
 			// verdict already rests on a complete pass — no confirm needed.
 			reportConvergeLongPole(prevNonOK, prevAttempt)
@@ -310,6 +446,31 @@ func runConverge(budget, interval, retryDelay int, scope string) error {
 				fmt.Fprintf(os.Stderr, "::error::%s hard-failed twice in a row — operator intervention required.\n", subject)
 				return fmt.Errorf("%s hard-failed twice in a row — operator intervention required", subject)
 			case health.ConvergeDone:
+				// THE SECOND EXIT, and it was missed the first time. Every `return nil`
+				// in this loop is a claim that the cluster carries what it was told to;
+				// a repair the apiserver refused makes that untrue on both of them.
+				if err := failedMigrationVerdict(migrationFailed); err != nil {
+					return err
+				}
+				// SAME TREATMENT AS THE MAIN ARM. A recreate Argo has not finished yet is
+				// something to WAIT for, not to abort on — aborting here spent the rest
+				// of the budget on nothing, and the two Done exits disagreeing about the
+				// same condition is how one of them ends up wrong.
+				if waiting := pendingRecreates(migrationsApplied); len(waiting) > 0 {
+					fmt.Fprintf(os.Stderr, "::notice::the re-check reports converged, but %s has not come "+
+						"back carrying what it was migrated for — still polling\n", strings.Join(waiting, ", "))
+					// BOUNDED AND PACED, like the main arm. Falling straight out of the
+					// switch pays another full 35-58s scan immediately, and past the
+					// budget — the overrun this branch's own comment says it must not.
+					if time.Now().After(deadline) {
+						fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted waiting for Argo to recreate "+
+							"%s after a brownfield migration\n", budget, strings.Join(waiting, ", "))
+						return fmt.Errorf("brownfield migration applied but %s was not recreated within %ds",
+							strings.Join(waiting, ", "), budget)
+					}
+					time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
+					break
+				}
 				reportConvergeLongPole(prevNonOK, prevAttempt)
 				return nil
 			}
@@ -331,6 +492,150 @@ func runConverge(budget, interval, retryDelay int, scope string) error {
 			return fmt.Errorf("health check returned an exit code outside the 0/1/2/3 contract")
 		}
 	}
+}
+
+// failedMigrationVerdict turns a refused repair into the run's verdict, wherever
+// the loop was about to report success from.
+//
+// A REFUSED DELETE LEAVES THE OBJECT EXACTLY AS IT WAS, which is the state the
+// health scan calls healthy — so the scan cannot see this, and an ::error::
+// annotation does not fail a GitHub Actions step. The exit code is the only thing
+// that does, and there are two places this loop produces one.
+func failedMigrationVerdict(failed string) error {
+	if failed == "" {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "::error::the cluster reports converged, but a brownfield migration could not be "+
+		"applied — the value it lands is still not on the object, and the health scan cannot see that "+
+		"because the object is exactly as it was: %s\n", failed)
+	return fmt.Errorf("a brownfield migration failed to apply: %s", failed)
+}
+
+// reportBrownfieldOnly says what the repair WOULD do, for a run that has been
+// told not to do it. Read-only; once per run.
+func reportBrownfieldOnly() (conclusive bool) {
+	conclusive = true
+	var pending []string
+	for _, st := range brownfield.MigrationStatuses(brownfieldDeps()) {
+		if st.State == brownfield.MigrationUnknown && !st.Advisory {
+			conclusive = false
+		}
+		if st.ObjectLacksValue() {
+			pending = append(pending, st.Migration.ID+" ("+st.Detail+")")
+		}
+	}
+	if len(pending) == 0 {
+		return conclusive
+	}
+	fmt.Fprintf(os.Stderr, "::warning::%d brownfield migration(s) are outstanding and this run is not "+
+		"applying them: %s. Run `llz ci brownfield-migrate --id <id> --yes` when you have a window, or "+
+		"drop --brownfield-migrate=false\n", len(pending), strings.Join(pending, "; "))
+	return conclusive
+}
+
+// warnConvergeOnce prints a ::warning:: the first time this run reaches it. The
+// key is namespaced so it cannot collide with a migration id in the same map.
+func warnConvergeOnce(seen map[string]bool, key, msg string) {
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	fmt.Fprintf(os.Stderr, "::warning::%s\n", msg)
+}
+
+// pendingRecreates re-reads the migrations this run applied and returns those
+// whose object is not yet back carrying the value. Empty means every delete this
+// run performed has been made good.
+func pendingRecreates(applied []string) []string {
+	if len(applied) == 0 {
+		return nil
+	}
+	done := map[string]bool{}
+	for _, st := range brownfield.MigrationStatuses(brownfieldDeps()) {
+		done[st.Migration.ID] = st.State == brownfield.MigrationDone
+	}
+	var waiting []string
+	for _, id := range applied {
+		// A migration whose status could not be re-read counts as NOT done: this is
+		// the one question where "could not tell" must not resolve to "finished".
+		if !done[id] {
+			waiting = append(waiting, id)
+		}
+	}
+	return waiting
+}
+
+// applyBrownfieldMigrations lands every PENDING migration this binary declares
+// Auto, and reports what it did plus the first repair that FAILED.
+//
+// IT DOES NOT ABORT THE RUN ITSELF; the loop keeps polling, because the pods are
+// still serving and the budget still bounds the wait. The failure is carried out
+// to failedMigrationVerdict instead, which is what stops a later DONE verdict
+// reporting a convergence that did not happen.
+//
+// The migration set is THIS BINARY'S, which is what "for this version" means on a
+// fleet: an instance running an older llz does not know about a newer migration
+// and is not silently told it is converged — its next `llz upgrade` brings both
+// the declaration and its repair.
+func applyBrownfieldMigrations(attempted map[string]bool) (appliedCount int, appliedIDs []string, failed string, settled bool) {
+	r := brownfield.ApplyPending(brownfieldDeps(), deps.W(), attempted)
+	for _, err := range r.Errs {
+		fmt.Fprintf(os.Stderr, "::error::brownfield migration failed: %v\n", err)
+	}
+	if len(r.Errs) > 0 {
+		// The id is not on the error, so name the run's first failure by the text the
+		// operator will search for. What matters at the call site is that SOMETHING
+		// failed, because that alone must stop the run reporting convergence.
+		failed = health.FirstLine(r.Errs[0].Error())
+	}
+	if len(r.Applied) > 0 {
+		fmt.Fprintf(os.Stderr, "::notice::applied %d brownfield migration(s): %s — polling for Argo to "+
+			"recreate the object(s)\n", len(r.Applied), strings.Join(r.Applied, ", "))
+	}
+	// ONCE PER RUN, LIKE THE LINES ONE LAYER DOWN. brownfield.warnOnce already
+	// suppresses the per-migration repeats; these are the SUMMARY lines, and they
+	// were printed on every poll — sixty of each on a default budget, which is the
+	// annotation storm warnOnce exists to prevent, reintroduced above it. The same
+	// map carries the suppression, so a summary that has already been said is not
+	// said again.
+	if len(r.Deferred) > 0 {
+		warnConvergeOnce(attempted, "summary:deferred", fmt.Sprintf(
+			"%d brownfield migration(s) are pending and are NOT applied automatically: %s",
+			len(r.Deferred), strings.Join(r.Deferred, ", ")))
+	}
+	if len(r.Inconclusive) > 0 {
+		warnConvergeOnce(attempted, "summary:inconclusive", fmt.Sprintf(
+			"could not determine the state of %d brownfield migration(s) (%s) — the cluster did not answer, "+
+				"so this is 'could not tell', not 'nothing to do'. A later poll asks again.",
+			len(r.Inconclusive), strings.Join(r.Inconclusive, ", ")))
+	}
+	// SETTLED means no later poll of this run can reach a different answer.
+	// Deferred is a human's to clear and Inconclusive is a read that might succeed
+	// next time, so neither settles — and neither does NOT HERE: an object can
+	// arrive mid-run (Argo recreating one from an earlier attempt is the obvious
+	// way), and latching on its absence would leave a migration that becomes
+	// PENDING five minutes later unexamined for the rest of the run. Applied and
+	// already-attempted migrations are settled by definition; the recreate is
+	// watched by pendingRecreates, not by re-running this.
+	settled = len(r.Deferred) == 0 && len(r.Inconclusive) == 0 && len(r.NotHere) == 0
+	return len(r.Applied), r.Applied, failed, settled
+}
+
+// brownfieldDeps points the migration engine at this package's installed Exec
+// capability, so a test that stubs converge's exec stubs this too. The SHAPE —
+// stdout on success, diagnostic text on failure — is brownfield.DefaultDeps',
+// restated here only because the seam differs; getting it wrong is what made the
+// two callers disagree about the same cluster.
+func brownfieldDeps() brownfield.Deps {
+	d := brownfield.DefaultDeps()
+	d.Kubectl = func(args ...string) (string, bool) {
+		out, err := deps.Exec("kubectl", args...)
+		if err != nil {
+			return kubectlprobe.ErrText(err), false
+		}
+		return string(out), true
+	}
+	return d
 }
 
 // realignArgocdRedis restarts the argocd-redis Deployment so it re-reads the

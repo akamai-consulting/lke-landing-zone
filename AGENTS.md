@@ -45,7 +45,7 @@ scaffold generator that a downstream instance repo consumes.
   relabeling renamed Volumes out from under the reaper's `pvc-` prefix (one
   commit, both sides of a contract, one side updated). Read
   [docs/e2e-gates.md](docs/e2e-gates.md) **before** adding a behavior — it has the
-  two archetypes, the fail-closed doctrine, and how to wire a lane. Three rules
+  three archetypes, the fail-closed doctrine, and how to wire a lane. Three rules
   carry most of it: assert at the CONSUMER on data the producer really emitted;
   call both sides' REAL functions rather than restating a shared rule; and fail
   closed on vacuity, because a gate that passes having examined nothing looks

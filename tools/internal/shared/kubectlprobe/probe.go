@@ -196,13 +196,29 @@ func ErrText(err error) string {
 
 // ClassifyErr decides whether a failed kubectl call answered the question.
 func ClassifyErr(err error) Verdict {
-	low := strings.ToLower(ErrText(err))
-	for _, m := range absenceMarkers {
-		if strings.Contains(low, m) {
-			return Absent
-		}
+	if IsAbsentText(ErrText(err)) {
+		return Absent
 	}
 	return Unknown
+}
+
+// IsAbsentText is ClassifyErr for the callers that hold kubectl's COMBINED output
+// rather than an error — the runners that return (output, ok) and throw the error
+// away (cigate.RunCombined, and everything built on it).
+//
+// EXPORTED SO THERE IS ONE LIST. Such a caller cannot reach absenceMarkers, so it
+// writes `strings.Contains(out, "NotFound")` instead — a second, shorter list that
+// answers differently for "no resources found" and for a CRD that is not
+// installed. Both readings of "is it absent" have to come from the same table, or
+// one of them will eventually grade an unreachable apiserver as an empty cluster.
+func IsAbsentText(out string) bool {
+	low := strings.ToLower(out)
+	for _, m := range absenceMarkers {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── existence ────────────────────────────────────────────────────────────────

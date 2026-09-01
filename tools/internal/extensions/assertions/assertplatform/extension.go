@@ -25,12 +25,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `assert-platform` declaration.
 //
-//	assertion:verified   "health-workflow" [cluster-read]
-//	assertion:verified   "argo-app"        [cluster-read]
-//	assertion:verified   "instance-custom" [cluster-read]
-//	transition:converged "nudge-and-reap"  [cluster-read cluster-write]
-//	assertion:configured "apl-version"     [read-repo]
-//	assertion:configured "k8s-version"     [read-repo cloud-read]
+//	assertion:verified   "health-workflow"  [cluster-read]
+//	assertion:verified   "argo-app"         [cluster-read]
+//	assertion:verified   "argo-comparisons" [cluster-read]
+//	assertion:verified   "overlay-applied"  [cluster-read]
+//	assertion:verified   "instance-custom"  [cluster-read]
+//	transition:converged "nudge-and-reap"   [cluster-read cluster-write]
+//	assertion:configured "apl-version"      [read-repo]
+//	assertion:configured "k8s-version"      [read-repo cloud-read]
 //
 // WHY THE LAST TWO BIND A DIFFERENT STATE. Three of these run a cluster and read
 // what is there. The preflights do not. `apl-version` reads the instance's pinned
@@ -77,6 +79,41 @@ func Extension() extension.Extension {
 			{
 				Kind:   extension.Assertion,
 				Name:   "argo-app",
+				State:  extension.Verified,
+				Grants: []extension.Grant{extension.ClusterRead},
+			},
+			{
+				// THE SWEEP FOR A COMPARISON THAT NEVER HAPPENED. `argo-app` waits for an
+				// Application to APPEAR; this one asks, of every Application that exists,
+				// whether Argo could compare it at all — a question whose answer is
+				// invisible in sync.status, because a failed comparison leaves the previous
+				// verdict standing.
+				//
+				// Its own binding rather than a second lane under `argo-app`: they fail
+				// independently and in different lanes, and a reader of `llz extension list`
+				// should see both things that can go red.
+				Kind:   extension.Assertion,
+				Name:   "argo-comparisons",
+				State:  extension.Verified,
+				Grants: []extension.Grant{extension.ClusterRead},
+			},
+			{
+				// THE GENERIC HALF OF appvalues.yaml's OWN RULE. That file requires every
+				// entry to be backed by a gate that reads the consumer, and the rule has
+				// been honoured one app at a time (`assert-loki` reads the running
+				// ingester). This lane asks the same question for the mapped paths of every
+				// app, and asks the second one an app-specific probe does not: when the
+				// value is absent, is it absent because nothing delivered it, or because
+				// the API server will never accept it?
+				//
+				// cluster-READ, and the dry run is why that is honest rather than
+				// convenient: `patch --dry-run=server` sends the object for validation and
+				// admission and persists nothing, which capability.Permits classifies as a
+				// read. A gate that needed cluster-write to ask a question would be a gate
+				// nobody could safely point at production — where this class of failure is
+				// the only place it exists.
+				Kind:   extension.Assertion,
+				Name:   "overlay-applied",
 				State:  extension.Verified,
 				Grants: []extension.Grant{extension.ClusterRead},
 			},

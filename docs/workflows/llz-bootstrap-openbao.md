@@ -877,6 +877,30 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `instance-custom-llz-e2e-custom` and synced it. `converge` and `assert-loki` gate the
   PLATFORM apps and stay green when the hatch generated NOTHING (the generated App simply
   would not exist) — only an assertion that names it catches that.
+* **overlay** — GATING, two ordered steps, and together they are the answer to "the
+  overlay says X; does the cluster have X?".
+  `assert-argo-comparisons` sweeps for a `ComparisonError`/`InvalidSpecError` condition
+  and fails on any platform-owned one. What stays green without it: an Application whose
+  comparison ERRORS keeps its previous sync status, so `Synced` there is the last verdict
+  Argo could reach rather than a statement about the current desired state — and with no
+  diff computed, `selfHeal` never fires. `converge` grades the same condition, but it
+  polls and self-heals with cluster writes, so it is not a question anyone can put to a
+  production cluster; this step is one read.
+  `assert-overlay-applied` then reads each mapped `_rawValues` path back out of the live
+  object and, where they disagree, server-dry-runs the same change to learn whether the
+  apiserver would even accept it. What stays green without it: a field the API server
+  fixes at CREATE time cannot be applied to an object that already exists, and because
+  Argo computes its diff by dry-run-applying, that rejection produces NO diff — the app
+  reads Synced and every other change to the same object is discarded with it. A fresh
+  cluster never meets this (each object is created in its final shape), so on the e2e
+  lane the step is a coverage check; its value is on the brownfield clusters adopters
+  actually run. Paths with no row in `clusterspec.OverlayFields()` are printed as
+  UNCHECKED with their count, never counted as a pass.
+  Note the repair does not wait for this lane: `llz ci converge` lands a pending
+  brownfield migration itself, once per run, earlier in the same job — so by the
+  time this lane runs, an object that CAN be recreated already has been, and a
+  failure here is either a migration nobody cleared for unattended use or a
+  recreate Argo has not completed.
 * **metric-surface** — report-only (`|| true`) dump of the loki/cortex/otelcol/harbor
   exporter metric NAMES, so error-rate/saturation alerts get written against series that
   actually exist (promtool checks syntax, not existence). The

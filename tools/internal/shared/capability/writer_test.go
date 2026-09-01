@@ -7,6 +7,7 @@ package capability
 // works once and fails on re-run.
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -204,12 +205,12 @@ func TestEveryOperationRefusesWithoutTheGrant(t *testing.T) {
 //
 // It now asks the TYPE. See TestWriterOperationCountMatchesTheProse for the half
 // that pins the header's number.
-func TestTheOperationSetIsEight(t *testing.T) {
+func TestTheOperationSetIsNine(t *testing.T) {
 	var _ Writer = writer{}
 	var _ Writer = deniedWriter{}
 	want := []string{
 		"Annotate", "ApplyServerSide", "ApplyStdin", "CreateStdin",
-		"CreateToken", "Delete", "PatchMerge", "RolloutRestart",
+		"CreateToken", "Delete", "DeleteOrphan", "PatchMerge", "RolloutRestart",
 	}
 	got := WriterOperations()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -295,8 +296,8 @@ func TestDeniedIsExportedAndRefuses(t *testing.T) {
 // are genuinely prose and have to state a number to be worth reading.
 func TestWriterOperationCountMatchesTheProse(t *testing.T) {
 	ops := WriterOperations()
-	if len(ops) != 8 {
-		t.Fatalf("Writer offers %d operations (%v), and writer.go's header says eight. "+
+	if len(ops) != 9 {
+		t.Fatalf("Writer offers %d operations (%v), and writer.go's header says nine. "+
 			"An operation was added or removed without the census above it moving — update "+
 			"both, because a header that miscounts the interface below it is how the "+
 			"refusal message came to name six of eight.", len(ops), ops)
@@ -313,5 +314,54 @@ func TestWriterOperationCountMatchesTheProse(t *testing.T) {
 		t.Errorf("the derived operation list is %q — the two stdin operations are the ones "+
 			"the seam-based census missed, so their absence here means the derivation broke, "+
 			"not that they were removed", got)
+	}
+}
+
+// THE PROSE AND THE COUNT DRIFTED APART ONCE ALREADY, in the direction that told
+// a developer to use an operation that did not exist. TestWriterOperationCount
+// MatchesTheProse pins the number; this pins the SENTENCES that quote it, which
+// is where the last drift actually lived — the count was right in one place and
+// stale in four others.
+func TestTheHeaderProseNamesTheRightNumberOfShapes(t *testing.T) {
+	src, err := os.ReadFile("writer.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(WriterOperations())
+	word := map[int]string{8: "eight", 9: "nine", 10: "ten", 11: "eleven"}[n]
+	if word == "" {
+		t.Fatalf("Writer offers %d operations and this test has no word for it — add one, and check the "+
+			"header says it", n)
+	}
+	for _, phrase := range []string{
+		"these " + word + " shapes with these arguments",
+		"Four of the " + word + " writers",
+	} {
+		if !strings.Contains(string(src), phrase) {
+			t.Errorf("writer.go's header does not say %q — the interface has %d operations, and a header "+
+				"that miscounts the code below it is how the last one came to advertise an operation that "+
+				"was not there", phrase, n)
+		}
+	}
+}
+
+// safeArg refuses a leading `-`, not an empty string, so "" reached kubectl as a
+// missing positional — `delete statefulset --cascade=orphan` in a namespace,
+// which orphans every StatefulSet in it. Delete guards this; the operation with
+// no undo did not.
+func TestDeleteOrphanRefusesAnEmptyName(t *testing.T) {
+	w, got := recordingWriter(t)
+	if _, err := w.DeleteOrphan("monitoring", "statefulset", ""); err == nil {
+		t.Fatal("an empty name must be refused: the argv it builds deletes every object of that kind")
+	}
+	if len(*got) != 0 {
+		t.Errorf("nothing may be executed on the refused path, got %v", *got)
+	}
+	// …and a real name still works.
+	if _, err := w.DeleteOrphan("monitoring", "statefulset", "loki-ingester"); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(*got, " "); !strings.Contains(joined, "--cascade=orphan") {
+		t.Errorf("the orphan flag is the whole difference from Delete: %s", joined)
 	}
 }

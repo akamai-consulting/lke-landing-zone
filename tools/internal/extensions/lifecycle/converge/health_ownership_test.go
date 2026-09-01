@@ -233,7 +233,7 @@ func TestConvergeAppsScopeReadsTheAppVerdictEverywhere(t *testing.T) {
 		healthResult{code: 0, appCode: 1},
 		healthResult{code: 0, appCode: 1},
 	)
-	err := runConverge(3600, 0, 0, ScopeApps)
+	err := runConverge(3600, 0, 0, ScopeApps, false)
 	if err == nil {
 		t.Fatal("runConverge(apps) = nil over a hard-failed app estate — a healthy platform must not clear the app gate")
 	}
@@ -246,7 +246,7 @@ func TestConvergeAppsScopeReadsTheAppVerdictEverywhere(t *testing.T) {
 
 	// The mirror: a hard-failed PLATFORM does not fail the apps lane.
 	withConvergePoll(t, healthResult{code: 1, appCode: 0})
-	if err := runConverge(3600, 0, 0, ScopeApps); err != nil {
+	if err := runConverge(3600, 0, 0, ScopeApps, false); err != nil {
 		t.Errorf("runConverge(apps) = %v, want nil — a platform failure is not the app lane's verdict", err)
 	}
 }
@@ -267,7 +267,7 @@ func TestConvergeAppsScopeDoesNotRepairThePlatform(t *testing.T) {
 	defer func() { deps.StripOversizedCRDLastApplied = prevStrip }()
 
 	withConvergePoll(t, healthResult{code: 0, appCode: 0, redisAuthSplit: true, annotationWedge: true})
-	if err := runConverge(3600, 0, 0, ScopeApps); err != nil {
+	if err := runConverge(3600, 0, 0, ScopeApps, false); err != nil {
 		t.Fatalf("runConverge(apps) = %v, want nil", err)
 	}
 	if mutated {
@@ -278,7 +278,7 @@ func TestConvergeAppsScopeDoesNotRepairThePlatform(t *testing.T) {
 	// the self-heal rather than scoped it.
 	mutated = false
 	withConvergePoll(t, healthResult{code: 0, appCode: 0, annotationWedge: true})
-	if err := runConverge(3600, 0, 0, ScopePlatform); err != nil {
+	if err := runConverge(3600, 0, 0, ScopePlatform, false); err != nil {
 		t.Fatalf("runConverge(platform) = %v, want nil", err)
 	}
 	if !mutated {

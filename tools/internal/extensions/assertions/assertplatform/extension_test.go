@@ -91,18 +91,43 @@ func TestAplVersionIsAPreflightNotAPostMortem(t *testing.T) {
 	}
 }
 
-// The three cluster lanes fail independently and are wired into different CI
-// lanes. Collapsing them into one binding would still validate — they hold
-// identical grants — so the count is pinned here rather than left to Validate().
-func TestThreeClusterLanesStayVisible(t *testing.T) {
+// The cluster lanes fail independently and are wired into different CI lanes.
+// Collapsing them into one binding would still validate — they hold identical
+// grants — so the SET is pinned here rather than left to Validate().
+//
+// NAMED, NOT COUNTED. It used to assert `verified == 3`, which a fourth lane
+// (argo-comparisons) failed with a message telling the reader to expect three —
+// an assertion about growth wearing the words of an assertion about collapse.
+// Listing the names keeps the property that was meant (each lane stays its own
+// visible thing) and lets a genuinely new one arrive by being named.
+func TestEveryClusterLaneStaysItsOwnVisibleBinding(t *testing.T) {
+	want := map[string]bool{
+		"health-workflow":  false,
+		"argo-app":         false,
+		"argo-comparisons": false,
+		"overlay-applied":  false,
+		"instance-custom":  false,
+	}
 	var verified int
 	for _, b := range Extension().Bindings {
-		if b.State == extension.Verified {
-			verified++
+		if b.State != extension.Verified {
+			continue
+		}
+		verified++
+		if _, known := want[b.Name]; !known {
+			t.Errorf("unnamed verified binding %q — add it here with a word about what it can go "+
+				"red for, or fold it into an existing lane deliberately", b.Name)
+			continue
+		}
+		want[b.Name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("verified binding %q is gone — if two lanes were collapsed, a reader of "+
+				"`llz extension list` lost one of the things that can go red", name)
 		}
 	}
-	if verified != 3 {
-		t.Errorf("want three assertion bindings at verified, got %d — a reader of `llz extension "+
-			"list` should see three things that can go red, not one", verified)
+	if verified != len(want) {
+		t.Errorf("verified bindings = %d, want %d", verified, len(want))
 	}
 }

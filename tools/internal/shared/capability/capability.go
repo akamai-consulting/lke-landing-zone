@@ -254,7 +254,7 @@ func (c cluster) Permits(args ...string) error {
 		// binding declared. Writes go through the named operations on Writer, which
 		// is the whole point of the granular pass: `cluster-write` used to mean "any
 		// kubectl mutation", including `drain`, `exec` and `delete namespace`. It now
-		// means the eight specific shapes writer.go measured, and a reviewer sees Annotate/Delete/PatchMerge
+		// means the nine specific shapes writer.go measured, and a reviewer sees Annotate/Delete/PatchMerge
 		// in the diff rather than an argv they have to parse.
 		return c.deny(v)
 	}

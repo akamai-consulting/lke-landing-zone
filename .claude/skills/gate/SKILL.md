@@ -30,7 +30,7 @@ with no reason is not.
 
 ## Step 1 — which archetype
 
-Almost every gateable behavior is one of two shapes, and the shape decides the
+Almost every gateable behavior is one of three shapes, and the shape decides the
 gate.
 
 **Unverified delivery** — A is configured to send to B. A push URL, a scrape
@@ -48,6 +48,20 @@ scheme, a label format, a path layout, a truncation limit.
 > actual `desiredVolumeLabel()` and hands each result to the reaper's actual
 > `linode.VolumeIsCandidate()`. A test that re-implements the predicate passes
 > happily while the real consumer goes blind.
+
+**Unappliable change** — B already exists and cannot become what A declares. A
+create-time field: StatefulSet `volumeClaimTemplates`/`serviceName`/selector,
+Service `clusterIP`, a Job spec, a PVC shrink, StorageClass `parameters`.
+
+> Read the field back off the object, then **server-dry-run the change** to learn
+> why it is not there. Argo computes its diff by dry-run-applying, so a refused
+> apply produces no diff and the Application reads `Synced` — the refusal is what
+> makes the status green, and it discards every other change to that object with
+> it. `llz ci assert-overlay-applied` is the gate; a create-time field also names
+> the brownfield migration that lands it, which `llz ci converge` then applies
+> unattended (once per run, platform scope). Greenfield cannot see this shape at all,
+> so the durable half is a reporting lane on real clusters
+> (`llz_overlay_field_delivered`).
 
 ## Step 2 — which layer
 

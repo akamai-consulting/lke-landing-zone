@@ -1611,7 +1611,27 @@ categories:
     #                       to keep, so the verb, its reconciler lane and its
     #                       extension binding were retired together and this layer
     #                       loses the one line that made the verb reachable.
-    budget: 1948
+    #   1,949 / 129 files  +1 the AddCommand for `llz ci assert-argo-comparisons`.
+    #                       An Application whose COMPARISON errors keeps its previous
+    #                       sync status, so `Synced` there is a stale verdict and
+    #                       selfHeal never fires. converge has always graded that
+    #                       condition correctly, but it polls and self-heals with
+    #                       cluster writes, so it cannot be what an operator points
+    #                       at production to ask. The sweep, its evaluator and its
+    #                       transport are all in assertions/assertplatform.
+    #   1,950 / 129 files  +1 the AddCommand for `llz ci assert-overlay-applied`.
+    #                       Reads each mapped apl-overlay value back off the live
+    #                       object and, where they disagree, server-dry-runs the
+    #                       change to separate "nothing delivered it" from "the API
+    #                       server will never accept it". The field map is in
+    #                       clusterspec; the gate is in assertplatform.
+    #   1,951 / 129 files  +1 one AddCommand registering both brownfield-migration
+    #                       verbs — the report that runs on every bootstrap so a
+    #                       site says what undelivered change it is carrying, and
+    #                       the --yes recreate that lands it. Both live in
+    #                       lifecycle/bootstrapcluster, beside prepare-apl-upgrade,
+    #                       which is the one-shot they generalise.
+    budget: 1951
     exact: true
     include:
       - "tools/internal/cli/*.go"

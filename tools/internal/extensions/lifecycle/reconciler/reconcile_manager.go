@@ -362,6 +362,7 @@ func ReconcilerLanes() []LaneDecl {
 		reconcileTokens:     true,
 		reconcileESRecovery: true,
 		reconcileAplOverlay: true,
+		reconcileOverlayDel: true,
 	}
 	var out []LaneDecl
 	for _, r := range buildReconcilers(nil, nil, all, func(f func(context.Context) error) func(context.Context) error { return f }) {

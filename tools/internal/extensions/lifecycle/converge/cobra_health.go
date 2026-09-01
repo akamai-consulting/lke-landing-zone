@@ -7,9 +7,9 @@ package converge
 
 import (
 	"fmt"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exitcode"
 	"os"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exitcode"
 	"github.com/spf13/cobra"
 )
 
@@ -107,6 +107,7 @@ func HealthCmd() *cobra.Command {
 }
 func ConvergeCmd() *cobra.Command {
 	var budget, interval, retryDelay int
+	brownfieldMigrate := true
 	scope := ScopePlatform
 	c := &cobra.Command{
 		Use:   "converge",
@@ -121,12 +122,31 @@ func ConvergeCmd() *cobra.Command {
 			"(default) or apps (instance-owned content). The app lane polls rather than\n" +
 			"taking a one-shot reading because it needs the same tolerances the platform\n" +
 			"lane has — a budget, and the in-budget classifiers that call a pod being\n" +
-			"created 'starting' instead of 'failed'.",
+			"created 'starting' instead of 'failed'.\n\n" +
+			"On the platform scope it also LANDS any pending brownfield migration: an\n" +
+			"overlay field the API server fixes at create time cannot be applied to an\n" +
+			"object that already exists, Argo reports that refusal as Synced, and no\n" +
+			"amount of polling clears it. The object is deleted with --cascade=orphan (its\n" +
+			"pods keep running) and Argo recreates it in the declared shape. Only\n" +
+			"migrations declared safe to automate run this way; the rest are reported.\n" +
+			"--brownfield-migrate=false observes without repairing, and the global --dry-run\n" +
+			"does the same.",
 		Args:    cobra.NoArgs,
 		PreRunE: scopeCheck(&scope),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runConverge(budget, interval, retryDelay, scope)
+			// READ LATE, AND DO NOT DISCARD THE ERROR — deps.go's header is about
+			// exactly this flag, and cobra_nudge.go is the pattern. This loop is the
+			// one place in converge that DELETES a live object, so a `--dry-run` that
+			// silently read false here would be the retired DryRun field's defect in a
+			// new costume, on the highest-blast-radius write in the package.
+			dryRun, err := cmd.Flags().GetBool("dry-run")
+			if err != nil {
+				return fmt.Errorf("cannot read the global --dry-run flag (%w) — refusing to run, because "+
+					"the alternative is treating an unreadable flag as \"not a dry run\" and recreating a "+
+					"live StatefulSet", err)
+			}
+			return runConverge(budget, interval, retryDelay, scope, brownfieldMigrate && !dryRun)
 		},
 	}
 	c.Flags().StringVar(&scope, "scope", ScopePlatform,
@@ -134,5 +154,7 @@ func ConvergeCmd() *cobra.Command {
 	c.Flags().IntVar(&budget, "budget", 1800, "total elapsed-time budget in seconds")
 	c.Flags().IntVar(&interval, "interval", 30, "seconds between in-progress polls")
 	c.Flags().IntVar(&retryDelay, "retry-delay", 60, "seconds before re-running a hard-fail check")
+	c.Flags().BoolVar(&brownfieldMigrate, "brownfield-migrate", true,
+		"land pending brownfield migrations (platform scope only) — false observes and reports without recreating anything")
 	return c
 }

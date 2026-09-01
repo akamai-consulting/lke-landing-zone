@@ -136,6 +136,13 @@ func ciCmd() *cobra.Command {
 	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
 	// operationState message instead of burning the 600s pod wait blind (PR #142).
 	c.AddCommand(assertplatform.ArgoAppCmd())
+	// The read-only comparison sweep. Deliberately NOT folded into converge: that
+	// one polls and self-heals with cluster writes, so it cannot be the thing an
+	// operator runs to ask a production cluster what failed to compare.
+	c.AddCommand(assertplatform.ArgoComparisonsCmd())
+	// …and the check that asks the second question: not "could Argo compare it"
+	// but "did the value reach the object, and if not, CAN it".
+	c.AddCommand(assertplatform.OverlayAppliedCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
@@ -460,6 +467,10 @@ func ciCmd() *cobra.Command {
 	// runnable so an operator can assert it on a cluster ahead of a managed upgrade
 	// without re-running a bootstrap.
 	c.AddCommand(bootstrapcluster.PrepareAplUpgradeCmd())
+	// The generalisation of prepare-apl-upgrade: an overlay change a live object
+	// cannot accept in place needs a recreate, and every site has to learn it is
+	// carrying one. The report runs on every bootstrap; the recreate takes --yes.
+	c.AddCommand(bootstrapcluster.BrownfieldMigrationsCmd(), bootstrapcluster.BrownfieldMigrateCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(templatecommit.AssertImageFreshCmd())
