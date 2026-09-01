@@ -30,6 +30,8 @@ package assertplatform
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,13 +162,25 @@ func TestTheFixturesAreAppliedBetweenTheEmitAndTheGate(t *testing.T) {
 	found := false
 	for job, j := range wf.Jobs {
 		emit, apply, gate := -1, -1, -1
+		// THE APPLY STEP IS THE ONE THAT APPLIES THE EMITTED PATH, not the one whose
+		// text happens to contain "overlay-fixtures". Matching the filename as a literal
+		// made a CORRECT, coordinated rename of the file fail this test — and the sibling
+		// test above derives the verb from the cobra Use for exactly the same reason.
+		// This job also applies rendered charts and stdin, so the path is what tells the
+		// fixture apply apart from those.
+		var out string
+		for _, s := range j.Steps {
+			if strings.Contains(s.Run, appliabilityVerb) && strings.Contains(s.Run, "--emit-fixtures") {
+				out = flagValue(s.Run, "--out")
+			}
+		}
 		for i, s := range j.Steps {
 			switch {
-			case strings.Contains(s.Run, "assert-overlay-appliability") && strings.Contains(s.Run, "--emit-fixtures"):
+			case strings.Contains(s.Run, appliabilityVerb) && strings.Contains(s.Run, "--emit-fixtures"):
 				emit = i
-			case strings.Contains(s.Run, "assert-overlay-appliability"):
+			case strings.Contains(s.Run, appliabilityVerb):
 				gate = i
-			case strings.Contains(s.Run, "kubectl apply") && strings.Contains(s.Run, "overlay-fixtures"):
+			case strings.Contains(s.Run, "kubectl apply") && out != "" && flagValue(s.Run, "-f") == out:
 				apply = i
 			}
 		}
@@ -186,5 +200,58 @@ func TestTheFixturesAreAppliedBetweenTheEmitAndTheGate(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no job runs the appliability lane at all — see TestTheAppliabilityLaneIsActuallyRunSomewhere")
+	}
+}
+
+// flagValue pulls the value of a `--out`/`-f` style flag out of a `run:` line,
+// with or without the quotes the workflow writes around it.
+func flagValue(run, flag string) string {
+	m := regexp.MustCompile(regexp.QuoteMeta(flag) + `[= ]+"?([^"\s]+)"?`).FindStringSubmatch(run)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+func TestTheAppliedFileIsTheFileTheEmitStepWrote(t *testing.T) {
+	// THE TWO STEPS AGREEING ON A SUBSTRING IS NOT THE TWO STEPS AGREEING ON A FILE.
+	// The order test above matches the apply step by the literal "overlay-fixtures",
+	// so changing only the emit step's --out to a different filename keeps every
+	// wiring test green — measured. What saves it today is that `kubectl apply -f` on
+	// a missing path exits non-zero, i.e. the workflow is protected by an accident of
+	// kubectl's behaviour rather than by this gate. The paths are what has to match.
+	wf := readWiringWorkflow(t)
+	checked := 0
+	for job, j := range wf.Jobs {
+		// EVERY apply IN THE JOB, not the first one: `dry-run` also applies the rendered
+		// charts from stdin (`-f -`), so picking one apply step by position finds that
+		// instead. The question is whether the path the emit step WROTE is a path some
+		// step in this job APPLIES.
+		var out string
+		var applied []string
+		for _, s := range j.Steps {
+			if strings.Contains(s.Run, appliabilityVerb) && strings.Contains(s.Run, "--emit-fixtures") {
+				out = flagValue(s.Run, "--out")
+			}
+			if strings.Contains(s.Run, "kubectl apply") {
+				if v := flagValue(s.Run, "-f"); v != "" {
+					applied = append(applied, v)
+				}
+			}
+		}
+		if out == "" {
+			continue
+		}
+		checked++
+		if !slices.Contains(applied, out) {
+			t.Errorf("job %s emits the fixtures to %s, but no step applies that path (applied: %s) — the "+
+				"gate would probe objects nothing created, and its absent-object arm would report the "+
+				"fixture step as missing when it merely wrote elsewhere",
+				job, out, strings.Join(applied, ", "))
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no job emits the appliability fixtures with --out, so this test checked nothing — " +
+			"see TestTheAppliabilityLaneIsActuallyRunSomewhere")
 	}
 }

@@ -44,6 +44,20 @@ func TestOverlayScalarEqualAgreesWithWhatAnApiserverWouldDo(t *testing.T) {
 		{"+1", "1000m", true, "leading sign"},
 		{"-1", "-1000m", true, "negative"},
 
+		// THE TYPES A DECODED LIVE OBJECT ACTUALLY CARRIES, not the strings every other
+		// row here feeds. `json.Unmarshal` into map[string]any yields float64 for an
+		// unquoted numeric leaf, and the int/int64 arms exist for values built in Go
+		// rather than decoded. All three arms of quantityRat's type switch could be made
+		// to report "not a quantity" with 146 packages green — and the failure that
+		// buys is a false MISMATCH, which the migration precondition turns into a
+		// recreate with no terminating condition.
+		{float64(1073741824), "1Gi", true, "float64 from a decoded object versus a suffixed declaration"},
+		{int64(1073741824), "1Gi", true, "int64 versus a suffixed declaration"},
+		{1073741824, "1Gi", true, "int versus a suffixed declaration"},
+		{int64(1), "1000m", true, "int64 whole versus milli"},
+		{float64(0.5), "500m", true, "float64 fraction versus milli"},
+		{float64(2147483648), "1Gi", false, "a float64 that is genuinely a different quantity"},
+
 		// Genuinely different quantities.
 		{"1Gi", "2Gi", false, "different"},
 		{"1Gi", "1G", false, "binary and decimal are not the same number"},

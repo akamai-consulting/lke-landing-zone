@@ -195,6 +195,28 @@ func TestARowWhoseDeclaredValueIsMissingFails(t *testing.T) {
 	requireArmFailure(t, runArms(t), "the overlay declares no")
 }
 
+func TestAnAbsentObjectFailsEvenBesideAProbedRow(t *testing.T) {
+	// THE ARM'S OWN VERDICT, NOT THE VACUITY FLOOR UNDER IT. `examined == 0` fires
+	// whenever every row bails, so a case whose only row is absent fails for a reason
+	// that has nothing to do with this arm. Measured: flipping the absent verdict to
+	// OK:true left all 146 packages green, because
+	// TestAnAbsentFixtureFailsRatherThanPassingUnexamined still failed on vacuity and
+	// its `does not exist` substring matched either way.
+	//
+	// AND IT STOPS BEING HYPOTHETICAL THE MOMENT THE MAP NAMES A SECOND OBJECT —
+	// which FixtureNamespaces() and --print-namespaces exist to support. One fixture
+	// missing from a multi-object apply then leaves `examined` non-zero and `failed`
+	// at zero, and the lane prints `ok <obj> does not exist` and exits 0: an absent
+	// fixture reported as evidence. The control row here reproduces exactly that
+	// shape, so the absent row's own OK:false is what has to fail the run.
+	h, hObj := healthyRow()
+	withArmMap(t, []clusterspec.OverlayField{h, armRow("gone")},
+		map[string]any{"healthy": "3Gi", "gone": "3Gi"},
+		// "gone" is deliberately absent from the cluster; "healthy" probes normally.
+		armCluster{objects: map[string]string{"healthy": hObj}})
+	requireArmFailure(t, runArms(t), "does not exist")
+}
+
 func TestAnUndecodableFixtureObjectFailsTheAppliabilityArm(t *testing.T) {
 	h, hObj := healthyRow()
 	withArmMap(t, []clusterspec.OverlayField{h, armRow("garbled")},

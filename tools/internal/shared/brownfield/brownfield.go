@@ -1042,8 +1042,18 @@ func IsProbeInconclusive(err error) bool {
 // does not run, with a message naming why, which an operator can act on. Deleting
 // costs a live workload's controller on the strength of a claim nothing verified,
 // which nobody can undo. So an unverifiable probe refuses too.
+// migrationRawValues is the seam the pre-delete check reads the declared overlay
+// through. A var for exactly the reason the appliability lane made
+// overlayRawValuesFor one: reading clusterspec.AplAppRawValues() directly pins
+// every test to the REAL apl-overlay, where every shipped row has a _rawValues
+// entry — so the arm below that refuses a row whose app declares none is
+// unreachable from a test, and an unreachable fail-closed arm is one that can be
+// flipped to "proceed" with the whole suite green. Measured: it could, and this is
+// the arm standing between a wrong `App` string and DeleteOrphan on a live object.
+var migrationRawValues = clusterspec.AplAppRawValues
+
 func createOnlyStillHolds(d Deps, f clusterspec.OverlayField) error {
-	rv, ok := clusterspec.AplAppRawValues()[f.App]
+	rv, ok := migrationRawValues()[f.App]
 	if !ok {
 		return fmt.Errorf("the overlay declares no _rawValues for app %s, so this migration's CreateOnly "+
 			"claim cannot be checked against the cluster — refusing to delete %s %s/%s on a claim "+

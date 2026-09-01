@@ -106,6 +106,56 @@ func TestARowWhosePatchCannotBeBuiltRefusesTheDelete(t *testing.T) {
 	}
 }
 
+func TestARowWhoseAppDeclaresNoRawValuesRefusesTheDelete(t *testing.T) {
+	// THROUGH THE SEAM, BECAUSE THE REAL OVERLAY CANNOT REACH THIS ARM. Every shipped
+	// row has a _rawValues entry, so with clusterspec.AplAppRawValues() read directly
+	// this branch was unreachable and deletable with 146 packages green — while being
+	// the thing that stands between a wrong `App` string and DeleteOrphan on a live
+	// StatefulSet. The probe deps are never consulted: the point is that the refusal
+	// happens BEFORE anything is asked of the cluster.
+	prev := migrationRawValues
+	migrationRawValues = func() map[string]map[string]any { return map[string]map[string]any{} }
+	t.Cleanup(func() { migrationRawValues = prev })
+
+	err := createOnlyStillHolds(testDeps(), walRow(t))
+	if err == nil {
+		t.Fatal("a migration whose app declares no _rawValues was cleared to delete a live object")
+	}
+	if !strings.Contains(err.Error(), "declares no _rawValues for app") {
+		t.Errorf("the refusal does not name the missing _rawValues: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nothing can confirm") {
+		t.Errorf("the refusal does not say the claim is unconfirmable: %v", err)
+	}
+}
+
+func TestARowWhoseDeclaredValueIsMissingRefusesTheDelete(t *testing.T) {
+	// The sibling arm one line down: the app resolves but the row's Value path names
+	// nothing in it. Same consequence, same fail-closed direction, and reachable only
+	// because the seam above lets a test supply an overlay that disagrees with the row.
+	prev := migrationRawValues
+	migrationRawValues = func() map[string]map[string]any {
+		return map[string]map[string]any{walRow(t).App: {"something-else": "1Gi"}}
+	}
+	t.Cleanup(func() { migrationRawValues = prev })
+
+	f := walRow(t)
+	err := createOnlyStillHolds(testDeps(), f)
+	if err == nil {
+		t.Fatal("a migration whose declared value is absent was cleared to delete a live object")
+	}
+	// THE ROW'S OWN PATH, NOT "nothing can confirm". Every fail-closed arm in this
+	// function ends with that phrase, so asserting on it passes whichever arm fired —
+	// measured: with this arm neutered the run still refused, from the patch-build arm
+	// one line down, and a "nothing can confirm" assertion stayed green. The declared
+	// arm is the only one that names the ROW's full path, and the patch-build arm
+	// quotes the Patch's own inner path (…persistence.claims) rather than this one.
+	want := "the overlay declares no " + clusterspec.OverlayFieldPath(f)
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("the refusal is not this arm's — want a message containing %q\ngot: %v", want, err)
+	}
+}
+
 var errProbeUnbuildable = errUnbuildable{}
 
 type errUnbuildable struct{}

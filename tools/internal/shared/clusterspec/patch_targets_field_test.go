@@ -120,3 +120,47 @@ func TestTheInElementExemptionDoesNotExtendToArbitraryDepth(t *testing.T) {
 		})
 	}
 }
+
+// ── the walker's own divergent-shape arms ────────────────────────────────────
+//
+// TESTED DIRECTLY, AND THE REASON IS THE FINDING. PatchTargetsField checks
+// LiveValue FIRST, so a patch whose shape diverges from Live is refused with "does
+// not write anything at" before extraPatchWrites ever runs — which makes these
+// three arms unreachable through the exported function and left all three
+// deletable with 146 packages green. They are not dead code: each is what keeps
+// the walk honest if that ordering is ever changed, and the non-map arm's own
+// comment says so. Defensive code still has to be defended, so it is exercised
+// here at the level it is reachable from.
+
+func TestTheWalkerReportsAPositionWhereThePatchDivergesFromLive(t *testing.T) {
+	// The patch holds a scalar where Live expects to keep descending. Reached through
+	// PatchTargetsField only if the LiveValue guard above it is reordered away.
+	live := []string{"spec", "size"}
+	got := extraPatchWrites("not-a-map", 0, live, "spec", "", false)
+	if len(got) != 1 || got[0] != "spec" {
+		t.Errorf("a patch that diverges from Live before reaching it did not report its position: %v", got)
+	}
+}
+
+func TestTheWalkerTreatsASelectedKeyThatIsNotAListAsAnExtraWrite(t *testing.T) {
+	// Live says `containers[name=main]`, so the walk expects a list. A patch holding a
+	// MAP there is writing somewhere the row does not claim, and every leaf under it
+	// has to be named rather than silently descended into as if it were the payload.
+	live := []string{"spec", "containers[name=main]", "size"}
+	node := map[string]any{"containers": map[string]any{"size": "3Gi"}}
+	got := extraPatchWrites(node, 1, live, "spec", "", false)
+	if len(got) != 1 || got[0] != "spec.containers.size" {
+		t.Errorf("a non-list at the selector position was not reported as an extra write: %v", got)
+	}
+}
+
+func TestAnEmptyObjectStillCountsAsAWrite(t *testing.T) {
+	// `{"ordinals":{}}` beside the row's own field writes nothing readable, but it is
+	// still a key in the patch the apiserver sees — and for a StatefulSet ANY
+	// non-whitelisted spec key draws the identical whole-spec refusal, which is the
+	// verdict this row would then vouch for. A walker that returned nothing for an
+	// empty object would let that key through.
+	if got := patchLeaves(map[string]any{}, "spec.ordinals"); len(got) != 1 || got[0] != "spec.ordinals" {
+		t.Errorf("an empty object was not counted as a write at its own position: %v", got)
+	}
+}
