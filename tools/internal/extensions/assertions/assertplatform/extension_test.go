@@ -105,6 +105,7 @@ func TestEveryClusterLaneStaysItsOwnVisibleBinding(t *testing.T) {
 		"health-workflow":  false,
 		"argo-app":         false,
 		"argo-comparisons": false,
+		"overlay-applied":  false,
 		"instance-custom":  false,
 	}
 	var verified int

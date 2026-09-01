@@ -140,6 +140,9 @@ func ciCmd() *cobra.Command {
 	// one polls and self-heals with cluster writes, so it cannot be the thing an
 	// operator runs to ask a production cluster what failed to compare.
 	c.AddCommand(assertplatform.ArgoComparisonsCmd())
+	// …and the check that asks the second question: not "could Argo compare it"
+	// but "did the value reach the object, and if not, CAN it".
+	c.AddCommand(assertplatform.OverlayAppliedCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in

@@ -135,6 +135,7 @@ var commands = []Command{
 	{"assertplatform", assertplatform.HealthWorkflowCmd},
 	{"assertplatform", assertplatform.InstanceCustomCmd},
 	{"assertplatform", assertplatform.K8sVersionCmd},
+	{"assertplatform", assertplatform.OverlayAppliedCmd},
 	{"assertreconciler", assertreconciler.EffectsCmd},
 	{"assertreconciler", assertreconciler.ReconcilerCmd},
 	{"assertregistry", assertregistry.AssertHarborRoundTripCmd},

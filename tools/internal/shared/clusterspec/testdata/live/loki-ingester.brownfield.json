@@ -1,0 +1,64 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "StatefulSet",
+  "metadata": {
+    "name": "loki-ingester",
+    "namespace": "monitoring",
+    "generation": 2,
+    "creationTimestamp": "2026-07-24T18:57:11Z"
+  },
+  "spec": {
+    "replicas": 3,
+    "serviceName": "loki-ingester-headless",
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "ingester",
+            "args": [
+              "-config.file=/etc/loki/config/config.yaml",
+              "-ingester.availability-zone=zone-default",
+              "-target=ingester"
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "1Gi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "memory": "512Mi"
+              }
+            }
+          }
+        ],
+        "volumes": [
+          {
+            "configMap": {
+              "defaultMode": 420,
+              "items": [
+                {
+                  "key": "config.yaml",
+                  "path": "config.yaml"
+                }
+              ],
+              "name": "loki"
+            },
+            "name": "config"
+          },
+          {
+            "configMap": {
+              "defaultMode": 420,
+              "name": "loki-runtime"
+            },
+            "name": "runtime-config"
+          },
+          {
+            "emptyDir": {},
+            "name": "data"
+          }
+        ]
+      }
+    }
+  }
+}

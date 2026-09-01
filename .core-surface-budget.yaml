@@ -1619,7 +1619,13 @@ categories:
     #                       cluster writes, so it cannot be what an operator points
     #                       at production to ask. The sweep, its evaluator and its
     #                       transport are all in assertions/assertplatform.
-    budget: 1949
+    #   1,950 / 129 files  +1 the AddCommand for `llz ci assert-overlay-applied`.
+    #                       Reads each mapped apl-overlay value back off the live
+    #                       object and, where they disagree, server-dry-runs the
+    #                       change to separate "nothing delivered it" from "the API
+    #                       server will never accept it". The field map is in
+    #                       clusterspec; the gate is in assertplatform.
+    budget: 1950
     exact: true
     include:
       - "tools/internal/cli/*.go"

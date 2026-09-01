@@ -39,6 +39,25 @@ the landing zone drives into apl-core's *native* values:
   the asserted limit and fails naming what it actually found). Do not add one
   without naming its gate.
 
+  That rule is no longer only prose. Every path declared here must be either
+  **mapped** in `clusterspec.OverlayFields()` — so `llz ci assert-overlay-applied`
+  reads it back out of the live object — or **exempted** in
+  `clusterspec.OverlayUnmapped()` with the reason it needs no live check;
+  `TestEveryDeclaredOverlayPathIsMappedOrExempt` fails a pull request that does
+  neither, and the gate itself fails at runtime on a path nobody decided about.
+
+  **And a second question the first does not answer: can it be applied at all?**
+  A field the API server fixes at CREATE time cannot be changed on an object that
+  already exists. Argo CD computes its diff by dry-run-applying the desired state,
+  so that rejection produces *no diff* — the Application reads `Synced`, `selfHeal`
+  never fires, and because the diff is per object, every other change to the same
+  object is discarded with it. Loki's `persistence.enabled` is one of these: it
+  renders `volumeClaimTemplates`, which a live StatefulSet will not accept. A
+  greenfield cluster never meets this (each object is created in its final shape),
+  which is exactly why no e2e lane catches it. A mapped field of that kind sets
+  `CreateOnly` and names the brownfield migration that lands it on a cluster the
+  object predates.
+
 The in-cluster **apl-overlay reconciler** (`llz reconcile
 --reconcile-apl-overlay`) reads these from the primary repo (`main`), fills the
 credential placeholders from OpenBao `secret/obj/platform`, merges `_shared` +

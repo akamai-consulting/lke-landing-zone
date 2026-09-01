@@ -28,6 +28,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	assertion:verified   "health-workflow"  [cluster-read]
 //	assertion:verified   "argo-app"         [cluster-read]
 //	assertion:verified   "argo-comparisons" [cluster-read]
+//	assertion:verified   "overlay-applied"  [cluster-read]
 //	assertion:verified   "instance-custom"  [cluster-read]
 //	transition:converged "nudge-and-reap"   [cluster-read cluster-write]
 //	assertion:configured "apl-version"      [read-repo]
@@ -93,6 +94,26 @@ func Extension() extension.Extension {
 				// should see both things that can go red.
 				Kind:   extension.Assertion,
 				Name:   "argo-comparisons",
+				State:  extension.Verified,
+				Grants: []extension.Grant{extension.ClusterRead},
+			},
+			{
+				// THE GENERIC HALF OF appvalues.yaml's OWN RULE. That file requires every
+				// entry to be backed by a gate that reads the consumer, and the rule has
+				// been honoured one app at a time (`assert-loki` reads the running
+				// ingester). This lane asks the same question for the mapped paths of every
+				// app, and asks the second one an app-specific probe does not: when the
+				// value is absent, is it absent because nothing delivered it, or because
+				// the API server will never accept it?
+				//
+				// cluster-READ, and the dry run is why that is honest rather than
+				// convenient: `patch --dry-run=server` sends the object for validation and
+				// admission and persists nothing, which capability.Permits classifies as a
+				// read. A gate that needed cluster-write to ask a question would be a gate
+				// nobody could safely point at production — where this class of failure is
+				// the only place it exists.
+				Kind:   extension.Assertion,
+				Name:   "overlay-applied",
 				State:  extension.Verified,
 				Grants: []extension.Grant{extension.ClusterRead},
 			},

@@ -241,10 +241,14 @@ func Lanes(region string) []Lane {
 		},
 		{
 			Name: "overlay", Gating: true,
-			Steps: []Step{step("assert-platform", "assert-argo-comparisons")},
-			Why: "Argo CD could COMPARE every platform Application. A comparison that errors leaves the previous sync status standing, so `Synced` on such an app describes an " +
-				"earlier desired state and selfHeal never fires — every naive status read sees a healthy app. Says nothing about whether the compared diff was APPLIED; that is a " +
-				"different failure and a different check.",
+			Steps: []Step{
+				step("assert-platform", "assert-argo-comparisons"),
+				step("assert-platform", "assert-overlay-applied"),
+			},
+			Why: "ORDERED on purpose. assert-argo-comparisons proves Argo CD could COMPARE every platform Application — a comparison that errors leaves the previous sync status " +
+				"standing, so `Synced` on such an app describes an earlier desired state and selfHeal never fires. assert-overlay-applied then asks the question a clean comparison " +
+				"still does not answer: is the declared value what the OBJECT carries, and when it is not, would the apiserver even accept it. The order matters because an app " +
+				"Argo cannot compare explains an undelivered value, and running the second check first would report the symptom without the cause.",
 		},
 		{
 			Name: "metric-surface", Gating: false,
