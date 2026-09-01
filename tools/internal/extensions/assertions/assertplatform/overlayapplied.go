@@ -57,15 +57,21 @@ import (
 
 // readLiveObject fetches one object as JSON. answered=false is "the apiserver did
 // not tell us", which is distinct from absent and graded differently.
-var readLiveObject = func(kind, namespace, name string) (raw []byte, absent, answered bool) {
-	out, verdict := kubectlprobe.Probe("-n", namespace, "get", kind, name, "-o", "json")
+//
+// AND IT KEEPS WHAT KUBECTL SAID. This is the lane an ADOPTER runs, and it used to
+// print one causeless line for every way of being unable to reach a cluster: a bad
+// context, a garbage kubeconfig, a 500 and a missing kubectl were four identical
+// outputs. An operator who typos KUBECONFIG gets sent to debug a healthy
+// apiserver. The text was always there; only the signature threw it away.
+var readLiveObject = func(kind, namespace, name string) (raw []byte, absent, answered bool, detail string) {
+	out, verdict, detail := kubectlprobe.ProbeDetail("-n", namespace, "get", kind, name, "-o", "json")
 	switch verdict {
 	case kubectlprobe.Found:
-		return out, false, true
+		return out, false, true, ""
 	case kubectlprobe.Absent:
-		return nil, true, true
+		return nil, true, true, detail
 	default:
-		return nil, false, false
+		return nil, false, false, detail
 	}
 }
 
@@ -205,11 +211,11 @@ func assertOverlayApplied() error {
 			continue
 		}
 
-		rawObj, absent, answered := readLiveObject(f.Kind, f.Namespace, f.Name)
+		rawObj, absent, answered, detail := readLiveObject(f.Kind, f.Namespace, f.Name)
 		if !answered {
 			verdicts = append(verdicts, overlayVerdict{Field: f, State: stateUnreadable,
-				Detail: fmt.Sprintf("could not read %s %s/%s — this is 'could not tell', not 'nothing wrong'",
-					f.Kind, f.Namespace, f.Name)})
+				Detail: fmt.Sprintf("could not read %s %s/%s — this is 'could not tell', not 'nothing wrong'. "+
+					"kubectl said: %s", f.Kind, f.Namespace, f.Name, health.RefusalText(detail))})
 			continue
 		}
 		if absent {

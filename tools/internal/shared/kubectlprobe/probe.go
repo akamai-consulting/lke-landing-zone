@@ -150,20 +150,41 @@ var (
 // carries no information. Genuine absence is returned on the first attempt —
 // re-asking a question kubectl already answered just burns the budget.
 func Probe(args ...string) ([]byte, Verdict) {
-	var verdict Verdict
+	out, verdict, _ := ProbeDetail(args...)
+	return out, verdict
+}
+
+// ProbeDetail is Probe, and also hands back WHAT KUBECTL SAID.
+//
+// BECAUSE "COULD NOT TELL" IS NOT A DIAGNOSIS. Probe collapses every unanswerable
+// call — an unset KUBECONFIG, a kubeconfig pointing at a file that is not there, a
+// context naming a cluster that is gone, a dead apiserver — into one bare Unknown,
+// and a caller that can only print "could not read <object>" reports all four
+// identically and names none of them. Measured on the appliability lane: three
+// different kubeconfig faults produced byte-identical output that mentioned no
+// kubeconfig, no file, and no host, while the arm one layer over — an RBAC denial,
+// which DOES print the apiserver's own words — was immediately actionable. The
+// text was always there; only the signature threw it away.
+func ProbeDetail(args ...string) (out []byte, verdict Verdict, detail string) {
+	// UNKNOWN UNTIL SOMETHING SAYS OTHERWISE. Verdict's zero value is Found, so a
+	// Retries set to zero would skip the loop and return a FOUND on nil bytes —
+	// which ExistsOK reports as exists=true. Retries is an exported package var and
+	// callers do lower it (runConverge sets 1), so the floor is not hypothetical.
+	verdict = Unknown
 	for attempt := 0; attempt < Retries; attempt++ {
-		out, err := Exec("kubectl", args...)
+		b, err := Exec("kubectl", args...)
 		if err == nil {
-			return out, Found
+			return b, Found, ""
 		}
+		detail = ErrText(err)
 		if verdict = ClassifyErr(err); verdict != Unknown {
-			return nil, verdict
+			return nil, verdict, detail
 		}
 		if attempt < Retries-1 {
 			time.Sleep(Delay)
 		}
 	}
-	return nil, verdict
+	return nil, verdict, detail
 }
 
 // absenceMarkers are the kubectl stderr texts that mean "asked and answered: it
@@ -213,12 +234,97 @@ func ClassifyErr(err error) Verdict {
 // one of them will eventually grade an unreachable apiserver as an empty cluster.
 func IsAbsentText(out string) bool {
 	low := strings.ToLower(out)
+	// NOT EVERY "not found" IS THE OBJECT'S. absenceMarkers carries the bare
+	// substring "not found" so that `pods "x" not found` classifies, and a kubectl
+	// that never ran carries it too:
+	//
+	//	exec: "kubectl": executable file not found in $PATH
+	//	Error in configuration: context was not found for specified context: prod
+	//
+	// Measured: both made a caller print "statefulset monitoring/loki-ingester does
+	// not exist … the fixture step did not run" — a confident, factually false
+	// statement about a cluster it never reached. A tooling or kubeconfig fault is
+	// the definition of NO ANSWER, so it is excluded before the markers are read and
+	// falls through to Unknown, which every caller already treats as "could not tell".
+	//
+	// WARNING LINES COME OFF FIRST. kubectl writes deprecation notices and admission
+	// `Warning:` lines to the same stderr this reads, so a warning that happens to
+	// carry one of these phrases must not declassify a genuine NotFound underneath
+	// it. Same reasoning, and same shape, as health.IsImmutableFieldRejection.
+	//
+	// THIS LIST ONLY EVER LOSES ABSENCES, which is the safe direction and the same
+	// trade absenceMarkers' own header makes: a misfiled transient costs a retry, a
+	// misfiled absence costs a false green. The retry is not free — everything except
+	// runConverge runs at Retries=3, Delay=3s — so entries have to earn their place.
+	var kept []string
+	for _, line := range strings.Split(low, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "warning:") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	low = strings.Join(kept, "\n")
+	for _, m := range notAnAnswerMarkers {
+		if strings.Contains(low, m) {
+			return false
+		}
+	}
 	for _, m := range absenceMarkers {
 		if strings.Contains(low, m) {
 			return true
 		}
 	}
 	return false
+}
+
+// notAnAnswerMarkers are failures that happen BEFORE the apiserver is asked, so
+// nothing about them says whether the object exists.
+//
+// TWO ENTRIES, BECAUSE ONLY TWO EARN THEIR PLACE. An earlier version had seven.
+// Measured against real kubectl, four of them changed no verdict for any message
+// it can emit: `unable to read client-cert`, `unable to read client-key`,
+// `unable to load root certificates` and `no configuration has been provided` all
+// arrive spelled "no such file or directory", which is not an absenceMarker, so
+// those messages were already Unknown. A fifth, `context was not found`, is
+// redundant — kubectl always prefixes it with `Error in configuration:`. Entries
+// that change nothing are not free: they are surface for a future message to
+// collide with, and they make the list look load-bearing when it is not.
+//
+// THE exec PREFIX IS ANCHORED ON PURPOSE. `executable file not found` alone is NOT
+// unique to a client-side fault — the container runtime emits it and the apiserver
+// relays it verbatim: `OCI runtime exec failed: … exec: "test": executable file
+// not found in $PATH`. converge probes exactly that shape (a `kubectl exec … test
+// -s` on the OpenBao audit log), and it is harmless there today only because
+// Exists collapses Absent and Unknown to the same false — a hazard that goes live
+// the moment that call becomes ExistsOK. Anchoring to Go's own `exec: "kubectl":`
+// prefix keeps this to the case where the binary itself is missing, and
+// `oci runtime exec failed` covers the relayed half properly: an exec that never
+// started a process has not answered the question either, and that phrase cannot
+// occur in a real absence answer.
+//
+// THE CREDENTIAL-PLUGIN ENTRIES ARE THE WORST CASE THIS LIST EXISTS FOR, and they
+// were the one shape it did not have. client-go spells a missing exec plugin
+// `getting credentials: exec: executable <NAME> not found` — "executable <name>",
+// never "executable file not found" — so neither the bare phrasing nor the
+// kubectl-anchored one matches it, and the bare "not found" in absenceMarkers won.
+// Measured against real kubectl: `llz ci assert-overlay-applied` then reported
+// every mapped object ABSENT, printed five green ticks and "none of the object(s)
+// the overlay field map names exist here", and EXITED 0 — a broken kubeconfig
+// certified as "this instance does not run Loki". That lane ships to adopters, and
+// an OIDC kubelogin / aws-iam-authenticator kubeconfig whose plugin is not
+// installed on a laptop or a runner image is exactly how a downstream site meets
+// it. Every other fault on that lane exits 1; this one alone passed.
+//
+// ONE ENTRY, NOT TWO. kubectl also prints "…a client-go credential plugin that is
+// not installed" as a friendly hint, and adding both looked like better coverage —
+// but a single captured message carries both, so neither would be the SOLE reason
+// anything is excluded and the load-bearing test could not tell if either died.
+// `getting credentials: exec:` is client-go's own wrapper and is always present.
+var notAnAnswerMarkers = []string{
+	`exec: "kubectl": executable file not found`, // the kubectl binary is not on PATH
+	"error in configuration",                     // kubectl's own kubeconfig-parse failure, context-not-found included
+	"oci runtime exec failed",                    // `kubectl exec` never started a process in the container
+	"getting credentials: exec:",                 // client-go could not RUN the exec credential plugin
 }
 
 // ── existence ────────────────────────────────────────────────────────────────
