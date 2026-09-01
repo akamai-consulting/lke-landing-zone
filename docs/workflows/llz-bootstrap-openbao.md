@@ -877,6 +877,16 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `instance-custom-llz-e2e-custom` and synced it. `converge` and `assert-loki` gate the
   PLATFORM apps and stay green when the hatch generated NOTHING (the generated App simply
   would not exist) — only an assertion that names it catches that.
+* **overlay** — GATING proof that Argo CD could COMPARE every platform Application.
+  `assert-argo-comparisons` sweeps for a `ComparisonError`/`InvalidSpecError` condition
+  and fails on any platform-owned one — except the states converge itself tolerates and
+  repairs (an operator-deferred app, a 256KB annotation wedge, a Redis cache auth split),
+  which are reported with the reason they do not gate. What stays green without it: an
+  Application whose comparison ERRORS keeps its previous sync status, so `Synced` there is
+  the last verdict Argo could reach rather than a statement about the current desired
+  state — and with no diff computed, `selfHeal` never fires. `converge` grades the same
+  condition, but it polls and self-heals with cluster writes, so it is not a question
+  anyone can put to a production cluster; this lane is one read.
 * **metric-surface** — report-only (`|| true`) dump of the loki/cortex/otelcol/harbor
   exporter metric NAMES, so error-rate/saturation alerts get written against series that
   actually exist (promtool checks syntax, not existence). The

@@ -240,6 +240,13 @@ func Lanes(region string) []Lane {
 				"A color.Red lane is either a Keycloak fault or a bao-configure policy fault; the log names which assertion tripped. No-op when no teams are declared.",
 		},
 		{
+			Name: "overlay", Gating: true,
+			Steps: []Step{step("assert-platform", "assert-argo-comparisons")},
+			Why: "Argo CD could COMPARE every platform Application. A comparison that errors leaves the previous sync status standing, so `Synced` on such an app describes an " +
+				"earlier desired state and selfHeal never fires — every naive status read sees a healthy app. Says nothing about whether the compared diff was APPLIED; that is a " +
+				"different failure and a different check.",
+		},
+		{
 			Name: "metric-surface", Gating: false,
 			Steps: []Step{step("assert-observability", "prom-metrics", "--match", "^(loki_|cortex_|otelcol_|harbor_)")},
 			Why:   "REPORT-ONLY. Dumps the exporter metric NAMES so error-rate/saturation alerts get written against series that actually exist (promtool checks syntax, not existence).",

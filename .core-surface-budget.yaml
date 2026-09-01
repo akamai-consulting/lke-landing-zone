@@ -1611,7 +1611,15 @@ categories:
     #                       to keep, so the verb, its reconciler lane and its
     #                       extension binding were retired together and this layer
     #                       loses the one line that made the verb reachable.
-    budget: 1948
+    #   1,949 / 129 files  +1 the AddCommand for `llz ci assert-argo-comparisons`.
+    #                       An Application whose COMPARISON errors keeps its previous
+    #                       sync status, so `Synced` there is a stale verdict and
+    #                       selfHeal never fires. converge has always graded that
+    #                       condition correctly, but it polls and self-heals with
+    #                       cluster writes, so it cannot be what an operator points
+    #                       at production to ask. The sweep, its evaluator and its
+    #                       transport are all in assertions/assertplatform.
+    budget: 1949
     exact: true
     include:
       - "tools/internal/cli/*.go"

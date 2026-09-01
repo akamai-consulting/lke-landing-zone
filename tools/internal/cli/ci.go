@@ -136,6 +136,10 @@ func ciCmd() *cobra.Command {
 	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
 	// operationState message instead of burning the 600s pod wait blind (PR #142).
 	c.AddCommand(assertplatform.ArgoAppCmd())
+	// The read-only comparison sweep. Deliberately NOT folded into converge: that
+	// one polls and self-heals with cluster writes, so it cannot be the thing an
+	// operator runs to ask a production cluster what failed to compare.
+	c.AddCommand(assertplatform.ArgoComparisonsCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
