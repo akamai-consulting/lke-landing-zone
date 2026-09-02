@@ -62,7 +62,8 @@ package brownfield
 //     completed is never re-attempted — including by the next converge run.
 //   - Only strategies marked Auto run unattended. A future migration whose repair
 //     is genuinely disruptive sets Auto=false, is reported, and waits for a human.
-//   - The pod ROLL is never automated. See Migration.Then.
+//   - The pod ROLL is never automated, and for this migration's strategy the
+//     StatefulSet cannot perform it either — the operator must. See Migration.Then.
 //
 // The residual risk is stated rather than glossed: between the delete and Argo's
 // recreate the workload has no controller. If the owning Application cannot sync,
@@ -176,20 +177,44 @@ var migrations = func() []Migration {
 			"pod, which discards un-flushed chunks. The claim template that fixes it cannot be added to a " +
 			"StatefulSet that already exists, and while it is pending Argo's per-object diff also discards " +
 			"every other change to that StatefulSet, including the memory limit that would stop the OOM",
-		Then: "the recreated StatefulSet's template differs from the adopted pods, so its controller rolls " +
-			"them itself — watch that roll rather than driving it, and expect each ingester's un-flushed " +
-			"chunks to go with its pod (they are already being lost to the crash loop this repairs)",
+		Then: "DELETE THE INGESTER PODS YOURSELF (kubectl -n monitoring delete pod -l " +
+			"app.kubernetes.io/component=ingester) — the StatefulSet will NOT roll them for you. The adopted " +
+			"pods carry an emptyDir where the recreated object declares a PVC, and a StatefulSet cannot roll " +
+			"a volume difference: it retries a forbidden in-place pod update forever and sits at " +
+			"availableReplicas=0. Each ingester's un-flushed chunks go with its pod, which the crash loop " +
+			"this repairs is already destroying on every restart",
 		// AUTOMATABLE, and the reason is specific to this object rather than to the
 		// strategy: deleting the StatefulSet with --cascade=orphan leaves both
 		// ingesters serving and Argo recreates the object within a sync, adopting
 		// them by selector. Nothing stops ingesting at that moment.
 		//
-		// WHAT FOLLOWS IS NOT UNDER THIS CODE'S CONTROL, and an earlier version of
-		// this comment claimed otherwise: the recreated StatefulSet's pod template
-		// differs from the adopted pods' revision, so the controller rolls them on its
-		// own. This migration does not roll them, but it does CAUSE them to be rolled,
-		// and each replacement loses that ingester's un-flushed chunks. The cost is
-		// accepted here for one reason — the ingesters this repairs are
+		// WHAT FOLLOWS IS NOT UNDER THIS CODE'S CONTROL, and two versions of this
+		// comment have now been wrong about it in opposite directions. The first said
+		// this migration rolls the pods. The second said the StatefulSet controller
+		// rolls them on its own, "so watch that roll rather than driving it". NEITHER
+		// HAPPENS, and the second is the more expensive error because it tells an
+		// operator to wait for something that cannot occur.
+		//
+		// A StatefulSet CANNOT roll a pod whose VOLUMES differ from its claim
+		// templates. It tries to reconcile the adopted pod in place; the API server
+		// rejects that ("pod updates may not change fields other than
+		// spec.containers[*].image, ..."); and it retries the identical rejection
+		// indefinitely, never advancing to a delete-and-recreate. Observed on
+		// gsap-apl prod 2026-09-02: the StatefulSet came back carrying 3Gi AND the
+		// claim template, while all three pods stayed on the old revision at 1Gi with
+		// availableReplicas=0 and a repeating FailedUpdate event. They came up
+		// correctly — 3/3 Ready, 0 restarts — only once an operator deleted them.
+		//
+		// Adding a claim template where the pods had an emptyDir is what EVERY run of
+		// this migration does, so this is the normal path and not an edge case.
+		//
+		// Auto STAYS true: the recreate itself is safe (--cascade=orphan leaves the
+		// ingesters serving, Argo readopts them within a sync) and a manual-only
+		// migration is how a fleet drifts. What was missing was not the automation but
+		// an accurate Then — both callers print it, so an operator now reads the pod
+		// delete as a required step instead of an optional one.
+		//
+		// The chunk cost is accepted for one reason: the ingesters this repairs are
 		// OOM-crashlooping, so those chunks are being lost already on every restart,
 		// and the alternative is losing them indefinitely. A migration whose workload
 		// is HEALTHY must not reason from this precedent.
