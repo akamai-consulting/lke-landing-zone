@@ -267,7 +267,25 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would validate $OPENBAO_ROOT_TOKEN and regenerate via quorum if revoked")
 		return nil
 	}
-	pod := baoread.PodNames[0]
+	// RESOLVE THE ACTIVE NODE — DO NOT ASSUME POD-0. This was `baoread.PodNames[0]`,
+	// while the interactive twin (RunRegenRoot) has always called findLeaderPod().
+	// generate-root is unauthenticated and node-local, so a standby rejects it with
+	// `400 * Vault is in standby mode` — but only at `-init`, five steps into the
+	// command, AFTER the sealed probe and the token lookup have both passed (a
+	// standby is unsealed, and it FORWARDS authenticated calls like `token lookup`).
+	// A prod bootstrap failed exactly here with pod-0 a standby, and a plain re-run
+	// could not clear it: raft leadership is sticky, so pod-0 stays a standby until
+	// something forces an election.
+	//
+	// This is the SECOND divergence between these two implementations of one flow —
+	// the `break` on `complete` below documents the first. See resolveGenerateRootPod.
+	pod, found := resolveGenerateRootPod()
+	if !found {
+		fmt.Fprintf(os.Stderr, "::error::no OpenBao pod reported itself the active raft node (every pod is a standby, or none answered). "+
+			"generate-root is node-local and standbys reject it; it cannot run against any pod in this state. "+
+			"Check `bao status` on %v — a cluster with no leader needs an election, not a re-run.\n", baoread.PodNames)
+		return fmt.Errorf("no active OpenBao node among %v to run generate-root against", baoread.PodNames)
+	}
 
 	// The generate-root flow requires an unsealed leader; if the cluster is
 	// still sealed surface that explicitly instead of a confusing API error
@@ -280,7 +298,7 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		if !ok {
 			state = "unknown"
 		}
-		fmt.Fprintf(os.Stderr, "::error::pod-0 sealed-status check returned '%s' (expected 'false'). generate-root requires an unsealed leader. Check the unseal steps above and the cluster's bao status.\n", state)
+		fmt.Fprintf(os.Stderr, "::error::%s sealed-status check returned '%s' (expected 'false'). generate-root requires an unsealed leader. Check the unseal steps above and the cluster's bao status.\n", pod, state)
 		return fmt.Errorf("%s is not unsealed (sealed=%s)", pod, state)
 	}
 

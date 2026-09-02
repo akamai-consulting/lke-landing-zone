@@ -19,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
@@ -184,16 +185,48 @@ func updateRootGHASecret(region, newRoot string, o RegenRootOpts) error {
 
 // ── pod exec + raw-mode read ─────────────────────────────────────────────────
 
-// findLeaderPod returns the pod reporting is_self=true (the active raft leader),
-// falling back to platform-openbao-0.
-func findLeaderPod() string {
-	for _, cand := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		out, _, err := baoread.ExecFn(cand, "", "", "status", "-format=json")
-		if err == nil && parseIsSelf(out) {
-			return cand
+// resolveGenerateRootPod returns the pod that will ACCEPT the generate-root
+// flow, and whether one was found at all.
+//
+// WHY THIS EXISTS AS A SHARED HELPER. `sys/generate-root/*` is unauthenticated
+// and node-local: a raft standby does not forward it, it rejects it outright
+// with `400 * Vault is in standby mode`. Authenticated calls (`token lookup`,
+// `token revoke -self`) ARE forwarded, so a standby answers those happily —
+// which is why aiming at the wrong pod stays invisible until the quorum flow
+// starts, several steps in. Pod ordinal has nothing to do with raft leadership;
+// platform-openbao-0 is the leader only until the first failover or restart.
+//
+// A single non-HA node reports neither is_self nor ha_enabled and is a valid
+// target — there is no standby to be rejected by — so `standalone` counts as
+// found. Only "every pod answered, all of them standbys" (or nothing answered)
+// is a miss.
+func resolveGenerateRootPod() (string, bool) {
+	// PARSE STDOUT REGARDLESS OF THE EXEC ERROR. `bao status` EXITS 2 WHEN SEALED
+	// and still prints valid JSON, so gating on err skips every pod of a sealed
+	// cluster and reports "no leader" — sending the operator to hunt an election
+	// problem when the real answer is "unsealed it". A sealed pod publishes neither
+	// is_self nor ha_enabled, so it parses as standalone and is returned here; the
+	// caller's seal check is what turns it into the accurate message. Unparseable
+	// output (pod unreachable, exec failed) is the only reason to skip a candidate.
+	for _, cand := range baoread.PodNames {
+		out, _, _ := baoread.ExecFn(cand, "", "", "status", "-format=json")
+		if st, err := health.ParseBaoStatus([]byte(out)); err == nil && st.HAMode != "standby" {
+			return cand, true
 		}
 	}
-	return "platform-openbao-0"
+	return "", false
+}
+
+// findLeaderPod resolves the generate-root target for the INTERACTIVE flow,
+// keeping its long-standing fall back to platform-openbao-0 when no node claims
+// to be active — an operator at a terminal can read the resulting error and
+// judge it. RunRegenRootCI deliberately does not fall back: unattended, a guess
+// that lands on a standby just fails later and less legibly.
+func findLeaderPod() string {
+	if pod, ok := resolveGenerateRootPod(); ok {
+		return pod
+	}
+	return baoread.PodNames[0]
 }
 
 // readSecretLine is a package var so a test can reach the quorum loop. Without a
@@ -214,14 +247,6 @@ func emitRecoveryToken(token, reason string) {
 }
 
 // ── pure parse helpers (unit-tested) ─────────────────────────────────────────
-
-func parseIsSelf(s string) bool {
-	var v struct {
-		IsSelf bool `json:"is_self"`
-	}
-	_ = json.Unmarshal([]byte(s), &v)
-	return v.IsSelf
-}
 
 func parseGenRootInit(s string) (nonce, otp string) {
 	var v struct {
