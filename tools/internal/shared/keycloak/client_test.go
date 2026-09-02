@@ -121,6 +121,8 @@ func TestEnsureDeviceClient_PropagatesAudienceMapperFailure(t *testing.T) {
 		switch p := r.URL.Path; {
 		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients":
 			_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "client-uuid"}})
+		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/client-uuid":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "client-uuid", "clientId": "llz", "name": "llz"})
 		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/client-uuid/default-client-scopes":
 			_ = json.NewEncoder(w).Encode([]map[string]string{{"name": "openid"}})
 		case r.Method == http.MethodPost && p == "/admin/realms/otomi/clients/client-uuid/protocol-mappers/models":
@@ -380,6 +382,7 @@ type fakeKeycloak struct {
 	clientBody       map[string]any  // the last created-client representation
 	defaultScopes    map[string]bool // default-client-scope NAMES assigned to the client
 	openidMissing    bool            // simulate apl-core's `openid` scope never appearing
+	clientName       string          // the client's current `name` ("" = nameless, the apl-core collision)
 	openidReadyAfter int             // openid scope appears only from this GET /client-scopes onward
 	scopeGETs        int             // GET /client-scopes counter (for the wait test)
 }
@@ -405,8 +408,21 @@ func (f *fakeKeycloak) server(t *testing.T) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&f.clientBody)
 			f.created = append(f.created, "POST clients")
 			f.clientExists = true
+			f.clientName, _ = f.clientBody["name"].(string)
 			w.Header().Set("Location", srvBase(r)+"/admin/realms/otomi/clients/client-uuid")
 			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/client-uuid":
+			rep := map[string]any{"id": "client-uuid", "clientId": "llz", "publicClient": true}
+			if f.clientName != "" {
+				rep["name"] = f.clientName
+			}
+			_ = json.NewEncoder(w).Encode(rep)
+		case r.Method == http.MethodPut && p == "/admin/realms/otomi/clients/client-uuid":
+			var m map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&m)
+			f.clientName, _ = m["name"].(string)
+			f.created = append(f.created, "PUT client-name")
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/client-uuid/default-client-scopes":
 			var out []map[string]string
 			for name := range f.defaultScopes {
@@ -780,4 +796,68 @@ func kcStatusServer(t *testing.T, method, path string, status int) (*httptest.Se
 		_, _ = w.Write([]byte(`{"errorMessage":"boom"}`))
 	}))
 	return srv, &hits
+}
+
+// TestEnsureDeviceClient_NamesClient pins the field that keeps apl-core's realm
+// reconcile alive. apl-core finds the `otomi` client by "first client with no
+// name"; a nameless client of ours sorts ahead of it, absorbs the otomi PUT, and
+// Keycloak rejects `authorizationServicesEnabled` on a public client with a 500.
+// The operator then retries forever and never reaches the stage that writes APL
+// console users into the realm — logins fail `user_not_found` for users that
+// plainly exist in `apl-users`. A named client cannot be mistaken for `otomi`.
+func TestEnsureDeviceClient_NamesClient(t *testing.T) {
+	f := &fakeKeycloak{}
+	srv := f.server(t)
+	defer srv.Close()
+	k := &Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}
+
+	if _, err := k.EnsureDeviceClient("llz"); err != nil {
+		t.Fatal(err)
+	}
+	if f.clientBody["name"] != "llz" {
+		t.Errorf("created client name = %v, want \"llz\" — a nameless client deadlocks apl-core's keycloak operator", f.clientBody["name"])
+	}
+}
+
+// TestEnsureDeviceClient_BackfillsNameOnExistingClient is the half that repairs a
+// cluster already in the deadlock: those clients were created nameless, so the fix
+// is only worth anything if re-running keycloak-configure names them in place.
+func TestEnsureDeviceClient_BackfillsNameOnExistingClient(t *testing.T) {
+	f := &fakeKeycloak{clientExists: true} // exists, and nameless — the broken state
+	srv := f.server(t)
+	defer srv.Close()
+	k := &Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}
+
+	if _, err := k.EnsureDeviceClient("llz"); err != nil {
+		t.Fatal(err)
+	}
+	if f.clientName != "llz" {
+		t.Errorf("existing nameless client kept name %q — apl-core stays deadlocked", f.clientName)
+	}
+	if got := countPrefix(f.created, "PUT client-name"); got != 1 {
+		t.Errorf("name backfilled %d times, want exactly 1", got)
+	}
+	if got := countPrefix(f.created, "POST clients"); got != 0 {
+		t.Errorf("must not recreate an existing client, got %d POSTs", got)
+	}
+}
+
+// TestEnsureClientName_LeavesExistingNameAlone: the backfill repairs "" only. A
+// name someone set deliberately is theirs, and rewriting it every reconcile would
+// fight whoever set it.
+func TestEnsureClientName_LeavesExistingNameAlone(t *testing.T) {
+	f := &fakeKeycloak{clientExists: true, clientName: "llz device login"}
+	srv := f.server(t)
+	defer srv.Close()
+	k := &Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}
+
+	if err := k.EnsureClientName("client-uuid", "llz"); err != nil {
+		t.Fatal(err)
+	}
+	if f.clientName != "llz device login" {
+		t.Errorf("name was overwritten to %q, want the operator's own value preserved", f.clientName)
+	}
+	if got := countPrefix(f.created, "PUT client-name"); got != 0 {
+		t.Errorf("named client was written %d times, want 0", got)
+	}
 }

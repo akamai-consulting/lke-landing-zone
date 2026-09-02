@@ -34,12 +34,50 @@ func (k *Client) EnsureDeviceClient(clientID string) (string, error) {
 	if err := k.EnsureClientDefaultScope(uuid, "openid"); err != nil {
 		return uuid, err
 	}
+	// Backfill `name` on a client created before it was set. Same reasoning as the
+	// create body, but this is the half that matters for an ALREADY-BOOTSTRAPPED
+	// cluster: those clients are nameless today and are actively deadlocking
+	// apl-core's realm reconcile, so re-running `llz ci keycloak-configure` has to
+	// be the repair path rather than a no-op.
+	if err := k.EnsureClientName(uuid, clientID); err != nil {
+		return uuid, err
+	}
 	// Stamp `aud: llz` so the OpenBao keycloak role's bound_audiences accepts this
 	// client's tokens (and rejects arbitrary other-client realm tokens).
 	if err := k.EnsureAudienceMapper(uuid, DeviceClientID); err != nil {
 		return uuid, err
 	}
 	return uuid, nil
+}
+
+// EnsureClientName gives the client a non-empty `name`, leaving an existing one
+// alone. See GetOrCreateClient for why a nameless client breaks apl-core.
+func (k *Client) EnsureClientName(clientUUID, name string) error {
+	base := "/admin/realms/" + k.Realm + "/clients/" + clientUUID
+	resp, err := k.Do(http.MethodGet, base, nil)
+	if err != nil {
+		return err
+	}
+	var rep map[string]any
+	if err := decodeJSON(resp, &rep); err != nil {
+		return err
+	}
+	if existing, _ := rep["name"].(string); existing != "" {
+		return nil // already named — never rename a client someone set deliberately
+	}
+	// PUT the full representation back rather than a bare {"name": …}: Keycloak
+	// merges absent fields, but round-tripping what it just gave us keeps this
+	// honest if that ever changes.
+	rep["name"] = name
+	presp, err := k.Do(http.MethodPut, base, rep)
+	if err != nil {
+		return err
+	}
+	defer presp.Body.Close()
+	if presp.StatusCode != http.StatusNoContent && presp.StatusCode != http.StatusOK {
+		return fmt.Errorf("set name on client %s: HTTP %d: %s", clientUUID, presp.StatusCode, readSnippet(presp.Body))
+	}
+	return nil
 }
 func (k *Client) EnsureAudienceMapper(clientUUID, audience string) error {
 	body := map[string]any{
@@ -77,7 +115,19 @@ func (k *Client) GetOrCreateClient(clientID string) (string, error) {
 		return existing[0].ID, nil
 	}
 	body := map[string]any{
-		"clientId":                  clientID,
+		"clientId": clientID,
+		// A NAME IS NOT COSMETIC HERE. apl-core's keycloak operator locates the
+		// `otomi` client it reconciles with `allClients.find(el => el.name ===
+		// client.name)`, and its own template never sets `name` — so that lookup
+		// means "the first client with no name". A nameless client of ours sorts
+		// before `otomi` and silently steals the match: the operator then PUTs the
+		// otomi representation (authorizationServicesEnabled: true) onto THIS
+		// public client, Keycloak 500s with "Only confidential clients are allowed
+		// to set authorization settings", and the whole realm reconcile — realm,
+		// roles, IDP, and every APL console user after it — halts on a 30s retry
+		// loop. Symptom is console logins failing `user_not_found` for users that
+		// exist in `apl-users`. Always give the client a name.
+		"name":                      clientID,
 		"protocol":                  "openid-connect",
 		"publicClient":              true,
 		"standardFlowEnabled":       false,
