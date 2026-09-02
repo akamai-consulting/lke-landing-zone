@@ -861,3 +861,61 @@ func TestEnsureClientName_LeavesExistingNameAlone(t *testing.T) {
 		t.Errorf("named client was written %d times, want 0", got)
 	}
 }
+
+// TestEnsureDirectGrantClient_NamesClient: the smoke lane's throwaway client is
+// public and nameless-by-default too, and its teardown is best-effort — the code
+// says so and shouts when it fails. An orphan would be a permanent nameless client
+// capturing apl-core's `otomi` lookup, so it gets a name like every other client
+// we create.
+func TestEnsureDirectGrantClient_NamesClient(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch p := r.URL.Path; {
+		case r.Method == http.MethodPost && p == "/admin/realms/otomi/clients":
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.Header().Set("Location", srvBase(r)+"/admin/realms/otomi/clients/smoke-uuid")
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && p == "/admin/realms/otomi/clients/smoke-uuid/default-client-scopes":
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"name": "openid"}})
+		case r.Method == http.MethodPost && p == "/admin/realms/otomi/clients/smoke-uuid/protocol-mappers/models":
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, p)
+			http.Error(w, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	k := &Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}
+
+	if _, err := k.EnsureDirectGrantClient("llz-smoke-171"); err != nil {
+		t.Fatal(err)
+	}
+	if body["name"] != "llz-smoke-171" {
+		t.Errorf("smoke client name = %v, want the clientId — a nameless orphan deadlocks apl-core", body["name"])
+	}
+}
+
+// TestListClients_ReadsNameField: the whole point of the listing is the `name`
+// field, which Keycloak omits entirely for a nameless client. A decode that
+// dropped it would make health.AplCoreOtomiLookup see every client as nameless.
+func TestListClients_ReadsNameField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":"u1","clientId":"llz","name":"llz"},{"id":"u2","clientId":"otomi"}]`))
+	}))
+	defer srv.Close()
+	k := &Client{HC: srv.Client(), Base: srv.URL, Token: "adm.tok", Realm: "otomi"}
+
+	got, err := k.ListClients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d clients, want 2", len(got))
+	}
+	if got[0].Name != "llz" {
+		t.Errorf("named client decoded name = %q, want llz", got[0].Name)
+	}
+	if got[1].Name != "" || got[1].ClientID != "otomi" {
+		t.Errorf("nameless client decoded as %+v, want clientId otomi with an empty name", got[1])
+	}
+}

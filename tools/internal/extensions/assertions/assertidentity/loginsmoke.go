@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/platform"
@@ -113,6 +114,18 @@ func runTeamLoginSmoke(region, teamFlag string) error {
 		return fmt.Errorf("keycloak admin token: %w", err)
 	}
 	k := &kc{&keycloak.Client{HC: hc, Base: base, Token: adminTok, Realm: keycloak.Realm}}
+
+	// Before proving a team member can log in, prove the realm is still one apl-core
+	// can reconcile. Its `otomi` lookup matches on "first client with no name", so a
+	// second nameless client captures it and halts the reconcile before the stage
+	// that writes APL console users — and the login this lane is about to smoke
+	// would fail `user_not_found` with nothing in the realm looking wrong. Checked
+	// here rather than in its own lane because this is already the one place in the
+	// converge path holding a realm-admin token, and because an unexplained login
+	// failure is exactly the symptom it converts into a named cause.
+	if err := checkAplCoreLookup(k); err != nil {
+		return err
+	}
 
 	group := "team-" + team
 	gid, err := k.FindGroupID(group)
@@ -391,3 +404,26 @@ func decodeJWTGroups(jwt string) ([]string, error) {
 // addRealmRoleToUser grants the named realm role to the user — the direct-grant
 // equivalent of team-<name> group membership for the groups claim, used when the
 // team's group is not provisioned yet (a fresh team before its first member).
+
+// checkAplCoreLookup reads the realm's clients and grades them with
+// health.AplCoreOtomiLookup. A read failure is surfaced, never swallowed: this
+// gate exists because the broken state is invisible, so "could not look" must not
+// read as "looks fine".
+func checkAplCoreLookup(k *kc) error {
+	clients, err := k.ListClients()
+	if err != nil {
+		return fmt.Errorf("list realm clients (needed to verify apl-core's `otomi` lookup still resolves): %w", err)
+	}
+	seen := make([]health.RealmClient, 0, len(clients))
+	for _, c := range clients {
+		seen = append(seen, health.RealmClient{ClientID: c.ClientID, Name: c.Name})
+	}
+	msgs, failed := health.AplCoreOtomiLookup(seen)
+	for _, m := range msgs {
+		fmt.Fprintf(os.Stderr, "  %s\n", m)
+	}
+	if failed {
+		return fmt.Errorf("apl-core realm reconcile is deadlocked on a nameless client — APL console users are not reaching Keycloak; `llz ci keycloak-configure --region <region>` names the clients llz owns")
+	}
+	return nil
+}
