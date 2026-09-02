@@ -130,8 +130,17 @@ func RunTokens(o Opts, admin bool, env, cluster, bucket, repo string) error {
 		if err := CredentialRefusal(invalidN, deniedN, instanceRepo); err != nil {
 			return err
 		}
-		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo))
-		return nil
+		// PRESENCE was satisfied; the question left is whether what CI holds is
+		// still what you have. Nothing above can answer it — the table's VALID and
+		// PERMS columns probe the LOCAL copy, because GitHub never reads a secret
+		// back — so this is the last chance to say so before the operator goes and
+		// dispatches a build against a value nobody checked.
+		drift := envreq.DetectDrift(reqs, secrets, vars, instSt)
+		fmt.Printf("\n%s %s\n", color.Green("✓"), NothingToProvisionNote(deployEnv, instanceRepo, drift))
+		if note := drift.Note(deployEnv, instanceRepo); note != "" {
+			fmt.Print(note)
+		}
+		return OfferStalePush(o, instanceRepo, deployEnv, secrets, instSt, drift)
 	}
 	if o.DryRun {
 		fmt.Printf("\n%s\n", color.Dim(fmt.Sprintf("(dry-run) would provision the %d missing REQUIRED item(s) above%s.",
@@ -629,14 +638,72 @@ func CredentialRefusal(invalid, denied int, repo string) error {
 // entirely, so a hand-edited variable is dropped on the same floor. (Variables
 // alone WOULD be detectable — pushToRepo compares st.Value(k) != vars[k] — but it
 // never runs on this path, and `llz secrets push` re-pushes both files anyway.)
-func NothingToProvisionNote(env, repo string) string {
-	return fmt.Sprintf("Everything required for infra-%s is already set — nothing to provision.\n%s",
-		env, color.Dim(fmt.Sprintf(
+//
+// AND IT WAS STILL WALLPAPER. The paragraph below was printed unconditionally —
+// identical output whether the instance was perfectly in sync or two minutes from
+// an outage — so it carried no information and was read as boilerplate. In run
+// 33556210825 it was on screen, correct, and ignored, because it is always on
+// screen. A warning that cannot be absent cannot be a warning.
+//
+// It now says which of the two states it found. Drift.Note carries the specifics
+// when there are any; this keeps the caveat only for the case where the metadata
+// comparison could not be made at all, and otherwise states the stronger fact the
+// comparison earns.
+func NothingToProvisionNote(env, repo string, d envreq.Drift) string {
+	head := fmt.Sprintf("Everything required for infra-%s is already set — nothing to provision.", env)
+	switch {
+	case !d.Empty():
+		// The specifics follow immediately; a generic caveat here would only
+		// dilute them.
+		return head
+	case d.LocalMod.IsZero():
+		return head + "\n" + color.Dim(fmt.Sprintf(
 			"  This checks that each credential is PRESENT, not that its pushed value still matches\n"+
-				"  yours — GitHub never reads a secret back. Anything you edited in .llz/secrets.env or\n"+
-				"  .llz/vars.env by hand has NOT been pushed; send it with `llz secrets push %s --yes`,\n"+
-				"  run from a checkout of %s (that command pushes to the repo of the working\n"+
-				"  directory — it takes no --repo).", env, repo)))
+				"  yours — GitHub never reads a secret back, and there is no local %s to date\n"+
+				"  them against. If you hold newer values elsewhere, send them with\n"+
+				"  `llz secrets push %s --yes` from a checkout of %s.", envreq.SecretsEnvFile, env, repo))
+	default:
+		return head + "\n" + color.Dim(fmt.Sprintf(
+			"  Every pushed secret was written at or after your last edit to %s, and every\n"+
+				"  variable matches. Values still cannot be compared — GitHub never reads a secret\n"+
+				"  back — but nothing you hold locally is newer than what CI has.", envreq.SecretsEnvFile))
+	}
+}
+
+// OfferStalePush asks whether to re-push the secrets whose pushed copy predates
+// the local file, and pushes ONLY those.
+//
+// Only the Behind set, never the whole file. `llz ci rotate-broad-pat` publishes a
+// fresh LINODE_API_TOKEN to every infra-<deployment> and revokes the one it
+// replaced, and llz-secret-rotation.yml does the same for the TF_STATE_* pair —
+// so a blanket re-push is how you overwrite three live credentials with revoked
+// ones from a command that then reports success. Drift.Ahead is exactly that set,
+// and it is excluded here by construction.
+//
+// Gated on a TTY as well as --yes: this writes to a live environment, and an
+// unanswerable prompt must not become an unattended push. Without one the printed
+// `llz secrets push` command is the whole answer.
+func OfferStalePush(o Opts, repo, env string, secrets map[string]string, st envreq.LiveState, d envreq.Drift) error {
+	if len(d.Behind) == 0 || o.DryRun || !o.Yes || !cli.Interactive() {
+		return nil
+	}
+	names := d.BehindNames()
+	fmt.Printf("\n%s\n", color.Bold(fmt.Sprintf("Re-push the %d secret(s) above to infra-%s?", len(names), env)))
+	fmt.Printf("%s\n", color.Dim("  Only those — the ones CI rotated after your last edit are left alone."))
+	in := bufio.NewScanner(os.Stdin)
+	if ans := strings.ToLower(cli.Prompt(in, "push now? [y/N]")); ans != "y" && ans != "yes" {
+		fmt.Printf("%s\n", color.Dim(fmt.Sprintf("  Skipped. Push them later with `llz secrets push %s --yes`.", env)))
+		return nil
+	}
+	stale := make(map[string]string, len(names))
+	for _, n := range names {
+		if v, ok := secrets[n]; ok {
+			stale[n] = v
+		}
+	}
+	// No vars: VarsDiffer is reported for the operator to resolve deliberately,
+	// and a variable is readable, so it needs no rescue by timestamp.
+	return pushToRepo(o, repo, env, stale, nil, st)
 }
 
 // RepinPlanNote is the dry-run tail that keeps a repin-only run from reporting
@@ -741,6 +808,9 @@ func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st en
 	if protErr != nil && !errors.Is(protErr, branchpolicy.ErrUnsupported) {
 		return protErr
 	}
+	// What llz sent, so the next run can compare EXACTLY instead of ordering file
+	// mtimes — see envreq/pushlog.go. Recorded per successful item below.
+	sentSecrets := map[string]string{}
 	for i, it := range items {
 		if err := proc.Run(it.argv, it.val); err != nil {
 			// Say WHERE the run stopped and that finishing is a re-run. This loop
@@ -755,6 +825,21 @@ func pushToRepo(o Opts, repo, env string, secrets, vars map[string]string, st en
 				"  error, %s reports which credential and scope.",
 				it.argv[3], i, len(items), err,
 				color.Cyan("llz tokens --env "+env+" --yes"), color.Cyan("llz doctor --env "+env))
+		}
+		if it.val != "" {
+			sentSecrets[it.argv[3]] = it.val
+		}
+	}
+	// Recorded AFTER the loop so a half-pushed run records only what actually
+	// landed: the error path above returns, and every item before it is in the
+	// map. Best-effort — a log llz cannot write costs accuracy on the next run's
+	// drift report (it falls back to mtimes), never this push, which has already
+	// succeeded.
+	if len(sentSecrets) > 0 {
+		if err := envreq.RecordPush(sentSecrets, time.Now()); err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", color.Dim(fmt.Sprintf(
+				"  (could not record what was pushed in %s: %v — the next drift check falls back to file mtimes)",
+				envreq.PushLogFile, err)))
 		}
 	}
 	// The env was created + seeded; if its branch policy couldn't be applied
