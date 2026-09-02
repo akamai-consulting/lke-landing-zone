@@ -55,7 +55,12 @@ func (k *Client) FindGroupID(name string) (string, error) {
 }
 func (k *Client) EnsureDirectGrantClient(clientID string) (string, error) {
 	body := map[string]any{
-		"clientId":                  clientID,
+		"clientId": clientID,
+		// Named for the same reason the device client is: a nameless client can
+		// capture apl-core's `otomi` lookup and deadlock its realm reconcile. This
+		// one is a throwaway deleted at the end of the lane, but the teardown is
+		// best-effort and says so — an orphan here would be permanent.
+		"name":                      clientID,
 		"protocol":                  "openid-connect",
 		"publicClient":              true,
 		"standardFlowEnabled":       false,

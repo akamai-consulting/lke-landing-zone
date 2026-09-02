@@ -42,6 +42,16 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 // WHY secret-read. The smoke lane reads the platform-admin credential out of a
 // Secret to authenticate as an admin before it creates anything.
+//
+// THE SMOKE LANE ALSO GRADES THE REALM IT IS ABOUT TO LOG INTO. apl-core finds the
+// `otomi` client by "first client with no name"; a second nameless client captures
+// that lookup and halts its realm reconcile before the stage that writes APL
+// console users, with nothing in the realm looking wrong afterwards (the failed
+// PUT rolls back). The login this lane smokes would then fail `user_not_found` for
+// a cause three hops away. health.AplCoreOtomiLookup runs first and names it. It
+// lives here rather than in a lane of its own because this is already the only
+// place in the converge path holding a realm-admin token — a separate binding
+// would mean a second credential path to prove one read-only property.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "assert-identity",

@@ -152,6 +152,27 @@ func (k *Client) GetOrCreateClient(clientID string) (string, error) {
 	// Fallback: re-query (won't recurse past the create — the client now exists).
 	return k.GetOrCreateClient(clientID)
 }
+
+// ClientSummary is the id/clientId/name triple the realm lists. `name` is the
+// field apl-core's client lookup turns on — see health.AplCoreOtomiLookup.
+type ClientSummary struct {
+	ID       string `json:"id"`
+	ClientID string `json:"clientId"`
+	Name     string `json:"name"`
+}
+
+// ListClients returns every client in the realm.
+func (k *Client) ListClients() ([]ClientSummary, error) {
+	resp, err := k.Do(http.MethodGet, "/admin/realms/"+k.Realm+"/clients", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []ClientSummary
+	if err := decodeJSON(resp, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 func (k *Client) EnsureClientDefaultScope(clientUUID, name string) error {
 	base := "/admin/realms/" + k.Realm + "/clients/" + clientUUID + "/default-client-scopes"
 	resp, err := k.Do(http.MethodGet, base, nil)
