@@ -445,3 +445,114 @@ func TestRunCIBaoRegenRootMissingKeys(t *testing.T) {
 		t.Errorf("err = %v, want missing-keys error", err)
 	}
 }
+
+// ── generate-root must target the ACTIVE raft node, never a pod ordinal ───────
+
+// The prod bootstrap this fixes: pod-0 was a raft STANDBY. Every earlier gate
+// passed — a standby is unsealed, and it forwards the authenticated `token
+// lookup` — so the command sailed through to `generate-root -init` and only
+// there got `400 * Vault is in standby mode`. Pinning the assertion to "the
+// -init went to pod-1" is the whole point: asserting merely that the command
+// succeeds passes just as well against the hardcoded PodNames[0].
+func TestRunCIBaoRegenRootTargetsActiveNodeNotPodZero(t *testing.T) {
+	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+	t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
+
+	// pod-0 and pod-2 are standbys; pod-1 holds the lease.
+	status := map[string]string{
+		"platform-openbao-0": `{"initialized":true,"sealed":false,"ha_enabled":true,"is_self":false}`,
+		"platform-openbao-1": `{"initialized":true,"sealed":false,"ha_enabled":true,"is_self":true}`,
+		"platform-openbao-2": `{"initialized":true,"sealed":false,"ha_enabled":true,"is_self":false}`,
+	}
+	var genRootPods []string
+	withBaoExec(t, func(pod, _, stdin string, args ...string) (string, string, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case args[0] == "status":
+			return status[pod], "", nil
+		case args[0] == "token": // the standby forwards this; it is not a leader probe
+			return "", "Code: 403. * permission denied", errors.New("exit status 2")
+		}
+		// Everything below is the node-local generate-root family.
+		genRootPods = append(genRootPods, pod)
+		if pod != "platform-openbao-1" {
+			return "", "Code: 400. * Vault is in standby mode", errors.New("exit status 2")
+		}
+		switch {
+		case strings.Contains(cmd, "-cancel"):
+			return "", "", nil
+		case strings.Contains(cmd, "-init"):
+			return `{"nonce":"n-1","otp":"otp-1"}`, "", nil
+		case strings.Contains(cmd, "-nonce=n-1"):
+			return `{"complete":true,"progress":1,"required":1,"encoded_token":"enc"}`, "", nil
+		case strings.Contains(cmd, "-decode=enc"):
+			return `{"token":"s.newroot"}`, "", nil
+		}
+		t.Errorf("unexpected exec %v", args)
+		return "", "", errors.New("unexpected")
+	})
+	withGHSetSecret(t, nil)
+
+	if err := RunRegenRootCI(false, "primary"); err != nil {
+		t.Fatalf("regen-root against an active pod-1 must succeed: %v", err)
+	}
+	if len(genRootPods) == 0 {
+		t.Fatal("generate-root never ran")
+	}
+	for _, pod := range genRootPods {
+		if pod != "platform-openbao-1" {
+			t.Errorf("generate-root went to %s; the active node is platform-openbao-1 "+
+				"(standbys reject the node-local generate-root endpoints)", pod)
+		}
+	}
+}
+
+// No leader at all is a distinct, actionable state: there is no pod that would
+// accept generate-root, so burning a recovery quorum against one is pointless.
+// Failing before `-init` (rather than after) is what keeps the recovery keys and
+// the current root token untouched.
+func TestRunCIBaoRegenRootRefusesWhenEveryPodIsStandby(t *testing.T) {
+	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		if args[0] == "status" {
+			return `{"initialized":true,"sealed":false,"ha_enabled":true,"is_self":false}`, "", nil
+		}
+		t.Errorf("nothing may run once no active node is found, got %v", args)
+		return "", "", errors.New("unexpected")
+	})
+	ghCalls := withGHSetSecret(t, nil)
+
+	err := RunRegenRootCI(false, "primary")
+	if err == nil || !strings.Contains(err.Error(), "no active OpenBao node") {
+		t.Errorf("err = %v, want a leaderless refusal", err)
+	}
+	if len(*ghCalls) != 0 {
+		t.Errorf("a leaderless cluster must not rewrite the root-token secret: %v", *ghCalls)
+	}
+}
+
+// A single non-HA node reports neither is_self nor ha_enabled. It is the only
+// node there is, has no standby to be rejected by, and must stay a valid target.
+func TestRunCIBaoRegenRootAcceptsStandaloneNode(t *testing.T) {
+	t.Setenv("OPENBAO_ROOT_TOKEN", "s.valid")
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		switch args[0] {
+		case "status":
+			return `{"initialized":true,"sealed":false}`, "", nil
+		case "token":
+			return `{"data":{"policies":["root"]}}`, "", nil
+		}
+		t.Errorf("unexpected exec %v", args)
+		return "", "", errors.New("unexpected")
+	})
+	if err := RunRegenRootCI(false, "primary"); err != nil {
+		t.Fatalf("standalone node must be a valid generate-root target: %v", err)
+	}
+}

@@ -4,18 +4,6 @@ import (
 	"testing"
 )
 
-func TestParseIsSelf(t *testing.T) {
-	if !parseIsSelf(`{"is_self":true}`) {
-		t.Error("want is_self true")
-	}
-	if parseIsSelf(`{"is_self":false,"ha_mode":null}`) {
-		t.Error("want is_self false")
-	}
-	if parseIsSelf(`not json`) {
-		t.Error("bad json should be false")
-	}
-}
-
 func TestParseGenRootInitAndStep(t *testing.T) {
 	n, otp := parseGenRootInit(`{"nonce":"abc","otp":"xyz"}`)
 	if n != "abc" || otp != "xyz" {
