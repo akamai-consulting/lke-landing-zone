@@ -67,6 +67,27 @@ func TestValidateTeams(t *testing.T) {
 			{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
 			{Name: "gsap", OpenbaoSubtree: "secret/other"},
 		}, "duplicate name"},
+
+		// ── spec.teams[].resourceQuota ──────────────────────────────────────
+		{"quota unset is valid", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap"}}, ""},
+		{"quota overriding a default is valid", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"services.loadbalancers": "1"}}}, ""},
+		{"quota with a new key is valid", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"requests.cpu": "4", "count/deployments.apps": "10"}}}, ""},
+		{"quota quantity suffix is valid", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"requests.memory": "10Gi", "limits.cpu": "500m"}}}, ""},
+		{"quota key with uppercase rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"Services.LoadBalancers": "1"}}}, "not a Kubernetes resource name"},
+		{"quota key with space rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"services loadbalancers": "1"}}}, "not a Kubernetes resource name"},
+		{"quota empty value rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"pods": ""}}}, "has no value"},
+		{"quota negative value rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"pods": "-1"}}}, "non-negative Kubernetes quantity"},
+		{"quota non-numeric value rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"pods": "lots"}}}, "non-negative Kubernetes quantity"},
+		{"quota unquoted-yaml-bool value rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap",
+			ResourceQuota: map[string]string{"pods": "true"}}}, "non-negative Kubernetes quantity"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -192,6 +192,44 @@ func validateTeams(teams []Team) []error {
 			// empty/'.'/'..' segments, consecutive slashes, whitespace, uppercase.
 			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q must be secret/<segment>[/<segment>…] with lowercase kebab segments (a-z, 0-9, -) — no empty, '.'/'..', or whitespace segments", i, t.Name, t.OpenbaoSubtree))
 		}
+		errs = append(errs, validateTeamResourceQuota(i, t)...)
+	}
+	return errs
+}
+
+// quotaNameRe matches a Kubernetes ResourceQuota resource name: a lowercase
+// dotted/hyphenated token, optionally prefixed by a count/ or an API group
+// segment ("pods", "services.loadbalancers", "requests.cpu",
+// "count/deployments.apps").
+var quotaNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?(/[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$`)
+
+// quotaValueRe matches a Kubernetes quantity as a ResourceQuota hard limit: a
+// non-negative decimal with an optional binary/decimal suffix ("0", "50", "2",
+// "500m", "10Gi"). Negative and exponent forms are rejected — a quota is a
+// ceiling, and neither shape is meaningful for one.
+var quotaValueRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?([munkKMGTPE]i?)?$`)
+
+// validateTeamResourceQuota checks spec.teams[].resourceQuota. The values reach
+// the cluster inside an AplTeamSettingSet, where a malformed entry is rejected by
+// the apiserver LONG after render — at apl-operator reconcile time, in a CR nobody
+// is watching. Catching it here turns that into a spec error at `llz render`.
+func validateTeamResourceQuota(i int, t Team) []error {
+	var errs []error
+	names := make([]string, 0, len(t.ResourceQuota))
+	for k := range t.ResourceQuota {
+		names = append(names, k)
+	}
+	sort.Strings(names) // deterministic error order
+	for _, k := range names {
+		v := t.ResourceQuota[k]
+		switch {
+		case !quotaNameRe.MatchString(k):
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): resourceQuota key %q is not a Kubernetes resource name (e.g. pods, services.loadbalancers, requests.cpu, count/deployments.apps)", i, t.Name, k))
+		case v == "":
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): resourceQuota[%q] has no value — set a quantity (e.g. \"0\", \"50\", \"10Gi\")", i, t.Name, k))
+		case !quotaValueRe.MatchString(v):
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): resourceQuota[%q] value %q is not a non-negative Kubernetes quantity (e.g. \"0\", \"50\", \"500m\", \"10Gi\")", i, t.Name, k, v))
+		}
 	}
 	return errs
 }
