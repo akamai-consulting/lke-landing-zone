@@ -135,7 +135,8 @@ spec:
                                                   # itself set so it keeps tracking. Linode owns the
                                                   # deployed version on managed App Platform, so this
                                                   # only pins what `llz ci assert-apl-version`
-                                                  # resolves — never what runs.
+                                                  # resolves — unless manageAplVersion is set,
+                                                  # which makes it what the platform deploys.
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git  # apl-core otomi.git.repoUrl
         # revision omitted → the apl-core-owned `apl-prod` branch. It must NOT equal
