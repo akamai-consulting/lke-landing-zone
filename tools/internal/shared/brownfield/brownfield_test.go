@@ -301,6 +301,16 @@ func TestTheRegistryAndTheFieldMapNameTheSameMigrations(t *testing.T) {
 
 // A migration that says what to do and not what is left over hands an operator a
 // half-finished cluster and no way to know it.
+//
+// MENTIONING THE PODS IS NOT ENOUGH, and this guard used to accept exactly that.
+// loki-wal-pvc's Then read "the recreated StatefulSet's template differs from the
+// adopted pods, so its controller rolls them itself — watch that roll rather than
+// driving it". It contains "pods", so it passed here, and it was wrong: a
+// StatefulSet cannot roll a pod whose VOLUMES differ from its claim templates (it
+// retries a forbidden in-place update forever), so the operator who followed it
+// waited on a roll that could never happen while the cluster sat at
+// availableReplicas=0. Orphan-recreate leaves the pods on the OLD spec and SOMEONE
+// has to delete them, so Then must name that action rather than describe the state.
 func TestEveryMigrationSaysWhatItLeavesBehind(t *testing.T) {
 	for _, m := range Migrations() {
 		if m.Strategy != StrategyOrphanRecreate {
@@ -309,6 +319,11 @@ func TestEveryMigrationSaysWhatItLeavesBehind(t *testing.T) {
 		if !strings.Contains(m.Then, "pods") {
 			t.Errorf("%s uses orphan-recreate, which leaves the pods on the OLD spec; Then must say so, "+
 				"got %q", m.ID, m.Then)
+		}
+		if !strings.Contains(strings.ToLower(m.Then), "delete") {
+			t.Errorf("%s uses orphan-recreate: the adopted pods keep the OLD spec and nothing rolls them "+
+				"for you, so Then must tell the operator to DELETE them — describing the state instead is "+
+				"how an operator ends up waiting on a roll that never comes; got %q", m.ID, m.Then)
 		}
 		if m.Why == "" {
 			t.Errorf("%s does not say what stays broken while it is pending", m.ID)
