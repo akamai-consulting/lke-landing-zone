@@ -251,6 +251,13 @@ func Lanes(region string) []Lane {
 				"Argo cannot compare explains an undelivered value, and running the second check first would report the symptom without the cause.",
 		},
 		{
+			Name: "apl-deployed-version", Gating: true,
+			Steps: []Step{step("assert-platform", "assert-apl-deployed-version")},
+			Why: "The apl-core version RUNNING here is one this llz release was tested against. Every other apl-core signal reads the SPEC, and on managed App Platform the spec cannot know: " +
+				"Linode installs the platform, apl_enabled is a create-time boolean, and the Linode API exposes no version field — so the pin and the baseline can agree perfectly while the cluster runs something else. " +
+				"Fails on a MAJOR apart (untested) and on being unable to read the version at all; a minor or patch apart warns, because a rollout in flight is the routine state and Linode owns it.",
+		},
+		{
 			Name: "metric-surface", Gating: false,
 			Steps: []Step{step("assert-observability", "prom-metrics", "--match", "^(loki_|cortex_|otelcol_|harbor_)")},
 			Why:   "REPORT-ONLY. Dumps the exporter metric NAMES so error-rate/saturation alerts get written against series that actually exist (promtool checks syntax, not existence).",

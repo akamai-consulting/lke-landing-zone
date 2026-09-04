@@ -834,6 +834,14 @@ jobs:
       # vendored workflow. Run `llz ci assert-suite --list` to see the lanes.
       - name: (e2e) assert suite
         if: ${{ inputs.assert_loki }}
+        env:
+          # The apl-deployed-version lane can block on a MAJOR apart, and its error
+          # tells the operator to set this. Repo variables are not auto-exported, so
+          # without the passthrough the remedy named in the message does not exist at
+          # this call site — it was wired at the scheduled one and nowhere else, which
+          # is the same "documented but unreachable" shape one call site over. Unset
+          # renders empty, which reads as not-allowed: the default stays strict.
+          LLZ_ALLOW_APL_CHART_MAJOR_DRIFT: ${{ vars.LLZ_ALLOW_APL_CHART_MAJOR_DRIFT }}
         run: llz ci assert-suite
 
       # Snapshot the loki-gateway resolver + nginx logs WHILE the cluster is still

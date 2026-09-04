@@ -726,7 +726,7 @@ the poll on a legit slow rollout (Progressing, not stalled). 20m absorbs the wor
 tail while still catching a genuine stall well inside the 45m job timeout — and the kick
 step makes the worst case rare rather than routine.
 
-### Step: (e2e) assert suite — 7 gates + 2 diagnostics, in parallel lanes
+### Step: (e2e) assert suite — 17 gating lanes + 2 report-only, in parallel
 
 E2E validation gate, folded in from `release-e2e.yml`'s former `validate` job: that job
 dispatched `cluster-health.yml` only to run `llz ci converge` (redundant with the poll
@@ -877,6 +877,17 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `instance-custom-llz-e2e-custom` and synced it. `converge` and `assert-loki` gate the
   PLATFORM apps and stay green when the hatch generated NOTHING (the generated App simply
   would not exist) — only an assertion that names it catches that.
+* **apl-deployed-version** — GATING proof that the apl-core RUNNING on this cluster is a
+  version this llz release was tested against. Read from the `helm.sh/chart` label
+  apl-core stamps on its own `apl-operator` Deployment — the chart version itself, not
+  the container image tag, which `.Values.otomi.version` can override. What stays green
+  without it: every other apl-core version signal reads the SPEC, and on Linode's managed
+  App Platform the spec cannot know the answer — Linode installs the platform,
+  `apl_enabled` is a create-time boolean, and the Linode API exposes no version field at
+  all. So `spec.cluster.bootstrap.aplChartVersion` and `BaselineAplChartVersion` can agree
+  perfectly while the cluster runs something else entirely. Fails on a MAJOR apart (llz is
+  untested against it) and on being unable to read the version at all; a minor or patch
+  apart WARNS, because a rollout in flight is the routine state and Linode owns its timing.
 * **overlay** — GATING, two ordered steps, and together they are the answer to "the
   overlay says X; does the cluster have X?".
   `assert-argo-comparisons` sweeps for a `ComparisonError`/`InvalidSpecError` condition

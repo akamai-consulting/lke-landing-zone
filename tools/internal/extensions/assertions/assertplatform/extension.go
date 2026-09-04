@@ -9,7 +9,7 @@ package assertplatform
 //
 // It has since grown a `nudge-and-reap` TRANSITION (two lanes really do mutate;
 // the capability layer surfaced it) and a `k8s-version` preflight holding two
-// grants, one of which leaves the machine. NINE bindings now, and the header says
+// grants, one of which leaves the machine. TEN bindings now, and the header says
 // so rather than leaving a reader to discover it in the declaration — the reason
 // this extension was worth putting on the record survives the growth, but the
 // count was evidence and evidence goes stale.
@@ -32,6 +32,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	assertion:configured "overlay-appliability" [cluster-read]
 //	assertion:verified   "instance-custom"  [cluster-read]
 //	transition:converged "nudge-and-reap"   [cluster-read cluster-write]
+//	assertion:verified   "apl-deployed-version" [cluster-read]
 //	assertion:configured "apl-version"      [read-repo]
 //	assertion:configured "k8s-version"      [read-repo cloud-read]
 //
@@ -50,14 +51,14 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // than files, so they are assertions; they read them before provisioning, so they
 // bind `configured`.
 //
-// NINE BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
+// TEN BINDINGS, NOT ONE. `guard-charts` established that a split needs divergent
 // CAPABILITY rather than count, and three of these do hold identical grants — so
 // on that rule alone they could collapse. They are named separately because their
 // STATES differ (the two preflights are `configured`, the rest `verified`), and
 // once the set is split at all, naming the siblings is what keeps the listing
 // legible. Collapsing them would also hide that they fail independently: each is
 // wired into a different CI lane and a reader of `llz extension list` should see
-// nine things that can go red, not one.
+// ten things that can go red, not one.
 //
 // The grants are no longer uniform either, which is the other reason the split
 // earns itself: `k8s-version` is the only lane here that leaves the machine, and
@@ -74,6 +75,22 @@ func Extension() extension.Extension {
 			{
 				Kind:   extension.Assertion,
 				Name:   "health-workflow",
+				State:  extension.Verified,
+				Grants: []extension.Grant{extension.ClusterRead},
+			},
+			{
+				// THE OTHER HALF OF `apl-version`, and the half that reads a cluster.
+				// `apl-version` resolves the chart version out of the SPEC, which on managed
+				// App Platform cannot know the answer: Linode installs apl-core, `apl_enabled`
+				// is a create-time boolean, and the Linode API carries no version field to
+				// read. So the spec and the baseline can agree perfectly while the platform
+				// runs something else — two consistent values that are not two correct ones.
+				//
+				// `verified`, not `configured`, and that is the whole distinction from its
+				// sibling: this one observes a running platform and cannot be answered before
+				// one exists.
+				Kind:   extension.Assertion,
+				Name:   "apl-deployed-version",
 				State:  extension.Verified,
 				Grants: []extension.Grant{extension.ClusterRead},
 			},

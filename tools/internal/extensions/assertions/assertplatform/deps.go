@@ -37,8 +37,9 @@ type Deps struct {
 	Writer capability.Writer
 
 	// Exec captures a command's stdout. The classified cluster reads go through
-	// internal/kubectlprobe, which owns its own seam; this is for the one call that
-	// wants raw JSON back rather than a probe verdict.
+	// internal/kubectlprobe, which owns its own seam; this is for the calls that want
+	// raw JSON back rather than a probe verdict — two of them now (the Argo sweep and
+	// the apl-deployed-version lane), which is why this no longer says "the one call".
 	Exec func(name string, args ...string) ([]byte, error)
 
 	// LoadSpec reads the instance's LandingZone spec. Injected because the search
