@@ -408,16 +408,12 @@ func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[strin
 // otomiOverlayFiles asserts the platform VERSION onto apl-core's own settings CR
 // when the instance has opted into owning it.
 //
-// THIS IS THE HALF THAT WAS MISSING, and its absence is why the render alone did
-// nothing: `llz render` wrote apl-values/<env>/apl-overlay/otomi.yaml, and no
-// target consumed it. aplOverlayTargets maps only obj.yaml; apps and teams have
-// their own target functions. So the file was committed, reviewed, and never
-// reached the cluster — the rendered-into-the-void shape this tree has shipped
-// before.
+// A RENDER IS INERT UNTIL A TARGET CONSUMES IT: aplOverlayTargets covers only
+// obj.yaml and apps/teams have their own target functions, so this file needs its
+// own reader or it reaches nothing.
 //
-// No source means the instance has not set spec.cluster.bootstrap.manageAplVersion,
-// which is the default: Linode versions apl-core on managed and taking that over is
-// a decision. LLZ then has no opinion and says nothing.
+// No source means the instance has not opted in (see Bootstrap.ManageAplVersion),
+// so LLZ has no opinion and says nothing.
 func otomiOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string) error {
 	srcPath := envOverlayPath(cfg.Env, clusterspec.OverlayOtomiFile)
 	src, found, err := repo.ReadFile(ctx, cfg.SourceBranch, srcPath)
@@ -439,11 +435,8 @@ func otomiOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[str
 		return fmt.Errorf("read target %s: %w", aplOtomiTarget, err)
 	}
 	if !exists {
-		// LOUD, not silent, and unlike a per-app CR this one does not get a pass.
-		// An instance that asked to own the platform version and is asserting it
-		// against nothing is the exact state this channel exists to prevent, and it
-		// is invisible from the source side — the overlay file is present and
-		// correct on the instance branch either way.
+		// LOUD, unlike a per-app CR: this state is invisible from the source side,
+		// where the overlay file is present and correct either way.
 		fmt.Printf("apl-overlay: manageAplVersion is set (want apl-core %s) but %s does not exist on %s yet — "+
 			"the platform version is asserted by NOTHING until apl-operator creates it. Expected on a fresh "+
 			"cluster; if it persists, apl-core is not keeping its settings there and the version needs another home.\n",

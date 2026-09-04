@@ -7,18 +7,11 @@ import (
 
 // overlay_otomi.go — the apl-core version, rendered as apl-core's own settings CR.
 //
-// apl-core reconciles its operator as one of its own releases, taking the image tag
-// from `otomi.version` in the values (values/apl-operator/apl-operator.gotmpl:
-// `tag: {{ $v.otomi.version }}`, with Argo force-replace). The new operator records
-// its version as `deployingVersion`, compares it to the last deployed one, and runs
-// the intervening migrations. So after the first install the version is a VALUES
-// field — and on managed App Platform LLZ owns the values repo, which is what puts
-// it in reach.
-//
-// This writes env/settings/otomi.yaml on the apl-<env> branch, the same target and
-// the same reconciler as the obj overlay. It is off unless
-// spec.cluster.bootstrap.manageAplVersion says otherwise; see that field for why the
-// default is not to touch it.
+// Renders spec.version into env/settings/otomi.yaml, which the reconciler merges
+// KEY-LEVEL onto the apl-<env> branch (apl/overlay.otomiOverlayFiles) — apl-core
+// co-writes that file, so it is deliberately not the whole-file path obj.yaml
+// takes. Off unless spec.cluster.bootstrap.manageAplVersion says otherwise; see
+// that field for why the default is not to touch it.
 
 // aplCoreVersionPattern is the pattern apl-core's values schema enforces on
 // otomi.version. Restated here so a rendered value that the operator would reject
@@ -28,10 +21,8 @@ var aplCoreVersionPattern = regexp.MustCompile(`(v[0-9]+.[0-9]+.[0-9]+|[a-zA-Z]+
 // OverlayOtomiFile is apl-core's platform-settings file in the values tree.
 const OverlayOtomiFile = "otomi.yaml"
 
-// otomiKind is the CR apl-core stores env/settings/otomi.yaml as — confirmed against
-// apl-core v6.2.1's own fixture, tests/fixtures/env/settings/otomi.yaml, which is an
-// `AplCapabilitySet` named `otomi` carrying `spec.version` alongside `spec.git`,
-// `spec.isMultitenant` and the rest of the platform's capability flags.
+// otomiKind is the CR apl-core stores env/settings/otomi.yaml as — confirmed
+// against apl-core v6.2.1's own fixture, tests/fixtures/env/settings/otomi.yaml.
 const otomiKind = "AplCapabilitySet"
 
 type otomiOverlayDoc struct {
@@ -115,10 +106,8 @@ func OtomiOverlayVersion(src []byte) (string, error) {
 // A KEY-LEVEL MERGE, NOT A FILE WRITE, and on this file that is not a refinement —
 // it is the difference between working and destroying the platform's settings.
 // apl-core co-writes env/settings/otomi.yaml (its commits read `updated values
-// [ci skip]`) and keeps eight other fields there — aiEnabled, hasExternalDNS,
-// hasExternalIDP, isMultitenant, isPreInstalled, nodeSelector, useORCS — observed
-// live on a managed cluster. LLZ owns exactly one of its keys. Writing the
-// rendered overlay wholesale would blank the rest.
+// [ci skip]`) and keeps eight other fields there, observed live on a managed
+// cluster. LLZ owns exactly one key. A wholesale write would blank the rest.
 //
 // The CREATE-if-absent model the team CRs use is also wrong here, for the opposite
 // reason: that file always exists, so a never-clobber rule would mean the version

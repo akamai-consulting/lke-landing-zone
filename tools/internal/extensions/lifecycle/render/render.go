@@ -537,10 +537,8 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
 	}
 	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Cluster.Bootstrap, e.Components)
-	// The platform's OWN version, when the instance has opted into owning it. Empty —
-	// and so no file — unless spec.cluster.bootstrap.manageAplVersion is set, because
-	// Linode versions apl-core on managed and taking that over is a decision, not a
-	// default. See clusterspec.RenderOtomiOverlayEnv.
+	// The platform's OWN version — no file unless manageAplVersion is set. See
+	// clusterspec.RenderOtomiOverlayEnv.
 	if otomi := clusterspec.RenderOtomiOverlayEnv(e.Cluster.Bootstrap); otomi != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayOtomiFile)] = otomi
 	}

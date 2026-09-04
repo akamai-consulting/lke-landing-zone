@@ -352,13 +352,6 @@ type Bootstrap struct {
 	// renders `tag: {{ $v.otomi.version }}` with Argo force-replace. A new operator
 	// then records its own version as `deployingVersion`, compares it to the last
 	// deployed one and runs the intervening migrations (src/common/runtime-upgrade.ts).
-	// apl-core's schema calls the field "Best pin this to a valid release version
-	// found in the repo."
-	//
-	// So the Helm chart is only the FIRST install. After it, the version is a values
-	// field — and on managed App Platform LLZ owns the values repo (BYO-Git), which is
-	// what makes this reachable at all.
-	//
 	// DEFAULT FALSE, and deliberately: Linode installs and versions apl-core on
 	// managed, so driving it from here is a change of ownership, not a setting. Left
 	// off, llz renders no otomi.yaml and Linode's version stands. Turned on, the
