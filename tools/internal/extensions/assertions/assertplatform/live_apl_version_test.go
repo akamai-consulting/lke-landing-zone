@@ -93,10 +93,26 @@ func TestAplDeployedIgnoresTheSubChartsOwnLabels(t *testing.T) {
 		t.Fatalf("live = %q, want %q — the sub-chart's packaging version was read as the platform version, "+
 			"which is exactly the bug release-e2e caught", v.Live, clusterspec.BaselineAplChartVersion)
 	}
-	for _, forbidden := range []string{"0.2.0", "1.16.0"} {
-		if strings.Contains(v.Live, forbidden) {
-			t.Errorf("live = %q must never come from the sub-chart's own coordinates (%s)", v.Live, forbidden)
-		}
+}
+
+// THE TAG IS THE SOURCE, PINNED WITHOUT REFERENCE TO THE BASELINE.
+//
+// The regression test above derives its image tag from BaselineAplChartVersion, so
+// it stays green for any baseline and cannot show WHICH field was read — it proves
+// the labels are ignored, not that the tag is used. This one pins a literal tag
+// that is deliberately NOT the baseline and requires it to come back verbatim, so
+// "read the tag" is asserted independently of the constant it is graded against.
+func TestLiveVersionComesFromTheTagNotTheBaseline(t *testing.T) {
+	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+		nameLabel:                   aplOperatorName,
+		"helm.sh/chart":             "apl-operator-0.2.0",
+		"app.kubernetes.io/version": "1.16.0",
+	}, "docker.io/linode/apl-core:v6.2.0"), nil)
+	if v.Err != nil {
+		t.Fatalf("a one-patch gap must not fail: %v", v.Err)
+	}
+	if v.Live != "v6.2.0" {
+		t.Errorf("live = %q, want the literal tag \"v6.2.0\" — the version must come from the image tag", v.Live)
 	}
 }
 
@@ -110,7 +126,7 @@ func TestAplDeployedFailsClosed(t *testing.T) {
 		err     error
 		wantMsg string
 	}{
-		{"unreachable cluster", nil, errors.New("connection refused"), "UNKNOWN"},
+		{"unreachable cluster", nil, errors.New("connection refused"), "connection refused"},
 		{"unparseable listing", []byte("not json"), nil, "did not parse"},
 		{"no deployments at all", []byte(`{"items":[]}`), nil, "no Deployment at all"},
 		{
@@ -128,7 +144,7 @@ func TestAplDeployedFailsClosed(t *testing.T) {
 			"a digest-pinned image carries no tag",
 			deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
 				"linode/apl-core@sha256:"+strings.Repeat("a", 64)),
-			nil, "carries no tag",
+			nil, "carries no usable tag",
 		},
 		{
 			"a tag that is not a version",
@@ -193,9 +209,13 @@ func TestImageTag(t *testing.T) {
 // asking, and "the first container" is then a coin toss that reports istio's version
 // as the platform's.
 func TestAplDeployedPicksTheOperatorContainer(t *testing.T) {
-	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
-		map[string]string{nameLabel: aplOperatorName},
-		map[string]string{"istio-proxy": "istio/proxyv2:1.20.0", containerName: baselineImage()}), nil)
+	// A RAW LITERAL, not a map: the sidecar must be FIRST for this to be adversarial,
+	// and Go map iteration order would make that incidental rather than pinned.
+	raw := []byte(`{"items":[{"metadata":{"name":"apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[` +
+		`{"name":"istio-proxy","image":"istio/proxyv2:1.20.0"},` +
+		`{"name":"apl-operator","image":"` + baselineImage() + `"}]}}}}]}`)
+	v := evaluateAplDeployed(raw, nil)
 	if v.Err != nil {
 		t.Fatalf("an injected sidecar must not break the read: %v", v.Err)
 	}
@@ -227,7 +247,13 @@ func TestAplDeployedToleratesAPreReleaseTag(t *testing.T) {
 		nameLabel: aplOperatorName,
 	}, "linode/apl-core:"+clusterspec.BaselineAplChartVersion+"-rc.1"), nil)
 	if v.Err != nil {
-		t.Errorf("an rc of the baseline must not fail the lane: %v", v.Err)
+		t.Fatalf("an rc of the baseline must not fail the lane: %v", v.Err)
+	}
+	if v.Warn != "" {
+		t.Errorf("an rc of the baseline is not drift and must be silent, got %q", v.Warn)
+	}
+	if v.Live != clusterspec.BaselineAplChartVersion+"-rc.1" {
+		t.Errorf("live = %q, want the rc tag verbatim", v.Live)
 	}
 }
 
@@ -356,6 +382,13 @@ func TestAplOperatorNamesAgreeWithBootstrapcluster(t *testing.T) {
 		t.Errorf("deployment %q != bootstrapcluster's %q — the lane would select a workload that does not exist",
 			aplOperatorName, bootstrapcluster.AplOperatorDeployment)
 	}
+	// containerName is a THIRD constant so an upstream rename of the container can
+	// move independently — but it derives from `{{ .Chart.Name }}`, which is the same
+	// string today. Pin the current equality so a one-sided edit is visible.
+	if containerName != aplOperatorName {
+		t.Errorf("container %q != %q; apl-core names the container {{ .Chart.Name }}. If upstream really renamed it, "+
+			"update this expectation deliberately", containerName, aplOperatorName)
+	}
 }
 
 // THE REMEDY MUST MATCH THE DIRECTION OF THE GAP. One blanket sentence got it wrong
@@ -431,5 +464,271 @@ func TestStagedMajorReadsDifferentlyFromAPatchLag(t *testing.T) {
 	}
 	if strings.Contains(lag.Warn, clusterspec.AllowMajorDriftEnv) {
 		t.Errorf("a patch lag has nothing to do with the override, got %q", lag.Warn)
+	}
+}
+
+// A FOREIGN SOLE CONTAINER MUST BE REFUSED. The relaxation exists so an upstream
+// rename of the CONTAINER does not blind the lane — not so any lone workload gets
+// its tag read as the platform version. Ungated it reported istio's 1.20.0 as
+// "apl-core 1.20.0, a MAJOR apart, raise it with Linode", and a sole container
+// tagged v6.2.1 would have PASSED on a version never read from apl-core.
+//
+// The safe half is covered by TestAplDeployedAcceptsASoleContainerUnderAnotherName;
+// this is the half that was missing, and it is where the bug would live.
+func TestSoleContainerRelaxationRefusesAForeignImage(t *testing.T) {
+	for _, image := range []string{
+		"quay.io/someone/totally-different:1.2.3",
+		"istio/proxyv2:1.20.0",
+		// The dangerous one: a foreign image whose tag would otherwise pass silently.
+		"quay.io/someone/totally-different:" + clusterspec.BaselineAplChartVersion,
+	} {
+		v := evaluateAplDeployed(deployJSONContainers("apl-operator",
+			map[string]string{nameLabel: aplOperatorName},
+			map[string]string{"operator": image}), nil)
+		if v.Err == nil {
+			t.Errorf("a sole %q container is not apl-core and must not be read as it (live=%q)", image, v.Live)
+		}
+	}
+}
+
+// AN UNSET otomi.version COMES BACK AS THE SUB-CHART'S appVersion.
+//
+// The chart renders `image: "{{ .Values.image.repository }}:{{ .Values.image.tag |
+// default .Chart.AppVersion }}"` and the values template supplies `tag: {{
+// $version }}` with no default of its own — so an empty otomi.version lets Helm's
+// `default` fire and the tag becomes 1.16.0, the very sub-chart constant this lane
+// was rewritten to stop reading, arriving by a new route. Graded as drift it reads
+// "a MAJOR apart — raise the rollout with Linode", which is a fleet-wide red about
+// a gap that does not exist.
+//
+// The guard is derived from AplBaselineHistory rather than written down, so it
+// cannot rot as the sub-chart's own version moves.
+func TestATagPredatingEveryBaselineIsNotAPlatformVersion(t *testing.T) {
+	for _, tag := range []string{"1.16.0", "0.2.0", "1.20.0"} {
+		v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+			nameLabel: aplOperatorName,
+		}, "docker.io/linode/apl-core:"+tag), nil)
+		if v.Err == nil {
+			t.Fatalf("tag %q predates every apl-core release and must not be graded as drift (live=%q, warn=%q)",
+				tag, v.Live, v.Warn)
+		}
+		if strings.Contains(v.Err.Error(), "raise it with them") {
+			t.Errorf("tag %q must not be reported as an old PLATFORM — that remedy sends the operator to Linode "+
+				"about a version gap that does not exist: %v", tag, v.Err)
+		}
+		if !strings.Contains(v.Err.Error(), "otomi.version") {
+			t.Errorf("the failure must name the likely cause so the reader can check it, got: %v", v.Err)
+		}
+	}
+	// ...and the guard must not swallow a genuine old MAJOR that llz really did target.
+	old := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+		nameLabel: aplOperatorName,
+	}, "docker.io/linode/apl-core:6.0.0"), nil)
+	if old.Err != nil && strings.Contains(old.Err.Error(), "predates every apl-core release") {
+		t.Errorf("6.0.0 IS a version llz targeted and must be graded as drift, not disqualified: %v", old.Err)
+	}
+}
+
+// ZERO CONTAINERS IS A READ FAILURE, NOT A RENAME. Kubernetes cannot serve a
+// Deployment with no containers, so an empty slice means the JSON shape this lane
+// parses stopped matching kubectl's output. Reported as "no container named
+// apl-operator … Containers present:" it sent the reader hunting for a renamed
+// container behind a dangling empty list.
+func TestZeroContainersIsReportedAsAReadFailure(t *testing.T) {
+	raw := []byte(`{"items":[{"metadata":{"name":"apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[]}}}}]}`)
+	v := evaluateAplDeployed(raw, nil)
+	if v.Err == nil {
+		t.Fatal("no containers means the version is UNKNOWN, and unknown fails")
+	}
+	if !strings.Contains(v.Err.Error(), "no containers at all") {
+		t.Errorf("it must say the listing carried no containers, not that one was renamed: %v", v.Err)
+	}
+	if strings.Contains(v.Err.Error(), "Containers present: .") {
+		t.Errorf("a dangling empty list names nothing: %v", v.Err)
+	}
+}
+
+// A NAMED CONTAINER WITH AN EMPTY IMAGE IS NOT A MISSING CONTAINER. Collapsing the
+// two produced a message that denied the thing it then printed: `has no container
+// named "apl-operator" … Containers present: apl-operator`.
+func TestNamedContainerWithNoImageIsItsOwnFailure(t *testing.T) {
+	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
+		map[string]string{nameLabel: aplOperatorName},
+		map[string]string{containerName: ""}), nil)
+	if v.Err == nil {
+		t.Fatal("an empty image means the version is UNKNOWN")
+	}
+	if strings.Contains(v.Err.Error(), "no container named") {
+		t.Errorf("the container IS present — the message must not deny it: %v", v.Err)
+	}
+	if !strings.Contains(v.Err.Error(), "carries no image") {
+		t.Errorf("it must name the actual state, got: %v", v.Err)
+	}
+}
+
+// A CANDIDATE THAT CANNOT ANSWER MUST NOT END THE SCAN. The selector matches by
+// name OR label, so a stale Deployment literally named `apl-operator` can sit
+// beside the renamed real one carrying the label. Returning the first candidate's
+// failure reported "unreadable" while the answer sat in the next item.
+func TestAnUnreadableCandidateDoesNotHideALaterAnswer(t *testing.T) {
+	raw := []byte(`{"items":[` +
+		`{"metadata":{"name":"apl-operator","labels":{}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"legacy","image":"legacy:1.0.0"}]}}}},` +
+		`{"metadata":{"name":"apl-operator-controller","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + baselineImage() + `"}]}}}}` +
+		`]}`)
+	v := evaluateAplDeployed(raw, nil)
+	if v.Err != nil {
+		t.Fatalf("a later candidate answers the question and must be reached: %v", v.Err)
+	}
+	if v.Live != clusterspec.BaselineAplChartVersion {
+		t.Errorf("live = %q, want %q", v.Live, clusterspec.BaselineAplChartVersion)
+	}
+}
+
+// ...and when NO candidate can answer, the held failure is reported rather than a
+// vacuous "not found". Continuing the scan must not become a way to lose the reason.
+func TestAllCandidatesUnreadableReportsTheFailure(t *testing.T) {
+	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
+		map[string]string{nameLabel: aplOperatorName},
+		map[string]string{"legacy": "legacy:1.0.0"}), nil)
+	if v.Err == nil {
+		t.Fatal("no candidate could answer — that is UNKNOWN, and unknown fails")
+	}
+	if !strings.Contains(v.Err.Error(), "Containers present") {
+		t.Errorf("the held failure must survive, naming what was found: %v", v.Err)
+	}
+}
+
+// EVERY UNREADABLE ARM CARRIES THE REMEDY. These reach every adopter's weekly
+// scheduled check, which has no continue-on-error, and they share one fix. Only the
+// no-matching-Deployment arm used to say so; a fleet-wide gate that names no way
+// out is a gate that gets switched off.
+func TestUnreadableFailuresCarryTheRemedy(t *testing.T) {
+	cases := map[string][]byte{
+		"no deployment": deployJSONContainers("other", map[string]string{nameLabel: "other"},
+			map[string]string{"other": "other:1.0.0"}),
+		"no containers": []byte(`{"items":[{"metadata":{"name":"apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+			`"spec":{"template":{"spec":{"containers":[]}}}}]}`),
+		"no such container": deployJSONContainers("apl-operator", map[string]string{nameLabel: aplOperatorName},
+			map[string]string{"legacy": "legacy:1.0.0"}),
+		"digest only": deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+			"linode/apl-core@sha256:"+strings.Repeat("a", 64)),
+		"non-semver tag": deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+			"linode/apl-core:main"),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			v := evaluateAplDeployed(raw, nil)
+			if v.Err == nil {
+				t.Fatal("must fail")
+			}
+			if !strings.Contains(v.Err.Error(), "llz self-update") {
+				t.Errorf("the remedy must be in the message: %v", v.Err)
+			}
+		})
+	}
+}
+
+// THE UNTAGGED ARM MUST NOT ASSERT A CAUSE IT DID NOT MEASURE. imageTag collapses
+// digest-pinned, empty-tag and no-tag into "", and they point at different
+// subsystems — telling a private-registry operator their image is digest-pinned
+// sends them to the wrong one.
+func TestUntaggedImageNamesTheActualReason(t *testing.T) {
+	digest := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+		"linode/apl-core@sha256:"+strings.Repeat("a", 64)), nil)
+	if digest.Err == nil || !strings.Contains(digest.Err.Error(), "digest") {
+		t.Errorf("a digest pin must be named as one: %v", digest.Err)
+	}
+	empty := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+		"registry.example:5000/linode/apl-core"), nil)
+	if empty.Err == nil {
+		t.Fatal("an untagged reference is UNKNOWN")
+	}
+	// ASSERT ON THE REASON CLAUSE, NOT THE WHOLE MESSAGE. The shared remedy
+	// paragraph contains the word "digest-locked", so a Contains(err, "digest") over
+	// the full report is satisfied by text that has nothing to do with the finding.
+	if strings.Contains(empty.Err.Error(), "pinned by digest") {
+		t.Errorf("this reference is not digest-pinned — saying so sends the reader to the wrong subsystem: %v", empty.Err)
+	}
+	if !strings.Contains(empty.Err.Error(), "names no tag at all") {
+		t.Errorf("it must name the actual reason, got: %v", empty.Err)
+	}
+}
+
+// THE CLASSIFIER'S SAFETY IS LOCAL. AplChartDriftOf answers DriftNone for "" and
+// Unparseable for a malformed version, and both used to fall through to a silent
+// pass or a "routine mid-rollout" warning — a vacuous green from the function whose
+// job is to refuse one. evaluateAplDeployed cannot reach either today; nothing
+// stops a future caller.
+//
+// Note the shape this guards against: TestAplDeployedPolicyMatchesTheSpecSidePolicy
+// derives its expectation from the same predicates the code calls, so adding an
+// unparseable version to ITS table would have made the test REQUIRE the fail-open.
+func TestClassifierRefusesWhatItCannotGrade(t *testing.T) {
+	for _, live := range []string{"", "garbage", "not-a-version"} {
+		got := classifyAplDeployed(live)
+		if got.Err == nil {
+			t.Errorf("classifyAplDeployed(%q) must FAIL, got err=nil warn=%q — a version it cannot grade is UNKNOWN",
+				live, got.Warn)
+		}
+	}
+}
+
+// THE LANE QUERIES WHAT IT CLAIMS TO. The namespace constant is pinned against
+// bootstrapcluster's copy, but nothing asserted it reaches the actual command — a
+// dropped `-o json` would have been caught by no unit test.
+func TestLaneQueriesTheOperatorDeployment(t *testing.T) {
+	orig := deps
+	t.Cleanup(func() { deps = orig })
+
+	var gotName string
+	var gotArgs []string
+	Install(Deps{Exec: func(name string, args ...string) ([]byte, error) {
+		gotName, gotArgs = name, args
+		return deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName}, baselineImage()), nil
+	}})
+	if err := assertAplDeployedVersion(); err != nil {
+		t.Fatalf("a cluster on the baseline must pass the lane: %v", err)
+	}
+	if gotName != "kubectl" {
+		t.Errorf("command = %q, want kubectl", gotName)
+	}
+	want := []string{"-n", aplOperatorNamespace, "get", "deploy", "-o", "json"}
+	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %v, want %v", gotArgs, want)
+	}
+}
+
+// A FAILING VERDICT MUST REACH THE CALLER AS AN ERROR, and a warning must NOT.
+// The lane's exit status is what the suite gates on.
+func TestLanePropagatesTheVerdict(t *testing.T) {
+	orig := deps
+	t.Cleanup(func() { deps = orig })
+
+	Install(Deps{Exec: func(string, ...string) ([]byte, error) {
+		return deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+			"docker.io/linode/apl-core:9.0.0"), nil
+	}})
+	if err := assertAplDeployedVersion(); err == nil {
+		t.Error("a major apart must fail the lane")
+	}
+
+	Install(Deps{Exec: func(string, ...string) ([]byte, error) {
+		return deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+			"docker.io/linode/apl-core:6.1.0"), nil
+	}})
+	if err := assertAplDeployedVersion(); err != nil {
+		t.Errorf("a minor lag warns and must NOT fail: %v", err)
+	}
+
+	// A PARTIALLY-POPULATED Deps MUST FAIL CLOSED, NOT PANIC. Install replaces the
+	// whole struct, so a literal that omits Exec nils out a field the package
+	// documents as "defaulting to implementations that work rather than to nil
+	// funcs" — and the lane called it, segfaulting instead of reporting UNKNOWN.
+	Install(Deps{})
+	if err := assertAplDeployedVersion(); err == nil {
+		t.Error("an un-installed Exec seam reads nothing, and nothing is UNKNOWN")
 	}
 }

@@ -31,8 +31,8 @@ package assertplatform
 //
 // This lane originally read `helm.sh/chart`, with `app.kubernetes.io/version` as a
 // fallback, and BOTH ARE WRONG — not stale, not degraded, wrong by construction.
-// The Deployment is rendered by the apl-operator SUB-chart, so its common-labels
-// helper interpolates that sub-chart's own coordinates:
+// The Deployment is rendered by the apl-operator SUB-chart, whose common-labels
+// helper interpolates that SUB-chart's coordinates, not the umbrella chart's:
 //
 //	charts/apl-operator/Chart.yaml:  version: 0.2.0     → helm.sh/chart: apl-operator-0.2.0
 //	                                 appVersion: 1.16.0 → app.kubernetes.io/version: "1.16.0"
@@ -43,14 +43,38 @@ package assertplatform
 // as "apl-core 0.2.0, a MAJOR apart", hard-failing this gating lane against a
 // perfectly in-step platform.
 //
-// The mistake that shipped it is worth naming, because the file it points at is
-// genuinely the right one: `apl-operator.labels` does live in
-// charts/apl-operator/templates/_helpers.tpl. What went unchecked was the sibling
-// Chart.yaml supplying `.Chart.Version` to it — the UMBRELLA chart's version was
-// assumed to reach a sub-chart's labels, and it does not.
+// So NEITHER LABEL may be a fallback: the two that look like one are the bug, and
+// either in the source position reintroduces it. Unreadable is a hard failure.
 //
-// So there is NO SECOND SOURCE and deliberately no fallback: the two labels that
-// look like one are the bug. Unreadable is a hard failure.
+// (apl-core does keep one other version record — the `otomi-status` ConfigMap in
+// namespace `otomi`, carrying version/deployingVersion/deployingTag. It is not
+// consulted here: one source that is right beats two that must be reconciled, and
+// a second reader is a second thing to keep true. It is the place to look if the
+// image tag ever stops being legible.)
+//
+// ── THE COUPLING THAT LETS AN IMAGE TAG BE GRADED AGAINST A CHART VERSION ────
+//
+// THIS LANE BLOCKS, so the assumption under the comparison has to be stated — and
+// checked, which is how the reading it replaced went wrong. The tag is
+// `otomi.version`; the baseline it is graded against,
+// clusterspec.BaselineAplChartVersion, is a CHART version.
+//
+// VERIFIED against the published index (https://linode.github.io/apl-core), all 77
+// `apl` entries: `version` and `appVersion` are the same release string on every
+// one, differing only by the leading "v" apl-core adopted at 6.1.0 (`6.0.0` /
+// `v6.0.0`), which clusterspec.AplSemver normalises away. apl-core cuts one version
+// per release and stamps it into the chart, the appVersion and the image tag alike,
+// so grading a tag against a chart-version baseline compares like with like.
+//
+// Nothing upstream GUARANTEES that continues. The previous code met that risk by
+// refusing to block on its weaker source; this one blocks, so if apl-core ever
+// versions its image independently of its chart, this lane goes red on healthy
+// clusters. That is a deliberate trade: the failure is loud, arrives on the release
+// that introduces it (release-e2e runs this against a real managed cluster before
+// any release ships), and is fixed by teaching this file the new mapping — whereas
+// the old never-block posture failed silently and shipped a wrong reading for
+// months. `implausibleMajor` below is the cheap half of the defence, catching the
+// decoupling that matters most: the tag ceasing to be a platform version at all.
 //
 // ── THE POLICY IS THE SPEC-SIDE POLICY, APPLIED TO REALITY ───────────────────
 //
@@ -98,34 +122,68 @@ const (
 // source: selecting on identity and reading the version elsewhere is the point.
 const nameLabel = "app.kubernetes.io/name"
 
-// containerName is the operator container inside that Deployment. apl-core's
-// template names it `{{ .Chart.Name }}`, which is the same "apl-operator" string.
+// containerName is the operator container inside that Deployment (apl-core's
+// template names it `{{ .Chart.Name }}`, the same "apl-operator" string).
+//
+// A THIRD CONSTANT RATHER THAN AN ALIAS of aplOperatorName, because an upstream
+// rename of the container alone must be able to move independently of the
+// Deployment's name. Selecting by it is what stops an injected sidecar — a service
+// mesh adds one without asking — from having its own image tag read as the
+// platform version.
 const containerName = "apl-operator"
 
-// imageTagSource names where the version came from, for the messages. There is one
-// source, and it is still printed on every verdict: "collection stopped" and "we
-// read a different field" have nothing in common as remedies, and the reader cannot
-// tell which happened unless the lane says where it looked.
+// aplCoreImageName is the last path element of apl-core's image, invariant across
+// installs: `charts/apl-operator/values.yaml` ships `docker.io/linode/apl-core`,
+// and the only override renders `<registry>/docker/linode/apl-core`. It gates the
+// sole-container relaxation below, so the rescue path cannot read a foreign image.
+const aplCoreImageName = "apl-core"
+
+// imageTagSource names where the version came from. It is set on EVERY verdict,
+// including the failures, and printed by the arms that have room for it: naming the
+// source is what made the sub-chart-label bug diagnosable from a CI log alone.
 const imageTagSource = "the apl-operator container image tag"
 
-// deployList is the sliver of `kubectl get deploy -o json` this lane reads.
+// deployContainer / deployItem / deployList are the sliver of
+// `kubectl get deploy -o json` this lane reads.
+type deployContainer struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+}
+
+type deployItem struct {
+	Metadata struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+	Spec struct {
+		Template struct {
+			Spec struct {
+				Containers []deployContainer `json:"containers"`
+			} `json:"spec"`
+		} `json:"template"`
+	} `json:"spec"`
+}
+
 type deployList struct {
-	Items []struct {
-		Metadata struct {
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
-		} `json:"metadata"`
-		Spec struct {
-			Template struct {
-				Spec struct {
-					Containers []struct {
-						Name  string `json:"name"`
-						Image string `json:"image"`
-					} `json:"containers"`
-				} `json:"spec"`
-			} `json:"template"`
-		} `json:"spec"`
-	} `json:"items"`
+	Items []deployItem `json:"items"`
+}
+
+// imageRepository returns an image reference with its tag and digest stripped.
+func imageRepository(image string) string {
+	if i := strings.LastIndex(image, "@"); i >= 0 {
+		image = image[:i]
+	}
+	if c := strings.LastIndex(image, ":"); c >= 0 && c > strings.LastIndex(image, "/") {
+		image = image[:c]
+	}
+	return image
+}
+
+// isAplCoreImage reports whether a reference names apl-core's own image, whatever
+// registry or mirror it is pulled through.
+func isAplCoreImage(image string) bool {
+	repo := imageRepository(image)
+	return repo == aplCoreImageName || strings.HasSuffix(repo, "/"+aplCoreImageName)
 }
 
 // imageTag returns the tag from a container image reference, or "" when it carries
@@ -149,6 +207,87 @@ func imageTag(image string) string {
 	return image[colon+1:]
 }
 
+// oldestAplMajor is the lowest major apl-core version any llz release has targeted,
+// derived from clusterspec.AplBaselineHistory rather than written down, so it stays
+// true as the history grows. Returns -1 when the history yields nothing parseable.
+func oldestAplMajor() int {
+	oldest := -1
+	for _, b := range clusterspec.AplBaselineHistory {
+		m, _, _, ok := clusterspec.AplSemver(b)
+		if !ok {
+			continue
+		}
+		if oldest < 0 || m < oldest {
+			oldest = m
+		}
+	}
+	return oldest
+}
+
+// implausibleMajor reports whether a tag parses as a version that PREDATES every
+// apl-core release llz has ever targeted — which means it is not a platform version
+// at all.
+//
+// It exists because three different faults all produce a plausible-looking semver
+// that would otherwise be graded as "a major behind" and told to raise a rollout
+// with Linode:
+//
+//   - `otomi.version` unset. The chart renders `tag:` null and Helm's
+//     `default .Chart.AppVersion` fires, so the tag becomes the operator sub-chart's
+//     appVersion, 1.16.0 — the same sub-chart constant this lane exists to stop
+//     reading, arriving by a new route.
+//   - a foreign container read through the sole-container relaxation (istio's
+//     1.20.0, say), for a Deployment that has been relabelled.
+//   - apl-core decoupling its image version from its chart version.
+//
+// All three are "this is not the platform version", not "the platform is old", and
+// they need a different remedy than the drift arms give.
+func implausibleMajor(tag string) bool {
+	maj, _, _, ok := clusterspec.AplSemver(tag)
+	if !ok {
+		return false
+	}
+	oldest := oldestAplMajor()
+	return oldest >= 0 && maj < oldest
+}
+
+// unreadableRemedy is the paragraph every "llz cannot read the version" failure
+// carries.
+//
+// It exists because the arms that report an unreadable platform all reach the same
+// audience — every adopter's weekly scheduled check, which has no continue-on-error
+// — and all have the same fix. Only the no-matching-Deployment arm used to say so;
+// the rest failed a fleet-wide gate while naming no way out, which is how a gate
+// gets switched off.
+func unreadableRemedy() string {
+	return fmt.Sprintf(
+		" If the managed platform has changed shape this lane cannot answer, and the fix is a NEW llz release that reads "+
+			"whatever replaced it — `llz self-update && llz upgrade`. There is no per-instance opt-out to reach for: %s "+
+			"releases a major-version BLOCK, not an unreadable one, and the two delivered call sites (the weekly platform "+
+			"job in llz-scheduled-checks.yml and the e2e assert-suite) are digest-locked, so editing them locally fails "+
+			"`llz lint`. Until a release lands, disable that scheduled job",
+		clusterspec.AllowMajorDriftEnv)
+}
+
+// tagFailure says WHY a reference yielded no tag. imageTag collapses three states
+// into "", and they point at different subsystems: a digest pin is a deliberate
+// deployment choice, a missing tag is a malformed reference, and a bare
+// registry-host reference is a registry problem. Asserting "digest-pinned" for all
+// three sent readers of a private-registry install to the wrong place.
+func tagFailure(image string) string {
+	stripped := image
+	if i := strings.LastIndex(image, "@"); i >= 0 {
+		stripped = image[:i]
+		if strings.LastIndex(stripped, ":") <= strings.LastIndex(stripped, "/") {
+			return "it is pinned by digest alone, and a digest does not say which platform version it carries"
+		}
+	}
+	if strings.HasSuffix(stripped, ":") {
+		return "its tag is empty"
+	}
+	return "it names no tag at all"
+}
+
 // AplDeployedVerdict is the lane's decision.
 type AplDeployedVerdict struct {
 	// Live is the version read from the cluster, "" when none could be read.
@@ -158,6 +297,49 @@ type AplDeployedVerdict struct {
 	// Err is non-nil when the lane FAILS. Warnings are carried in Warn.
 	Err  error
 	Warn string
+}
+
+// operatorImage picks the operator container's image out of one Deployment, or
+// returns the failure explaining why it could not.
+//
+// EACH FAILURE IS ITS OWN ARM because the remedies differ, and a message that
+// misdescribes the state sends the reader hunting for the wrong thing. "No
+// containers at all" is an output-shape change; "no container by that name" is a
+// rename; "found it, image empty" is a partial apply. Collapsing them produced
+// `has no container named "apl-operator" … Containers present: apl-operator`,
+// which denies the thing it then prints.
+func operatorImage(deploy string, cs []deployContainer) (string, *AplDeployedVerdict) {
+	fail := func(format string, a ...any) (string, *AplDeployedVerdict) {
+		return "", &AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(format, a...)}
+	}
+	if len(cs) == 0 {
+		return fail("the %s/%s Deployment declares no containers at all, so the deployed apl-core version is UNKNOWN — "+
+			"the shape of the kubectl output this lane parses may have changed.%s", aplOperatorNamespace, deploy, unreadableRemedy())
+	}
+	var names []string
+	for _, c := range cs {
+		names = append(names, c.Name)
+		if c.Name != containerName {
+			continue
+		}
+		if c.Image == "" {
+			return fail("the %s/%s container %q carries no image, so the deployed apl-core version is UNKNOWN.%s",
+				aplOperatorNamespace, deploy, containerName, unreadableRemedy())
+		}
+		return c.Image, nil
+	}
+
+	// THE ONE RELAXATION, GATED ON THE REPOSITORY. A sole container is unambiguous
+	// enough to survive an upstream rename of the container — but only if it is
+	// actually apl-core. Ungated, this read a lone injected sidecar's tag as the
+	// platform version (istio 1.20.0 → "a MAJOR apart, raise it with Linode"), which
+	// is the container-level form of the very bug this lane was rewritten to fix.
+	if len(cs) == 1 && isAplCoreImage(cs[0].Image) {
+		return cs[0].Image, nil
+	}
+	return fail("the %s/%s Deployment has no container named %q running an %s image, so the deployed apl-core version is "+
+		"UNKNOWN. Containers present: %s.%s",
+		aplOperatorNamespace, deploy, containerName, aplCoreImageName, strings.Join(names, ", "), unreadableRemedy())
 }
 
 // evaluateAplDeployed is the whole judgement, pure over parsed input so every arm
@@ -197,60 +379,69 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 	// read. Selecting on the image itself would derive the expected set from the
 	// thing under test — the shape where a filtered query returns nothing and the
 	// gate passes on the bug it exists to catch.
+	//
+	// A CANDIDATE THAT CANNOT ANSWER DOES NOT END THE SCAN. The selector accepts a
+	// match by name OR by label, so a stale Deployment literally named `apl-operator`
+	// can sit beside the renamed real one that carries the label — and returning the
+	// first candidate's failure would report "unreadable" while the answer sat in the
+	// next item. The first failure is remembered and used only if nothing better turns up.
 	var seen []string
+	var held *AplDeployedVerdict
 	for _, it := range list.Items {
 		seen = append(seen, it.Metadata.Name)
 		if it.Metadata.Labels[nameLabel] != aplOperatorName && it.Metadata.Name != aplOperatorName {
 			continue
 		}
-
-		// The container is chosen BY NAME, with a single-container Deployment as the
-		// only relaxation. A sidecar (a service mesh injects one without asking) is
-		// otherwise a coin toss over which image gets read.
-		cs := it.Spec.Template.Spec.Containers
-		image := ""
-		for _, c := range cs {
-			if c.Name == containerName {
-				image = c.Image
-				break
+		image, bad := operatorImage(it.Metadata.Name, it.Spec.Template.Spec.Containers)
+		if bad != nil {
+			if held == nil {
+				held = bad
 			}
-		}
-		if image == "" && len(cs) == 1 {
-			image = cs[0].Image
-		}
-		if image == "" {
-			var names []string
-			for _, c := range cs {
-				names = append(names, c.Name)
-			}
-			return AplDeployedVerdict{Err: fmt.Errorf(
-				"the %s/%s Deployment has no container named %q, so the deployed apl-core version is UNKNOWN. Containers present: %s",
-				aplOperatorNamespace, it.Metadata.Name, containerName, strings.Join(names, ", "))}
+			continue
 		}
 
 		tag := imageTag(image)
 		if tag == "" {
-			return AplDeployedVerdict{Err: fmt.Errorf(
-				"the %s/%s operator image %q carries no tag, so the deployed apl-core version is UNKNOWN — a digest-pinned image "+
-					"cannot say which platform version it is",
-				aplOperatorNamespace, it.Metadata.Name, image)}
+			if held == nil {
+				held = &AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
+					"the %s/%s operator image %q carries no usable tag (%s), so the deployed apl-core version is UNKNOWN.%s",
+					aplOperatorNamespace, it.Metadata.Name, image, tagFailure(image), unreadableRemedy())}
+			}
+			continue
 		}
 
-		// A NON-SEMVER TAG IS A REAL apl-core STATE, NOT A MALFORMED READ. `otomi.version`
-		// accepts a branch name — values-schema.yaml allows `[a-zA-Z]+[a-zA-Z0-9-]` beside
-		// the semver form, and the chart keys pullPolicy off exactly that distinction
-		// (`$isSemver := regexMatch "^[0-9.]+" $version` → Always vs IfNotPresent). So
-		// "main" means a floating dev install, which llz cannot grade against a
-		// baseline. It fails closed and NAMES the tag, rather than reporting drift it
-		// did not measure.
+		// A NON-SEMVER TAG IS A REAL apl-core STATE, NOT A MALFORMED READ.
+		// `otomi.version` accepts a branch name: values-schema.yaml allows
+		// `[a-zA-Z]+[a-zA-Z0-9-]` beside the semver form, DEFAULTS THE FIELD TO
+		// "latest", and apl-core's own fixtures ship `version: main`. So a
+		// non-semver tag means a floating (non-release) install, which llz cannot
+		// grade against a baseline. It fails closed and NAMES the tag, rather than
+		// reporting drift it did not measure.
+		//
+		// Whether Linode's managed installer ALWAYS pins a release version is not
+		// something llz verifies, and this arm has no per-instance override — so if
+		// managed ever ships "latest" this goes red fleet-wide. That is why the
+		// remedy paragraph is attached: the fix is a new llz release, not a dial the
+		// adopter can turn.
 		if _, _, _, ok := clusterspec.AplSemver(tag); !ok {
 			return AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
 				"%s/%s runs operator image %q, whose tag %q is not a version this llz can compare against %s — apl-core allows a "+
 					"branch name in otomi.version, so this is most likely a floating (non-release) platform install. The deployed "+
-					"apl-core version is UNKNOWN",
-				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.BaselineAplChartVersion)}
+					"apl-core version is UNKNOWN.%s",
+				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.BaselineAplChartVersion, unreadableRemedy())}
+		}
+		if implausibleMajor(tag) {
+			return AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
+				"%s/%s runs operator image %q, whose tag %q predates every apl-core release llz has targeted (the oldest is %s), "+
+					"so it is not a platform version at all rather than an old one. The usual cause is otomi.version being unset, "+
+					"which makes the chart fall back to the apl-operator sub-chart's own appVersion; a foreign container in this "+
+					"Deployment reads the same way. The deployed apl-core version is UNKNOWN.%s",
+				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.AplBaselineHistory[0], unreadableRemedy())}
 		}
 		return classifyAplDeployed(tag)
+	}
+	if held != nil {
+		return *held
 	}
 
 	// NAME WHAT IS PRESENT. The thing being looked for may have been RENAMED, and no
@@ -260,18 +451,12 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 	// gating on the delivered scheduled health check — so the remedy has to be in the
 	// message. release-e2e runs this lane against a real MANAGED cluster before any
 	// release carrying it can ship, which is what stands between a wrong assumption
-	// here and an adopter's pipeline. It is also what caught the label version of
-	// this lane; the assumption that shipped was never exercised against a cluster.
+	// here and an adopter's pipeline.
 	sort.Strings(seen)
-	return AplDeployedVerdict{Err: fmt.Errorf(
+	return AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
 		"no Deployment named %[1]q (or labelled %[2]s=%[1]s) in namespace %[3]s, "+
-			"so the deployed apl-core version is UNKNOWN. Deployments present: %[4]s. "+
-			"If the managed platform has stopped shipping its operator under that name this lane cannot answer, and the fix is a NEW "+
-			"llz release that reads whatever replaced it — `llz self-update && llz upgrade`. There is no per-instance opt-out to reach "+
-			"for: %[5]s releases a major-version BLOCK, not an unreadable one, and the two delivered call sites (the weekly platform "+
-			"job in llz-scheduled-checks.yml and the e2e assert-suite) are digest-locked, so editing them locally fails `llz lint`. "+
-			"Until a release lands, disable that scheduled job",
-		aplOperatorName, nameLabel, aplOperatorNamespace, strings.Join(seen, ", "), clusterspec.AllowMajorDriftEnv)}
+			"so the deployed apl-core version is UNKNOWN. Deployments present: %[4]s.%[5]s",
+		aplOperatorName, nameLabel, aplOperatorNamespace, strings.Join(seen, ", "), unreadableRemedy())}
 }
 
 // classifyAplDeployed applies the SPEC-SIDE drift policy to the live version.
@@ -285,7 +470,22 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 // check on a condition the operator could neither fix nor opt out of.
 func classifyAplDeployed(live string) AplDeployedVerdict {
 	v := AplDeployedVerdict{Live: live, Source: imageTagSource}
+
+	// THE SAFETY IS LOCAL, not left to the caller's guards. AplChartDriftOf answers
+	// DriftNone for an empty version and Unparseable for a malformed one, and both
+	// fall through the arms below to a silent pass or a "routine mid-rollout"
+	// warning — a vacuous green from a function whose whole job is to refuse one.
+	// evaluateAplDeployed cannot reach either today; nothing keeps a future caller
+	// from doing so.
+	if live == "" {
+		v.Err = fmt.Errorf("no apl-core version was read, so the deployed version is UNKNOWN — that is a failure, not a pass")
+		return v
+	}
 	drift := clusterspec.AplChartDriftOf(live)
+	if drift == clusterspec.AplChartDriftUnparseable {
+		v.Err = fmt.Errorf("apl-core version %q does not parse, so the deployed version is UNKNOWN", live)
+		return v
+	}
 
 	if drift == clusterspec.AplChartDriftNone {
 		return v

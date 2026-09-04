@@ -63,7 +63,27 @@ var deps = Deps{
 }
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
-func Install(d Deps) { deps = d }
+//
+// NIL FUNCS ARE BACKFILLED WITH THE SAFE DEFAULTS, because Install replaces the
+// whole struct: a caller that populates only the fields it cares about — the
+// ordinary way to write a struct literal — otherwise nils out the rest, and the
+// var block above promises the opposite ("defaulting to implementations that work
+// rather than to nil funcs"). A lane that called the nil Exec segfaulted instead of
+// reporting the read failure, which for a gate is the difference between a verdict
+// and a crash. Writer keeps its own accessor, W(), since a nil INTERFACE must
+// refuse rather than no-op.
+func Install(d Deps) {
+	if d.ExecCombined == nil {
+		d.ExecCombined = func(string, ...string) string { return "" }
+	}
+	if d.Exec == nil {
+		d.Exec = func(string, ...string) ([]byte, error) { return nil, nil }
+	}
+	if d.LoadSpec == nil {
+		d.LoadSpec = func() (*clusterspec.LandingZone, bool, error) { return nil, false, nil }
+	}
+	deps = d
+}
 
 // W returns the Writer, or a refusing one if the field was never populated. A
 // Deps built as a struct literal has a nil interface there, and a nil interface

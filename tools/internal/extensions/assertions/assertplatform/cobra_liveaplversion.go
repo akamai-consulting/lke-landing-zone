@@ -14,9 +14,10 @@ func AplDeployedVersionCmd() *cobra.Command {
 		Long: "Reads the apl-core version from the image tag of the apl-operator container,\n" +
 			"which apl-core sets from otomi.version — the platform version itself — and compares\n" +
 			"it against " + clusterspec.BaselineAplChartVersion + ".\n\n" +
-			"NOT the chart labels: helm.sh/chart and app.kubernetes.io/version are written by the\n" +
-			"apl-operator SUB-chart from its own Chart.yaml (0.2.0 / 1.16.0), so they never equal\n" +
-			"the platform version. Reading them reported a healthy v6.2.1 cluster as 0.2.0.\n\n" +
+			"NOT the chart labels: helm.sh/chart and app.kubernetes.io/version carry the\n" +
+			"apl-operator SUB-chart's own packaging version, never the platform's.\n\n" +
+			"A tag that is not a release version (apl-core allows a branch name in\n" +
+			"otomi.version) is reported as UNKNOWN rather than graded as drift.\n\n" +
 			"This is the only check that observes the DEPLOYED version. `assert-apl-version` reads\n" +
 			"the spec, and on Linode's managed App Platform the spec cannot know: apl_enabled is a\n" +
 			"create-time boolean and the Linode API exposes no version field, so Linode owns the\n" +
