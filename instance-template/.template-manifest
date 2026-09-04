@@ -24,7 +24,18 @@
 #            (your GitHub org/registry, your state bucket). An update 3-way-merges
 #            it; expect conflicts ONLY on those token lines, which you re-resolve.
 #   owned    The instance owns it (per-deployment config, generated files, secrets,
-#            provider locks). An update NEVER touches it.
+#            provider locks). A copier UPDATE never touches it, and convergence
+#            ignores it — the content is yours.
+#            NOT "nothing ever writes to it". A handful of named `llz` levers
+#            rewrite ONE template-controlled field inside an owned file, because the
+#            field goes stale by construction on every upgrade and no operator
+#            judgement is involved: `llz render`/`llz upgrade` re-stamp the
+#            `?ref=` in apl-values kustomizations (a live instance ran three
+#            releases behind on what ArgoCD deploys while every gate was green), and
+#            `llz upgrade` drops a `spec.cluster.bootstrap.aplChartVersion` naming a
+#            version llz itself set, so the spec keeps tracking the release baseline.
+#            Each prints what it changed and lands as a reviewable diff. Ownership
+#            is about the CONTENT being yours, not about the file being unwritable.
 
 # ── managed: pure template logic — overwritten on update ─────────────────────
 managed  .template-manifest

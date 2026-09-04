@@ -14,12 +14,15 @@ import (
 )
 
 // TestMinSupportedAplChartVersionIsNotTheBaseline guards the split made when the
-// baseline moved to v6.1.0 and re-asserted at v6.2.0: the SUPPORT FLOOR is a
-// separate idea from the version this release targets. Nothing in 6.1.0 or 6.2.0
-// made the landing zone 6.1/6.2-only, so a 6.0.0 instance must still pass the
-// preflight and merely warn about drift.
+// baseline moved to v6.1.0 and re-asserted at every bump since: the SUPPORT FLOOR
+// is a separate idea from the version this release targets. Nothing in 6.1.0,
+// 6.2.0 or 6.2.1 made the landing zone require them, so a 6.0.0 instance must
+// still pass the preflight and merely warn about drift. 6.2.0 is in the list
+// because a PATCH-level baseline bump moves the target without moving the floor
+// just as a minor one does — raising the floor to chase a patch would refuse
+// every instance mid-rollout.
 func TestMinSupportedAplChartVersionIsNotTheBaseline(t *testing.T) {
-	for _, v := range []string{"6.0.0", "6.1.0"} {
+	for _, v := range []string{"6.0.0", "6.1.0", "6.2.0"} {
 		if err := clusterspec.AplVersionSupported(v, "prod"); err != nil {
 			t.Errorf("%s must remain SUPPORTED (floor %s) — a baseline bump raises the target, not the floor: %v",
 				v, clusterspec.MinSupportedAplChartVersion, err)

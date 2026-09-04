@@ -130,6 +130,7 @@ var commands = []Command{
 	{"assertobs", assertobs.ScrapeTargetsCmd},
 	{"assertobs", assertobs.WaitHarborCmd},
 	{"assertplatform", assertplatform.AplVersionCmd},
+	{"assertplatform", assertplatform.AplDeployedVersionCmd},
 	{"assertplatform", assertplatform.ArgoAppCmd},
 	{"assertplatform", assertplatform.ArgoComparisonsCmd},
 	{"assertplatform", assertplatform.HealthWorkflowCmd},

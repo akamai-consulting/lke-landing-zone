@@ -168,7 +168,10 @@ apl-core-owned one. Options, roughly in order of preference:
 - **(a) apl-core existingSecret support.** If the apl-core version in use lets
   `dns.provider.linode` reference an existing Secret (name/key) rather than an
   inline token, point it at the ESO-synced narrow-PAT Secret. Cleanest; needs
-  a schema check against the pinned `apl_chart_version`.
+  a schema check against the apl-core version actually deployed — which on managed
+  App Platform is Linode's to choose, readable via `llz ci assert-apl-deployed-version`
+  rather than from any pin. (`apl_chart_version`, the tfvar this line named, is
+  gone along with the rendered values.yaml the schema check took as input.)
 - **(c) Kyverno mutation / post-render.** A mutation that rewrites the
   apl-core-generated webhook + ExternalDNS Secret references (or the Secret
   contents) to the ESO-synced one. The repo already uses Kyverno for exactly

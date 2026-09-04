@@ -380,7 +380,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.NodeCount, "node-count", "", "node pool size, integer (default: example value)")
 	f.StringVar(&o.RunnerIPv4CIDRs, "runner-ipv4-cidrs", "", "comma-separated operator/CI egress IPv4 CIDRs (never 0.0.0.0/0)")
 	f.StringVar(&o.RunnerIPv6CIDRs, "runner-ipv6-cidrs", "", "comma-separated operator/CI egress IPv6 CIDRs")
-	f.StringVar(&o.AplChartVersion, "apl-chart-version", "", "apl-core chart version (apl_chart_version)")
+	f.StringVar(&o.AplChartVersion, "apl-chart-version", "", "apl-core chart version for spec.cluster.bootstrap.aplChartVersion; omit to track the llz baseline. Setting it to a version llz itself targets (now or previously) is a no-op across upgrades — `llz upgrade` retires such a pin so the env keeps tracking; only a value llz never set is held")
 	f.StringVar(&o.AplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
 	f.StringVar(&o.HARole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
 	f.StringVar(&o.HAGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")

@@ -135,7 +135,30 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	// operator can still save the edit, so it is the run that most needs to hear
 	// about it.
 	reportClobberedManaged(managedEdits, dryRun)
+
+	// THE APL-CORE PIN, and it is ABOVE THE DRY-RUN RETURN for the same reason
+	// reportClobberedManaged is: a dry run is the one where the operator can still
+	// change their mind, so it is the run that most needs to see this. Sited below,
+	// the whole lever was unreachable on `--dry-run` — the removal was never
+	// previewed, and the test asserting a dry run writes nothing was covering a path
+	// production never took.
+	//
+	// `spec.cluster.bootstrap.aplChartVersion` is optional and an omitted pin
+	// resolves to clusterspec.BaselineAplChartVersion, which is a value THIS release
+	// moved — so an environment that wrote the old baseline into the field now names
+	// a version its own llz does not target, deterministically, on every bump.
+	//
+	// The write half is sited further down, below the two gates that can abort and
+	// ahead of printSummary — see the comment there. Both orderings are pinned by
+	// TestUpgradeRunRetracksPinsBeforeRendering.
 	if dryRun {
+		// PRINTED, NOT DISCARDED. The return value was dropped on the floor here, so a
+		// dry run showed the per-file lines on stderr and then returned without the
+		// numbered checklist — including the "will BLOCK validation" entry that
+		// reportAplPinsLeftAlone argues must not be left to scrolling stderr. A dry
+		// run is the one where the operator is still deciding, so it is the run that
+		// most needs the summary.
+		printNextSteps(retrackAplPins(true))
 		return nil
 	}
 	// No provenance re-stamp: copier's `update` already rewrote .copier-answers.yml
@@ -191,14 +214,41 @@ func Run(dryRun bool, ref string, commit, noRender, noDoctor bool) error {
 	//
 	// AFTER the conflict gate on purpose: rendering over merge markers would bury
 	// the real failure under a parse error from a file the operator has to fix anyway.
+	// THE WRITE HALF, and it is down here rather than beside the preview because
+	// everything between them can `return err`: the answers-regression gate and the
+	// conflict-marker gate both abort the upgrade. Writing to the operator's owned
+	// spec files above them meant an aborted upgrade left a mutation its own failure
+	// message never mentioned. The dry run still previews at the earlier point,
+	// where the operator can still act on it.
+	//
+	// AND IT MUST PRECEDE printSummary, which is the ordering that actually binds
+	// below. An earlier version of this comment said the RENDER had to see the edit
+	// — that was simply false: EffectiveAplChartVersion has no non-test callers,
+	// `apl_chart_version` is no longer a tfvar, and nothing in the render path reads
+	// the pin. printSummary is different: it is `git diff --stat` over the whole
+	// tree, the one place an operator sees what the upgrade touched, and a write
+	// after it is a change to their spec that the summary silently omits. --commit
+	// below then records it either way.
+	pinSteps := retrackAplPins(false)
+
 	if !noRender {
 		if err := renderAfter(dryRun); err != nil {
+			// THE SPEC IS ALREADY EDITED BY THE TIME THIS CAN FAIL. Returning bare
+			// left the operator with a render error, silently modified spec files and
+			// none of the checklist — including a "will BLOCK validation" entry about
+			// a file this command had just rewritten. Same shape as the dry run that
+			// computed its steps and discarded them: the run that goes WRONG is the
+			// one that most needs to say what it already did.
+			printNextSteps(pinSteps)
 			return err
 		}
 	}
 
 	// ── Levers 3 and 5: what this command cannot do, said out loud ───────────
 	steps := reportWhatTheUpgradeCouldNotDo(newRef)
+	for _, st := range pinSteps {
+		steps = appendStep(steps, st)
+	}
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
 	// single reviewable summary rather than a scattered surprise at commit time.

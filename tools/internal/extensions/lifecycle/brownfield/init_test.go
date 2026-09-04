@@ -53,13 +53,19 @@ func TestReportToEnvAddOpts(t *testing.T) {
 	if o.NodeType != "g8-dedicated-16-4" || o.NodeCount != "4" { // largest pool
 		t.Errorf("nodeType=%q count=%q", o.NodeType, o.NodeCount)
 	}
-	// The chart version now comes from Deps.DefaultAplChartVersion, and the
-	// assertion that it is a SUPPORTED chart moved to package main with it — see
-	// TestImportScaffoldsASupportedChart, which checks the source of truth rather
-	// than the copy this fixture passes in.
-	if o.AplChartVersion != "6.1.0" {
-		t.Errorf("aplChartVersion=%q, want what Deps supplied", o.AplChartVersion)
-	}
+	// UNSET, DELIBERATELY. An omitted pin resolves to
+	// clusterspec.BaselineAplChartVersion and keeps resolving to it across every
+	// future bump, which is what "tracks the baseline" has to mean for an instance
+	// nobody hand-edits. Seeding the baseline as a literal here — which this did —
+	// made every imported instance born carrying a pin `llz upgrade` then deletes,
+	// so the scaffold was manufacturing the stale field the upgrade lever exists to
+	// retire. The version is still REPORTED to the operator; it is just not written
+	// into the spec.
+	// The field is GONE from EnvSpec entirely, which is stronger than asserting it
+	// is empty: this struct's header says a field appearing here is a claim that
+	// adoption can discover it, and after the seed was removed nothing wrote this
+	// one. A dead field that import.go still mapped into envdef.Opts was a claim
+	// with no source behind it, so it was deleted rather than left reading "".
 	// k8sVersion is not a field of EnvSpec at all: the source cluster's version is
 	// never a valid LKE target, so "must not be copied" is now structural rather
 	// than asserted.

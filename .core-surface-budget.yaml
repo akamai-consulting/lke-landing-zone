@@ -1639,6 +1639,19 @@ categories:
     #                       immutability is a property of apiserver validation and
     #                       nothing static can read it off this repo. Fixtures,
     #                       probe and grading are all in assertions/assertplatform.
+    #   1,951 / 129 files  -1 the `AplChartVersion: spec.AplChartVersion` mapping into
+    #                       envdef.Opts, which lost its last writer when `llz import
+    #                       init` stopped seeding the pin. An imported instance is now
+    #                       born UNPINNED so it tracks the baseline, and a field
+    #                       nothing sets was a claim with no source behind it.
+    #   1,952 / 129 files  +1 the AddCommand for `llz ci assert-apl-deployed-version`,
+    #                       the only check that reads the apl-core version RUNNING on a
+    #                       cluster. Its sibling `assert-apl-version` resolves the SPEC,
+    #                       which on managed App Platform cannot know the answer: Linode
+    #                       installs apl-core, apl_enabled is create-time only, and the
+    #                       API carries no version field. The label read, the parse and
+    #                       the verdict live in assertions/assertplatform; the line here
+    #                       is registration.
     budget: 1952
     exact: true
     include:

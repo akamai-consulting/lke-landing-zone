@@ -107,6 +107,11 @@ func TestEveryClusterLaneStaysItsOwnVisibleBinding(t *testing.T) {
 		"argo-comparisons": false,
 		"overlay-applied":  false,
 		"instance-custom":  false,
+		// Goes red when the platform Linode actually installed is a MAJOR away from
+		// the apl-core this llz release targets — the only lane that observes the
+		// deployed version at all, since the spec-side `apl-version` preflight can
+		// only read a pin nothing downstream of it controls.
+		"apl-deployed-version": false,
 	}
 	var verified int
 	for _, b := range Extension().Bindings {

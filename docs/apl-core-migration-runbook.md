@@ -29,14 +29,27 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       (its APIService `v1alpha1.acme.slicen.me` shows `Available=True`) — if it
       doesn't, every Let's Encrypt Certificate sits in Pending and no Istio
       Gateway gets TLS.
-- [ ] **Verify the apl chart version** — run
-      `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
-      and update `spec.cluster.bootstrap.aplChartVersion` in each
-      `environments/<env>.yaml` to match.
-      The pin this release targets is `clusterspec.BaselineAplChartVersion`
-      (`tools/internal/shared/clusterspec/aplversion.go`) — an omitted
-      `aplChartVersion` resolves to it, and `llz` prints it on any drift. Note the
-      `v`: apl-core's published chart version gained the prefix at 6.1.0, and a
+- [ ] **Leave the apl chart version alone.** This used to say "update
+      `spec.cluster.bootstrap.aplChartVersion` in each `environments/<env>.yaml`
+      to match", and that instruction is now the wrong move twice over. An omitted
+      pin resolves to `clusterspec.BaselineAplChartVersion`
+      (`tools/internal/shared/clusterspec/aplversion.go`), and `llz upgrade`
+      REMOVES a pin naming a version llz itself set — so writing one back only
+      re-creates the stale field the upgrade just retired. And on managed App
+      Platform the pin reaches no cluster at all: Linode installs apl-core,
+      `apl_enabled` is create-time only, and the Linode API has no version field,
+      so the pin moves nothing but what `llz ci assert-apl-version` resolves.
+      Set it only to hold that assertion at a version of your own choosing. llz
+      then leaves it alone — with one honest exception: a hold at a version that
+      *happens* to be one llz itself once targeted (`v6.2.0`, say) is
+      indistinguishable in the file from a pin that was tracking the baseline and
+      got left behind, so the upgrade drops it and you re-add it. A hold on
+      anything else — including a release candidate — survives untouched.
+      To see what is actually RUNNING — the only version that matters on managed —
+      use `llz ci assert-apl-deployed-version`, which reads the chart version
+      apl-core stamps on its own `apl-operator` Deployment. To see what is
+      published, `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`.
+      Note the `v`: apl-core's published chart version gained the prefix at 6.1.0, and a
       bare `6.x.y` still resolves but only via helm's "unable to find exact
       version requested" fallback. The supported FLOOR is `6.0.0`, so an instance
       mid-rollout warns rather than fails. If you are upgrading

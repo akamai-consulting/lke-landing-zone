@@ -133,6 +133,28 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-wave-health-vap | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # HERE, AND NOT IN llz-cluster-health.yml, for the reason this file states
+      # three comments up and the first attempt walked straight past: that workflow
+      # is workflow_dispatch-only AND the step would have sat behind an
+      # `assert-loki` input defaulting to false, so the "gate" would have run when a
+      # human clicked it and ticked a box. This is the drift that appears MONTHS
+      # after a cluster is built — Linode moves the managed App Platform on their
+      # schedule, with no event this repo sees — so a weekly cron is the only thing
+      # that will ever be looking. A fresh release-e2e cluster is on whatever Linode
+      # installed that day and agrees with itself by construction.
+      - name: Assert the deployed apl-core version is one this llz release targets
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        env:
+          # THE DOCUMENTED OVERRIDE HAS TO BE REACHABLE. The failure tells the
+          # operator to set this, and on managed App Platform they may have no other
+          # move — Linode owns the version, so a major roll is not something they can
+          # revert. GitHub repo variables are NOT auto-exported into the process, so
+          # without this line the remedy named in the error message did not exist.
+          # Unset renders empty, which the predicate reads as "not allowed" — the
+          # default stays strict.
+          LLZ_ALLOW_APL_CHART_MAJOR_DRIFT: ${{ vars.LLZ_ALLOW_APL_CHART_MAJOR_DRIFT }}
+        run: llz ci assert-apl-deployed-version | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Self-heal the team-OIDC device-flow client. keycloak-configure runs once at
       # bootstrap; if that run raced ahead of apl-core's Keycloak convergence it
       # warns + exits 0, leaving the `llz` client absent or missing the openid

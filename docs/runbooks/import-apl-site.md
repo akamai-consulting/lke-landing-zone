@@ -71,10 +71,16 @@ llz import init --report import-report.yaml --dir <instance-dir> --env <env>
 3. sets the component toggles the scan found, then `llz render`s
 4. writes `MIGRATION-TODO.md`
 
-**Target versions, not the source's.** `init` renders the migration *target*: it
-pins `apl_chart_version` to the chosen apl-core release and **leaves `k8s_version`
-at the template default** (the source's k8s version isn't a valid LKE target) —
-flagged in `MIGRATION-TODO.md` to set a valid `+lke` version for your account.
+**Target versions, not the source's.** `init` renders the migration *target*. It
+does **not** pin an apl-core version: the imported instance is born with
+`spec.cluster.bootstrap.aplChartVersion` unset, so it resolves to — and keeps
+tracking — the baseline this llz release targets. (It used to write the baseline in
+as a literal, which meant every imported instance carried a pin the next
+`llz upgrade` deleted. On managed App Platform the field reaches no cluster anyway:
+Linode owns the deployed version.) The target version is still reported to you and
+recorded in `MIGRATION-TODO.md`. `k8s_version` is **left at the template default**
+(the source's k8s version isn't a valid LKE target) — flagged in `MIGRATION-TODO.md`
+to set a valid `+lke` version for your account.
 
 **Component granularity.** LLZ components are coarser than APL's per-app flags
 (e.g. `observability` bundles prometheus + alertmanager + grafana + loki + otel).

@@ -70,18 +70,22 @@ This is a change from the four jobs that preceded this one, three of which
 carried `continue-on-error` at job level.
 
 That flag was swallowing less than it appeared to, and it was swallowing the
-wrong thing. `health-openbao` and `health-certmanager` are warn-only **in Go**
-("never fails the job") — they emit `::warning::` and exit 0 on a finding. So
-`continue-on-error` could only ever hide a **probe-path** failure: a dead
+wrong thing. `health-openbao` and `health-certmanager` are warn-only **on a
+finding** — they emit `::warning::` and exit 0 when they read the cluster and do
+not like what they see. They still **fail when they cannot read it at all** (an
+unreadable Certificate list is an error, not an empty one), which is the
+fail-closed rule this repo applies everywhere: "could not tell" is never a pass.
+So `continue-on-error` could only ever hide a **probe-path** failure: a dead
 checkout, a failed ACL open, a bad image pull. That is precisely what this
 weekly run exists to prove still works, and a probe that cannot report itself
 broken re-proves nothing.
 
-One of the checks *does* fail on a real finding, and says so:
+Two of the checks fail on a real FINDING — as distinct from failing because they could not look, which every check here does:
 
 | Check | Fails when |
 |---|---|
 | `assert-wave-health-vap` | the wave-health guard VAP stopped enforcing — the PR #142 bootstrap-wedge class it exists to prevent |
+| `assert-apl-deployed-version` | the apl-core RUNNING here is a MAJOR away from the version this llz release targets, or its version cannot be read at all. On managed App Platform **Linode** moves that version on their own schedule, with no event this repo sees, so a weekly cron is the only thing that will ever notice. Set the repo variable `LLZ_ALLOW_APL_CHART_MAJOR_DRIFT=1` to stage a major deliberately; a minor or patch apart only warns |
 
 There were two. `health-loki-objkey` was the other, and it is gone (#483) — it
 never once fired, which is the whole story below.
