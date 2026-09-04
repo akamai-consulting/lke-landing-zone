@@ -65,10 +65,9 @@ var deps = Deps{
 }
 
 // uninstalledExec is what an un-installed Exec seam answers: an ERROR naming the
-// wiring fault. Returning (nil, nil) fails closed too, but a caller then reports
-// "the listing did not parse as JSON", sending the reader after a platform that
-// changed shape when the real fault is that nobody called Install — the same
-// misattribution the lanes were just fixed to avoid.
+// wiring fault. Returning (nil, nil) fails closed too, but the caller then reports
+// "the listing did not parse as JSON" — blaming a platform that changed shape when
+// nobody called Install.
 func uninstalledExec(string, ...string) ([]byte, error) {
 	return nil, errors.New("the Exec capability was never installed (assertplatform.Install)")
 }
@@ -77,12 +76,10 @@ func uninstalledExec(string, ...string) ([]byte, error) {
 //
 // NIL FUNCS ARE BACKFILLED WITH THE SAFE DEFAULTS, because Install replaces the
 // whole struct: a caller that populates only the fields it cares about — the
-// ordinary way to write a struct literal — otherwise nils out the rest, and the
-// var block above promises the opposite ("defaulting to implementations that work
-// rather than to nil funcs"). A lane that called the nil Exec segfaulted instead of
-// reporting the read failure, which for a gate is the difference between a verdict
-// and a crash. Writer keeps its own accessor, W(), since a nil INTERFACE must
-// refuse rather than no-op.
+// ordinary way to write a struct literal — otherwise nils out the rest, against the
+// var block's promise above. Calling a nil func is a panic, which for a gate is the
+// difference between a verdict and a crash. Writer keeps its own accessor, W(),
+// since a nil INTERFACE must refuse rather than no-op.
 func Install(d Deps) {
 	if d.ExecCombined == nil {
 		d.ExecCombined = func(string, ...string) string { return "" }

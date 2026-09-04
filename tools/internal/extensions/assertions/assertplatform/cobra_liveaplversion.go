@@ -14,8 +14,8 @@ func AplDeployedVersionCmd() *cobra.Command {
 		Long: "Reads the apl-core version from the image tag of the apl-operator container,\n" +
 			"which apl-core sets from otomi.version — the platform version itself — and compares\n" +
 			"it against " + clusterspec.BaselineAplChartVersion + ".\n\n" +
-			"NOT the chart labels: helm.sh/chart and app.kubernetes.io/version carry the\n" +
-			"apl-operator SUB-chart's own packaging version, never the platform's.\n\n" +
+			"Not that Deployment's chart labels — apl-core relabels them with its operator\n" +
+			"chart's packaging version.\n\n" +
 			"A tag that is not a release version (apl-core allows a branch name in\n" +
 			"otomi.version) is reported as UNKNOWN rather than graded as drift.\n\n" +
 			"This is the only check that observes the DEPLOYED version. `assert-apl-version` reads\n" +

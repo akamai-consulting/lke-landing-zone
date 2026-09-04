@@ -364,15 +364,9 @@ func TestAplDeployedFailsWhenOnlySiblingsArePresent(t *testing.T) {
 	}
 }
 
-// THE DUPLICATION THIS PACKAGE IS FORCED TO CARRY, pinned so it cannot rot.
-//
-// bootstrapcluster exports the same two strings and annotates the same Deployment,
-// but `internal/extensions` packages may not import each other — production code
-// aliasing them fails TestNoNewExtensionToExtensionImports, and the sanctioned fix
-// (splitting bootstrapcluster's library half into internal/shared) is a far wider
-// change than two constants justify. A TEST may cross that boundary where the
-// package may not, so the rename-one-side-only failure the rule would otherwise
-// invite still cannot land quietly: rename either copy and this goes red.
+// THE DUPLICATION THIS PACKAGE IS FORCED TO CARRY (see the const block), pinned so
+// it cannot rot. A TEST may cross the extension-to-extension boundary that
+// production code may not, so renaming either copy goes red here.
 func TestAplOperatorNamesAgreeWithBootstrapcluster(t *testing.T) {
 	if aplOperatorNamespace != bootstrapcluster.AplOperatorNamespace {
 		t.Errorf("namespace %q != bootstrapcluster's %q — the lane would read a namespace nothing installs into",
@@ -391,11 +385,8 @@ func TestAplOperatorNamesAgreeWithBootstrapcluster(t *testing.T) {
 	}
 }
 
-// THE REMEDY MUST MATCH THE DIRECTION OF THE GAP. One blanket sentence got it wrong
-// half the time: "upgrade llz to a release that targets this platform" is impossible
-// when the CLUSTER is the old one, because no newer llz targets apl-core 5.x. An
-// instruction that cannot be followed is worse than none — it spends the reader's
-// time before they work out it is wrong.
+// The remedy must match the direction of the gap — see classifyAplDeployed. This
+// pins it: an instruction that cannot be followed is worse than none.
 func TestBlockingRemedyMatchesTheDriftDirection(t *testing.T) {
 	behind := classifyAplDeployed("5.0.0")
 	if behind.Err == nil {
@@ -440,11 +431,8 @@ func TestVerdictNamesItsSource(t *testing.T) {
 	}
 }
 
-// A STAGED MAJOR IS NOT A PATCH LAG. Both reach the permitted-drift arm — a
-// minor/patch gap outright, and a MAJOR one once the override is set — and one
-// sentence covered both, so a deliberately staged 7.0.0 against a v6.2.1 baseline
-// read in the weekly check exactly like a point-release lag. The override suppresses
-// the block, not the distance.
+// A staged major is not a patch lag — see classifyAplDeployed. The override
+// suppresses the block, not the distance.
 func TestStagedMajorReadsDifferentlyFromAPatchLag(t *testing.T) {
 	t.Setenv(clusterspec.AllowMajorDriftEnv, "1")
 	staged := classifyAplDeployed("7.0.0")
@@ -491,18 +479,9 @@ func TestSoleContainerRelaxationRefusesAForeignImage(t *testing.T) {
 	}
 }
 
-// AN UNSET otomi.version COMES BACK AS THE SUB-CHART'S appVersion.
-//
-// The chart renders `image: "{{ .Values.image.repository }}:{{ .Values.image.tag |
-// default .Chart.AppVersion }}"` and the values template supplies `tag: {{
-// $version }}` with no default of its own — so an empty otomi.version lets Helm's
-// `default` fire and the tag becomes 1.16.0, the very sub-chart constant this lane
-// was rewritten to stop reading, arriving by a new route. Graded as drift it reads
-// "a MAJOR apart — raise the rollout with Linode", which is a fleet-wide red about
-// a gap that does not exist.
-//
-// The guard is derived from AplBaselineHistory rather than written down, so it
-// cannot rot as the sub-chart's own version moves.
+// AN UNSET otomi.version COMES BACK AS THE SUB-CHART'S appVersion (1.16.0), via
+// Helm's `| default .Chart.AppVersion` — see implausibleMajor. Graded as drift that
+// is a fleet-wide red about a gap that does not exist.
 func TestATagPredatingEveryBaselineIsNotAPlatformVersion(t *testing.T) {
 	for _, tag := range []string{"1.16.0", "0.2.0", "1.20.0"} {
 		v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
@@ -549,9 +528,8 @@ func TestZeroContainersIsReportedAsAReadFailure(t *testing.T) {
 	}
 }
 
-// A NAMED CONTAINER WITH AN EMPTY IMAGE IS NOT A MISSING CONTAINER. Collapsing the
-// two produced a message that denied the thing it then printed: `has no container
-// named "apl-operator" … Containers present: apl-operator`.
+// A NAMED CONTAINER WITH AN EMPTY IMAGE IS NOT A MISSING CONTAINER — collapsing
+// them produces a message that denies the thing it then prints.
 func TestNamedContainerWithNoImageIsItsOwnFailure(t *testing.T) {
 	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
 		map[string]string{nameLabel: aplOperatorName},
@@ -601,10 +579,8 @@ func TestAllCandidatesUnreadableReportsTheFailure(t *testing.T) {
 	}
 }
 
-// EVERY UNREADABLE ARM CARRIES THE REMEDY. These reach every adopter's weekly
-// scheduled check, which has no continue-on-error, and they share one fix. Only the
-// no-matching-Deployment arm used to say so; a fleet-wide gate that names no way
-// out is a gate that gets switched off.
+// EVERY UNREADABLE ARM CARRIES THE REMEDY — see unreadableRemedy. A fleet-wide gate
+// that names no way out is a gate that gets switched off.
 func TestUnreadableFailuresCarryTheRemedy(t *testing.T) {
 	cases := map[string][]byte{
 		"no deployment": deployJSONContainers("other", map[string]string{nameLabel: "other"},
@@ -733,13 +709,9 @@ func TestLanePropagatesTheVerdict(t *testing.T) {
 	}
 }
 
-// A FOREIGN IMAGE ON THE PRIMARY PATH MUST BE REFUSED, not just on the relaxation.
-//
-// Name-matching is not identity: any chart called apl-operator produces a container
-// of that name, because apl-core's template names it `{{ .Chart.Name }}`. The gate
-// was applied to the sole-container fallback only, so the path it relaxes stayed
-// laxer than the relaxation — and a foreign image tagged with the baseline exited 0
-// reporting agreement, which is a wrong GREEN on a gating lane.
+// A FOREIGN IMAGE ON THE PRIMARY PATH MUST BE REFUSED, not just on the relaxation
+// — see operatorImage. A foreign image tagged with the baseline is a wrong GREEN on
+// a gating lane, which is the one failure this lane must never produce.
 func TestForeignImageIsRefusedOnTheNamedContainerPath(t *testing.T) {
 	for _, image := range []string{
 		"docker.io/evilcorp/backdoor:" + clusterspec.BaselineAplChartVersion,
@@ -761,14 +733,10 @@ func TestForeignImageIsRefusedOnTheNamedContainerPath(t *testing.T) {
 	}
 }
 
-// A LABEL MATCH OUTRANKS A NAME-ONLY MATCH, so kubectl's ordering cannot decide the
-// verdict.
-//
-// Holding the first FAILURE was not enough: a stale Deployment normally carries a
-// readable old tag, so it produced a verdict and won outright. Both orderings must
-// now give the same answer — that equality is the real assertion, because a lane
-// whose result depends on list order is wrong in one of the two orders whatever the
-// expected value is.
+// A LABEL MATCH OUTRANKS A NAME-ONLY MATCH — see evaluateAplDeployed. Both
+// orderings must give the same answer; that equality is the real assertion, because
+// a lane whose result depends on list order is wrong in one of the two orders
+// whatever the expected value is.
 func TestAStaleNameMatchDoesNotBeatTheLabelledOperator(t *testing.T) {
 	stale := `{"metadata":{"name":"apl-operator","labels":{}},"spec":{"template":{"spec":{"containers":[` +
 		`{"name":"apl-operator","image":"docker.io/linode/apl-core:v5.0.0"}]}}}}`
