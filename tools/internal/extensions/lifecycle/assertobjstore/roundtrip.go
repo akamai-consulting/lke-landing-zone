@@ -396,7 +396,8 @@ func Run(only []string, keyPrefix, root, env string, settle, interval time.Durat
 	// checked, and silently dropping it because the spec disagrees would answer a
 	// different question than the one asked.
 	if len(only) > 0 {
-		consumers = objConsumers
+		// Built from objConsumers, NOT from the narrowed set — that is what makes
+		// this an override rather than a filter on top of a filter.
 		byName := map[string]objConsumer{}
 		for _, c := range objConsumers {
 			byName[c.Name] = c
