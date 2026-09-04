@@ -81,6 +81,14 @@ var aplOverlayTargets = map[string]string{
 	clusterspec.OverlayObjFile: "env/settings/obj.yaml",
 }
 
+// aplOtomiTarget is apl-core's platform settings CR on the machine branch — the
+// file that carries `spec.version`, and therefore the deployed platform version.
+//
+// NOT IN aplOverlayTargets, because that map is for files LLZ owns OUTRIGHT and
+// writes whole. apl-core co-writes this one and LLZ owns a single key of it, so it
+// takes the key-level path (otomiOverlayFiles) exactly as the per-app CRs do.
+const aplOtomiTarget = "env/settings/otomi.yaml"
+
 // aplAppTarget is apl-core's per-app AplApp CR path on the machine branch.
 func aplAppTarget(app string) string { return "env/apps/" + app + ".yaml" }
 
@@ -200,6 +208,10 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 	// absent, so apl-operator provisions the namespace + Keycloak group + realm role
 	// team-<name>. Never clobbers a team apl-core / the App Platform Console owns.
 	if err := teamOverlayFiles(ctx, repo, cfg, files); err != nil {
+		return err
+	}
+
+	if err := otomiOverlayFiles(ctx, repo, cfg, files); err != nil {
 		return err
 	}
 
@@ -391,6 +403,61 @@ func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[strin
 		}
 	}
 	return envFound, nil
+}
+
+// otomiOverlayFiles asserts the platform VERSION onto apl-core's own settings CR
+// when the instance has opted into owning it.
+//
+// THIS IS THE HALF THAT WAS MISSING, and its absence is why the render alone did
+// nothing: `llz render` wrote apl-values/<env>/apl-overlay/otomi.yaml, and no
+// target consumed it. aplOverlayTargets maps only obj.yaml; apps and teams have
+// their own target functions. So the file was committed, reviewed, and never
+// reached the cluster — the rendered-into-the-void shape this tree has shipped
+// before.
+//
+// No source means the instance has not set spec.cluster.bootstrap.manageAplVersion,
+// which is the default: Linode versions apl-core on managed and taking that over is
+// a decision. LLZ then has no opinion and says nothing.
+func otomiOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string) error {
+	srcPath := envOverlayPath(cfg.Env, clusterspec.OverlayOtomiFile)
+	src, found, err := repo.ReadFile(ctx, cfg.SourceBranch, srcPath)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", srcPath, err)
+	}
+	if !found {
+		return nil // not opted in — Linode owns the version
+	}
+	want, err := clusterspec.OtomiOverlayVersion([]byte(src))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", srcPath, err)
+	}
+	if want == "" {
+		return nil
+	}
+	current, exists, err := repo.ReadFile(ctx, cfg.TargetBranch, aplOtomiTarget)
+	if err != nil {
+		return fmt.Errorf("read target %s: %w", aplOtomiTarget, err)
+	}
+	if !exists {
+		// LOUD, not silent, and unlike a per-app CR this one does not get a pass.
+		// An instance that asked to own the platform version and is asserting it
+		// against nothing is the exact state this channel exists to prevent, and it
+		// is invisible from the source side — the overlay file is present and
+		// correct on the instance branch either way.
+		fmt.Printf("apl-overlay: manageAplVersion is set (want apl-core %s) but %s does not exist on %s yet — "+
+			"the platform version is asserted by NOTHING until apl-operator creates it. Expected on a fresh "+
+			"cluster; if it persists, apl-core is not keeping its settings there and the version needs another home.\n",
+			want, aplOtomiTarget, cfg.TargetBranch)
+		return nil
+	}
+	updated, changed, err := clusterspec.SetOtomiVersion([]byte(current), want)
+	if err != nil {
+		return fmt.Errorf("set version on %s: %w", aplOtomiTarget, err)
+	}
+	if changed {
+		files[aplOtomiTarget] = string(updated)
+	}
+	return nil
 }
 
 // teamOverlayFiles reads LLZ's per-env teams manifest and, for each declared team,

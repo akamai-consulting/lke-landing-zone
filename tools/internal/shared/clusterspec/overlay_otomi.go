@@ -1,6 +1,9 @@
 package clusterspec
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // overlay_otomi.go — the apl-core version, rendered as apl-core's own settings CR.
 //
@@ -88,4 +91,58 @@ func aplCoreVersionValue(v string) string {
 		return v
 	}
 	return "v" + v
+}
+
+// OtomiOverlayVersion reads spec.version out of the rendered otomi overlay source.
+// "" (with no error) means the source says nothing, which is how an instance that
+// has not opted in reads.
+func OtomiOverlayVersion(src []byte) (string, error) {
+	m, err := unmarshalMap(src)
+	if err != nil {
+		return "", err
+	}
+	spec, ok := m["spec"].(map[string]any)
+	if !ok {
+		return "", nil
+	}
+	v, _ := spec["version"].(string)
+	return strings.TrimSpace(v), nil
+}
+
+// SetOtomiVersion asserts spec.version on apl-core's OWN otomi settings CR,
+// leaving every other key untouched.
+//
+// A KEY-LEVEL MERGE, NOT A FILE WRITE, and on this file that is not a refinement —
+// it is the difference between working and destroying the platform's settings.
+// apl-core co-writes env/settings/otomi.yaml (its commits read `updated values
+// [ci skip]`) and keeps eight other fields there — aiEnabled, hasExternalDNS,
+// hasExternalIDP, isMultitenant, isPreInstalled, nodeSelector, useORCS — observed
+// live on a managed cluster. LLZ owns exactly one of its keys. Writing the
+// rendered overlay wholesale would blank the rest.
+//
+// The CREATE-if-absent model the team CRs use is also wrong here, for the opposite
+// reason: that file always exists, so a never-clobber rule would mean the version
+// LLZ renders never lands at all — the feature would look wired and do nothing.
+//
+// Returns changed=false when the version already matches, so the reconciler does
+// not push a commit every pass against a file apl-core keeps rewriting.
+func SetOtomiVersion(current []byte, want string) (updated []byte, changed bool, err error) {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return current, false, nil
+	}
+	m, err := unmarshalMap(current)
+	if err != nil {
+		return nil, false, err
+	}
+	spec, ok := m["spec"].(map[string]any)
+	if !ok {
+		spec = map[string]any{}
+		m["spec"] = spec
+	}
+	if cur, ok := spec["version"].(string); ok && cur == want {
+		return current, false, nil // already correct — no push, no re-marshal
+	}
+	spec["version"] = want
+	return marshalMap(m), true, nil
 }

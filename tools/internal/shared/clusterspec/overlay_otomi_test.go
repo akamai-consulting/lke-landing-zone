@@ -92,3 +92,95 @@ func TestOtomiOverlayVersionMatchesAplCoreSchema(t *testing.T) {
 		}
 	}
 }
+
+// THE LIVE FILE, verbatim from a managed e2e cluster's apl-<env> branch
+// (env/settings/otomi.yaml, written by apl-core itself — its commit subject is
+// "updated values [ci skip]"). Every field beside `version` belongs to apl-core.
+const liveOtomiCR = `kind: AplCapabilitySet
+metadata:
+    name: otomi
+spec:
+    aiEnabled: false
+    hasExternalDNS: false
+    hasExternalIDP: false
+    isMultitenant: true
+    isPreInstalled: true
+    nodeSelector: {}
+    useORCS: true
+    version: v6.2.1
+`
+
+// LLZ OWNS ONE KEY OF A FILE APL-CORE CO-WRITES. A file-level write would blank
+// seven other settings — isMultitenant and useORCS among them — which is why this
+// path merges by key. The fixture is the real file, so a regression to a wholesale
+// write cannot pass.
+func TestSetOtomiVersionPreservesAplCoresOwnFields(t *testing.T) {
+	updated, changed, err := SetOtomiVersion([]byte(liveOtomiCR), "v6.2.1-rc.2")
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("a different version must register as a change")
+	}
+	got := string(updated)
+	for _, keep := range []string{
+		"aiEnabled", "hasExternalDNS", "hasExternalIDP",
+		"isMultitenant", "isPreInstalled", "nodeSelector", "useORCS",
+		"AplCapabilitySet", "otomi",
+	} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("merge dropped %q — apl-core owns that field:\n%s", keep, got)
+		}
+	}
+	if !strings.Contains(got, "v6.2.1-rc.2") {
+		t.Errorf("the asserted version is missing:\n%s", got)
+	}
+	// The values that were TRUE must still be true — presence of the key is not
+	// enough, a merge that reset them to zero would still contain the name.
+	for _, pair := range []string{"isMultitenant: true", "useORCS: true", "isPreInstalled: true"} {
+		if !strings.Contains(got, pair) {
+			t.Errorf("merge changed %q:\n%s", pair, got)
+		}
+	}
+}
+
+// AN UNCHANGED VERSION MUST NOT PUSH. apl-core rewrites this file on its own
+// schedule; a reconciler that re-marshalled it every pass would churn a commit
+// against it forever.
+func TestSetOtomiVersionIsANoOpWhenAlreadyCorrect(t *testing.T) {
+	updated, changed, err := SetOtomiVersion([]byte(liveOtomiCR), "v6.2.1")
+	if err != nil {
+		t.Fatalf("merge failed: %v", err)
+	}
+	if changed {
+		t.Error("the version already matches — that must not be a push")
+	}
+	if string(updated) != liveOtomiCR {
+		t.Error("a no-op must return the bytes untouched, not a re-marshal")
+	}
+	// An empty desired version is "no opinion", not "blank it".
+	if _, changed, _ := SetOtomiVersion([]byte(liveOtomiCR), "  "); changed {
+		t.Error("an empty desired version must not rewrite the file")
+	}
+}
+
+// The reader must find the version the renderer writes — the two halves of this
+// channel, checked against each other rather than each against its own copy.
+func TestOtomiOverlayVersionReadsWhatRenderWrote(t *testing.T) {
+	b := Bootstrap{ManageAplVersion: true, AplChartVersion: "6.2.0"}
+	src := RenderOtomiOverlayEnv(b)
+	if src == "" {
+		t.Fatal("premise: an opted-in bootstrap must render an overlay")
+	}
+	got, err := OtomiOverlayVersion([]byte(src))
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if got != "v6.2.0" {
+		t.Errorf("version = %q, want %q", got, "v6.2.0")
+	}
+	// And a not-opted-in instance renders nothing, which reads as no opinion.
+	if s := RenderOtomiOverlayEnv(Bootstrap{AplChartVersion: "6.2.0"}); s != "" {
+		t.Errorf("manageAplVersion is false — nothing must be rendered, got %q", s)
+	}
+}
