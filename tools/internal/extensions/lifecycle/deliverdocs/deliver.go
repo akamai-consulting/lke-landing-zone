@@ -70,9 +70,29 @@ func Run(dir, org, ref, root, templateRoot string) error {
 	if err != nil {
 		return fmt.Errorf("read docs dir %s: %w", dir, err)
 	}
-	var removed []string
+	// PRUNE ONLY WHAT WE DELIVERED. The keep-set alone is not a safe removal rule:
+	// applied to the INSTANCE's docs/ it deletes every top-level entry the template
+	// does not ship -- including a directory the adopter created. That is not
+	// hypothetical, and it contradicts what the template itself tells adopters in
+	// the docs/local.md it ships ("a directory of your own alongside the delivered
+	// runbooks/ and playbooks/ persists across upgrades"). It did not, because this
+	// loop ran on every render AND every `copier update`, and RemoveAll does not
+	// care who wrote the directory.
+	//
+	// The template's own docs/ tree is the correct removal set: this verb runs
+	// immediately after `cp -a <template>/docs/. docs/`, so "delivered by the
+	// template" is exactly "was just copied in". Both real callers pass
+	// --template-root (copier.yml `_tasks`, and the release-e2e instantiate job),
+	// so the safe path is the normal one.
+	delivered, deliveredKnown := deliveredEntries(templateRoot)
+	var removed, preserved []string
 	for _, e := range entries {
 		if platform.DeliveredDocs[e.Name()] {
+			continue
+		}
+		if deliveredKnown && !delivered[e.Name()] {
+			// The instance's own. Not ours to delete.
+			preserved = append(preserved, e.Name())
 			continue
 		}
 		if err := w.RemoveAll(relTo(filepath.Join(dir, e.Name()))); err != nil {
@@ -96,13 +116,51 @@ func Run(dir, org, ref, root, templateRoot string) error {
 		}
 	}
 	sort.Strings(removed)
+	sort.Strings(preserved)
 	fmt.Printf("deliver-docs: kept the operator set (quickstart + runbooks + playbooks); referenced %d other entr%s at the template repo.\n",
 		len(removed), plural(len(removed), "y", "ies"))
+	if len(preserved) > 0 {
+		fmt.Printf("deliver-docs: left %d instance-owned entr%s in place: %s\n",
+			len(preserved), plural(len(preserved), "y", "ies"), strings.Join(preserved, ", "))
+	}
+	if !deliveredKnown && len(removed) > 0 {
+		// Without --template-root there is no way to tell a template doc from one
+		// the adopter wrote, so this fell back to the keep-set and the removal is
+		// potentially destructive. Name what went, rather than only counting it.
+		fmt.Printf("deliver-docs: WARNING -- no --template-root, so the prune could not tell template docs from yours; removed: %s\n",
+			strings.Join(removed, ", "))
+	}
 	if repointed > 0 {
 		fmt.Printf("deliver-docs: repointed %d instance-root link%s to template-only paths.\n",
 			repointed, plural(repointed, "", "s"))
 	}
 	return nil
+}
+
+// deliveredEntries lists the top-level names in the TEMPLATE's own docs/ tree --
+// i.e. exactly what the `cp -a` ahead of this verb just delivered, and therefore
+// the only entries this verb has any business removing. Anything else under the
+// instance's docs/ was written by the adopter.
+//
+// Returns ok=false when it cannot see the template (no --template-root, or an
+// unreadable tree). The caller then falls back to the keep-set, which is the old
+// -- destructive -- behaviour, and says so on stderr. That path is kept because
+// the copier task's middle fallback rung and the "run it by hand to slim docs/"
+// message in copier.yml both invoke the verb without --template-root; failing
+// closed there would silently stop slimming instead.
+func deliveredEntries(templateRoot string) (map[string]bool, bool) {
+	if templateRoot == "" {
+		return nil, false
+	}
+	entries, err := os.ReadDir(filepath.Join(templateRoot, "docs"))
+	if err != nil {
+		return nil, false
+	}
+	m := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		m[e.Name()] = true
+	}
+	return m, true
 }
 
 // ── the instance ROOT, which the docs/-scoped rewrite never sees ─────────────

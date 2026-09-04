@@ -31,9 +31,21 @@ to put them is here.
 - Anything you would otherwise have appended to `README.md` or `docs/README.md`
 
 Subdirectories you create under `docs/` are yours too. The template only
-overwrites the files it actually ships, and it never deletes one it does not know
-about — so a directory of your own alongside the delivered `runbooks/` and
-`playbooks/` persists across upgrades. What it cannot do is keep a link to it
+overwrites the files it actually ships, and `llz ci deliver-docs` prunes only what
+it just delivered — so a directory of your own alongside the delivered `runbooks/`
+and `playbooks/` persists across upgrades. What it cannot do is keep a link to it
 alive from a file the template owns, which is what this page is for.
+
+> **One name to avoid.** The prune removes by top-level *name*, so a directory of
+> yours that reuses a name the template ships (`designs/`, `architecture/`,
+> `adr/`, `infosec/`, `workflows/`) is indistinguishable from the delivered one and
+> is pruned with it. Pick a name of your own — your org, your team, your instance.
+>
+> This paragraph used to promise that the template "never deletes one it does not
+> know about". It did: until the fix that added this note, the prune walked your
+> `docs/` and removed every top-level entry outside `{quickstart.md, runbooks,
+> playbooks, README.md, local.md}` — your directories included, on every render and
+> every `copier update`. If you are on an older `llz`, `llz self-update` before your
+> next `llz upgrade`.
 
 <!-- Add your links below. -->
