@@ -22,14 +22,71 @@ import (
 // chart with a bare `version: 6.0.0`; the release-automation rework that shipped
 // with 6.1.0 (upstream ADR 2026-06-02-release-branch-per-cycle) changed the
 // published Chart.yaml to `version: v6.1.0`, and the chart git tag from
-// `apl-6.0.0` to `apl-v6.1.0`. That convention held at 6.2.0 (verified against
-// the published index: `version: v6.2.0`, tag `apl-v6.2.0`). `helm --version
-// 6.2.0` still RESOLVES (helm treats the flag as a semver constraint and v6.2.0
-// normalises to 6.2.0), but only with an "unable to find exact version
-// requested" warning, so we carry the exact published string. Every comparison
-// here goes through AplSemver, which strips the prefix — a spec pinned to a bare
-// "6.2.0" is still DriftNone.
-const BaselineAplChartVersion = "v6.2.0"
+// `apl-6.0.0` to `apl-v6.1.0`. That convention has held since (verified against
+// the published index for this pin: `version: v6.2.1`, tag `apl-v6.2.1`).
+// `helm --version 6.2.1` still RESOLVES (helm treats the flag as a semver
+// constraint and v6.2.1 normalises to 6.2.1), but only with an "unable to find
+// exact version requested" warning, so we carry the exact published string.
+// Every comparison here goes through AplSemver, which strips the prefix — a spec
+// pinned to a bare "6.2.1" is still DriftNone.
+//
+// v6.2.1 is a PATCH over v6.2.0 and the first patch-level baseline this repo has
+// carried, so note what that does to an instance still pinned to v6.2.0: patch
+// drift classifies as AplChartDriftMinor, which WARNS and never blocks. Nothing
+// in the release forces the move — it is three BYO-DNS render fixes
+// (linode/apl-core#3549 external-dns + cert-manager settings, #3559 external-dns
+// secrets) on the exact path LLZ drives with its Linode DNS token. apl-core's
+// values-schema.yaml is the SAME BLOB at both tags (git sha 9502538c), so nothing
+// downstream of this constant has to move with it.
+const BaselineAplChartVersion = "v6.2.1"
+
+// AplBaselineHistory is every apl-core chart version an llz release has targeted,
+// oldest first, WITH THE CURRENT BASELINE AS THE LAST ELEMENT.
+//
+// It exists so `llz upgrade` can tell a pin that was TRACKING US from a pin the
+// operator chose. `spec.cluster.bootstrap.aplChartVersion` is optional and an
+// omitted pin resolves to the baseline — so an instance that writes the baseline
+// into the field is stating what the default already says, and the statement goes
+// stale the next time the baseline moves. A pin matching any entry here is one of
+// ours; anything else is a deliberate choice and must survive an upgrade
+// untouched. Without this list the upgrade would have to guess, and guessing wrong
+// silently moves an environment the operator meant to hold back.
+//
+// THE LAST ELEMENT IS THE BASELINE, deliberately, so the two cannot drift: the
+// constant below is asserted against `AplBaselineHistory[len-1]`, which makes it
+// impossible to bump the baseline without recording the version it replaced.
+// A plain "previous baselines" list would have rotted the first time someone
+// bumped and forgot to append — and the failure would have been silent, because a
+// missing entry only means an old pin stops being recognised as ours.
+var AplBaselineHistory = []string{"6.0.0", "v6.1.0", "v6.2.0", "v6.2.1"}
+
+// WasAplBaseline reports whether a pin names a version llz has ever targeted.
+//
+// Only the leading "v" is normalised away, so a bare "6.2.0" matches the published
+// "v6.2.0" — an instance that dropped the prefix is still tracking us.
+//
+// A PRE-RELEASE IS NOT THE RELEASE, and that is why this does NOT go through
+// AplSemver like every other comparison in this file. AplSemver deliberately
+// strips `-rc.1` because the DRIFT question cares about the numeric triple and not
+// the release channel. This question is the opposite: llz has never targeted
+// `v6.2.1-rc.1`, so a pin naming it is an operator deliberately riding a release
+// candidate — exactly the choice `llz upgrade` must leave alone. Reusing the
+// lenient parser here would have deleted it as "one of ours".
+func WasAplBaseline(pin string) bool {
+	norm := func(v string) string {
+		return strings.TrimPrefix(strings.TrimSpace(v), "v")
+	}
+	pin = norm(pin)
+	if pin == "" {
+		return false
+	}
+	for _, b := range AplBaselineHistory {
+		if norm(b) == pin {
+			return true
+		}
+	}
+	return false
+}
 
 // AllowMajorDriftEnv opts an instance out of the major-version gate for the
 // duration of a staged upgrade (e.g. dev pinned a major ahead of prod while the
@@ -128,6 +185,37 @@ func majorDriftAllowed() bool {
 	return false
 }
 
+// AplChartDriftBlocks reports whether a drift classification is a BLOCKING one,
+// honouring the operator's staged-upgrade override.
+//
+// EXPORTED, AND THE ONLY COPY OF THIS RULE — but read the next paragraph before
+// relying on the count. The rule is "major in either direction, unless the escape
+// hatch is set", and restating it anywhere else is how two gates come to disagree:
+// the live lane was written without the escape-hatch arm and would have reddened a
+// gating check on a condition its operator could neither fix nor override, because
+// on managed App Platform LINODE moves the version.
+//
+// ONE PRODUCTION CONSUMER, NOT TWO. assertplatform's assert-apl-deployed-version
+// decides through this. aplChartVersionError below — the spec-side gate this was
+// extracted to share WITH — turns out to have no production caller at all: it and
+// AplChartVersionWarnings are reachable only from their own tests. The delivered
+// preflight is `llz ci assert-apl-version`, which calls AplVersionSupported, a plain
+// >= MinSupportedAplChartVersion floor check that knows nothing about drift or the
+// override.
+//
+// That is recorded rather than fixed here because wiring a dormant gate would start
+// failing instances that pass today — a decision with its own blast radius, not a
+// side effect of a version bump. What it does change is what may be CLAIMED: a
+// message telling an operator that a major-ahead pin "will BLOCK validation, set
+// AllowMajorDriftEnv" was wrong twice over, and aplpin.go asks AplVersionSupported
+// now precisely because that is the predicate the delivered gate runs.
+func AplChartDriftBlocks(drift AplChartDrift) bool {
+	if drift != AplChartDriftMajorBehind && drift != AplChartDriftMajorAhead {
+		return false
+	}
+	return !majorDriftAllowed()
+}
+
 // aplChartVersionError returns the BLOCKING problem with an environment's pin,
 // or nil. Major drift blocks in both directions: a pin a major behind the
 // baseline is the silent-stale case (the instance keeps deploying the old APL
@@ -140,10 +228,7 @@ func aplChartVersionError(env, pin string) error {
 	if drift == AplChartDriftUnparseable {
 		return fmt.Errorf("environments.%s.cluster.bootstrap.aplChartVersion %q is not a MAJOR.MINOR.PATCH chart version", env, pin)
 	}
-	if drift != AplChartDriftMajorBehind && drift != AplChartDriftMajorAhead {
-		return nil
-	}
-	if majorDriftAllowed() {
+	if !AplChartDriftBlocks(drift) {
 		return nil
 	}
 	pMaj, _, _, _ := AplSemver(pin)
