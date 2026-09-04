@@ -155,6 +155,32 @@ jobs:
           LLZ_ALLOW_APL_CHART_MAJOR_DRIFT: ${{ vars.LLZ_ALLOW_APL_CHART_MAJOR_DRIFT }}
         run: llz ci assert-apl-deployed-version | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # THE SAME ARGUMENT AS THE STEP ABOVE, for a lane that already existed and
+      # that nothing has ever run on an adopter instance. `assert-obj-roundtrip`
+      # is a GATING lane of `llz ci assert-suite`, and assert-suite is invoked in
+      # exactly one place — llz-bootstrap-openbao.yml, behind an `assert_loki`
+      # input that is documented "Default false (normal instances); the
+      # release-e2e gate sets it true". So on every real deployment the gate is
+      # unreachable, and what DOES run at bootstrap is the preflight
+      # verify-object-storage, which lists buckets through the Linode API and
+      # confirms they exist by label.
+      #
+      # That distinction is not academic. On a production instance both consumers
+      # returned 403 AccessDenied on every write for 42 days — the buckets existed
+      # and the preflight passed the whole time, because the minted keys were
+      # scoped to one label prefix and the buckets created under another. Loki
+      # never wrote a chunk; its WAL grew until replay OOMKilled the ingester in a
+      # loop. The gate that names this exact failure ("the credential
+      # authenticated but is not permitted to write here") was sitting in the
+      # repo, wired to nothing.
+      #
+      # A shorter settle than the command's 120s default on purpose: that default
+      # is sized for a post-bootstrap cluster still converging, and here the only
+      # thing a long window buys is a slower red.
+      - name: Assert Loki and Harbor can actually WRITE to object storage
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        run: llz ci assert-obj-roundtrip --settle 60 | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Self-heal the team-OIDC device-flow client. keycloak-configure runs once at
       # bootstrap; if that run raced ahead of apl-core's Keycloak convergence it
       # warns + exits 0, leaving the `llz` client absent or missing the openid

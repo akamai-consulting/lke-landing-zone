@@ -10,6 +10,7 @@ package assertobjstore
 // elsewhere?") answered it.
 
 import (
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ import (
 )
 
 func AssertObjRoundTripCmd() *cobra.Command {
-	var only, keyPrefix string
+	var only, keyPrefix, root, env string
 	var settle, interval int
 	c := &cobra.Command{
 		Use:   "assert-obj-roundtrip",
@@ -38,15 +39,26 @@ func AssertObjRoundTripCmd() *cobra.Command {
 			"config this FAILS rather than deriving one — the derived endpoint is the view\n" +
 			"that was already wrong.\n\n" +
 			"Writes, because Loki writes chunks continuously and Harbor writes on every\n" +
-			"push; a read-only probe passes on a bucket that has gone read-only. Exit 0 / 1.",
+			"push; a read-only probe passes on a bucket that has gone read-only. Exit 0 / 1.\n\n" +
+			"Both consumers are OPTIONAL apl-core apps, so on a managed cluster the set is\n" +
+			"narrowed to the ones spec.cluster.bootstrap.managedApps declares — an instance\n" +
+			"that never enabled Harbor has no credential Secret for it, and failing that\n" +
+			"forever is how a scheduled gate gets switched off. Skips are printed. An\n" +
+			"unreadable spec checks EVERYTHING rather than narrowing on evidence it does not\n" +
+			"have, and --only overrides the narrowing entirely.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return Run(cigate.SplitCSVList(only), keyPrefix,
+			if env == "" {
+				env = os.Getenv("REGION")
+			}
+			return Run(cigate.SplitCSVList(only), keyPrefix, root, env,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
-	c.Flags().StringVar(&only, "only", "", "comma-separated consumers to check (default: all)")
+	c.Flags().StringVar(&only, "only", "", "comma-separated consumers to check (overrides the spec narrowing)")
+	c.Flags().StringVar(&root, "root", ".", "instance root holding landingzone.yaml + environments/")
+	c.Flags().StringVar(&env, "env", "", "deployment whose managedApps decide which consumers are checked (default: $REGION)")
 	c.Flags().StringVar(&keyPrefix, "key-prefix", "llz-roundtrip-probe/", "object key prefix for the probe object")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling before failing")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
