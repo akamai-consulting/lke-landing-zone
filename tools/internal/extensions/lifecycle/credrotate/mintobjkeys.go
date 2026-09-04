@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
@@ -48,7 +49,7 @@ var MintObjkeysLinodeClient = func(token string) LinodeAPI {
 	return capability.CloudFor(objKeyCloudBinding()).Client(token, 30*time.Second)
 }
 
-func RunMintBootstrapObjkeys(region string) error {
+func RunMintBootstrapObjkeys(region string, reseed bool) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -89,8 +90,32 @@ func RunMintBootstrapObjkeys(region string) error {
 			return baoread.ErrReadUnknown(e.BaoPath, e.PresentField, "mint a replacement key for "+e.Name)
 		}
 		if seeded != "" {
-			fmt.Printf("%s: %s already seeded — skipping mint.\n", e.Name, e.BaoPath)
-			continue
+			grants, why, known := seededKeyGrants(ctx, lc, seeded, e)
+			switch {
+			case !known:
+				// Could not ask Linode. Preserve the historical behaviour exactly —
+				// skip — because the alternative is failing a bootstrap on an API
+				// blip, and the seeded key is probably fine. Only positive evidence
+				// of a mismatch is acted on below.
+				fmt.Printf("%s: %s already seeded (grant not verified: %s) — skipping mint.\n",
+					e.Name, e.BaoPath, why)
+				continue
+			case grants:
+				fmt.Printf("%s: %s already seeded and its key still grants the buckets — skipping mint.\n",
+					e.Name, e.BaoPath)
+				continue
+			case !reseed:
+				return fmt.Errorf("%s: %s is seeded but the key it names cannot write this "+
+					"deployment's buckets — %s.\n"+
+					"This is NOT a state a re-run repairs: the seeded path is what makes this "+
+					"command skip, so every subsequent bootstrap skips it too and the consumer "+
+					"stays unable to write.\n"+
+					"Confirm with `llz ci assert-obj-roundtrip`, then re-run with --reseed to "+
+					"mint a replacement scoped to the current buckets and overwrite %s",
+					e.Name, e.BaoPath, why, e.BaoPath)
+			default:
+				fmt.Printf("::warning::%s: reseeding %s — the seeded key %s.\n", e.Name, e.BaoPath, why)
+			}
 		}
 		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.Label, e.ObjCluster, e.Buckets, e.Permissions)
 		if err != nil {
@@ -191,4 +216,93 @@ func drainSupersededObjKeys(ctx context.Context, lc LinodeAPI, label string, kee
 		fmt.Printf("  drained superseded key %d (%s) — beyond the %d newest kept for rotation overlap.\n",
 			id, label, objKeyKeepNewest)
 	}
+}
+
+// seededKeyGrants asks Linode whether the ALREADY-SEEDED key can still write the
+// buckets this deployment uses.
+//
+// WHY PRESENCE WAS NEVER THE RIGHT QUESTION. The skip above exists so a
+// re-bootstrap does not clobber a rotator-minted key, and that reasoning is
+// sound. But it asks only "does the OpenBao path hold a value", and a seeded
+// value is not a working one. Linode scopes an object-storage key to named
+// buckets AT CREATE TIME and the grant is not implied by the key existing, so a
+// key minted under one label prefix grants nothing on buckets created under
+// another — and objlabels.go records exactly that migration ("it used to be the
+// shared constant platform"). The result is a credential that authenticates and
+// then 403s on every write, invisible to this command forever, because the thing
+// that makes it skip is the thing that is wrong.
+//
+// Observed: 42 days of 403 AccessDenied on both consumers, a Loki chunks bucket
+// with zero objects, and a Harbor registry that had never stored a layer.
+//
+// known=false means Linode could not be asked. That is deliberately NOT a
+// finding: the caller preserves the old skip, because failing a bootstrap on an
+// API blip is a worse trade than missing a mismatch this run. Only positive
+// evidence acts.
+func seededKeyGrants(ctx context.Context, lc LinodeAPI, accessKey string, e CredEntry) (grants bool, why string, known bool) {
+	keys, err := lc.ListObjectStorageKeys(ctx)
+	if err != nil {
+		return false, fmt.Sprintf("could not list object-storage keys (%v)", err), false
+	}
+	var found map[string]any
+	for _, k := range keys {
+		if cli.AsString(k["access_key"]) == accessKey {
+			found = k
+			break
+		}
+	}
+	if found == nil {
+		// The listing SUCCEEDED and the key is not in it: OpenBao names a
+		// credential the account no longer has. That is a finding, not an unknown.
+		return false, "names access key " + accessKey + ", which no longer exists on this account", true
+	}
+	// A nil bucket_access is an unlimited key — it can write any bucket, which is
+	// what the older module-minted keys looked like. Not the shape this command
+	// mints, but not broken either.
+	raw, ok := found["bucket_access"]
+	if !ok || raw == nil {
+		return true, "", true
+	}
+	access, ok := raw.([]any)
+	if !ok {
+		return false, "has a bucket_access this check cannot read", false
+	}
+	granted := map[string]bool{}
+	for _, a := range access {
+		m, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		// read_only is not enough: every consumer here WRITES. A read_only grant
+		// passes a "the bucket is listed" check and 403s on the first PutObject.
+		if perm := cli.AsString(m["permissions"]); !strings.Contains(perm, "write") {
+			continue
+		}
+		granted[cli.AsString(m["bucket_name"])] = true
+	}
+	var missing []string
+	for _, b := range e.Buckets {
+		if !granted[b] {
+			missing = append(missing, b)
+		}
+	}
+	if len(missing) > 0 {
+		return false, fmt.Sprintf("grants no write access on %s (key %s is scoped to %s)",
+			strings.Join(missing, ", "), accessKey, grantedList(granted)), true
+	}
+	return true, "", true
+}
+
+// grantedList renders what the key CAN write, sorted, so a prefix mismatch is
+// legible at a glance rather than inferred from what is missing.
+func grantedList(granted map[string]bool) string {
+	if len(granted) == 0 {
+		return "nothing"
+	}
+	var out []string
+	for b := range granted {
+		out = append(out, b)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
