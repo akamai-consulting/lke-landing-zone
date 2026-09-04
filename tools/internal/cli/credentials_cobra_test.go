@@ -179,6 +179,9 @@ type stubLinode struct {
 	verifyErr     error
 	patCreates    int
 	objCreates    int
+	// listErr makes the key listing fail, so a caller that must distinguish "the
+	// grant is wrong" from "the grant could not be read" can exercise both.
+	listErr error
 }
 
 func (s *stubLinode) ListProfileTokens(context.Context) ([]map[string]any, error) { return s.pats, nil }
@@ -191,7 +194,7 @@ func (s *stubLinode) DeleteProfileToken(_ context.Context, id uint64) error {
 	return nil
 }
 func (s *stubLinode) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
-	return s.objkeys, nil
+	return s.objkeys, s.listErr
 }
 func (s *stubLinode) CreateObjectStorageKeyBuckets(context.Context, string, string, []string, string) (map[string]any, error) {
 	s.objCreates++

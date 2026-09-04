@@ -49,6 +49,7 @@ func MintBootstrapPATCmd() *cobra.Command {
 
 func MintBootstrapObjkeysCmd() *cobra.Command {
 	var region string
+	var reseed bool
 	c := &cobra.Command{
 		Use:   "mint-bootstrap-objkeys",
 		Short: "mint the first Loki/Harbor/platform-obj object-storage keys and seed them into OpenBao",
@@ -58,12 +59,24 @@ func MintBootstrapObjkeysCmd() *cobra.Command {
 			"secret/loki/object-store + secret/harbor/registry-s3 + secret/obj/platform in one\n" +
 			"step — no Terraform-minted keys, no LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub\n" +
 			"secrets, no stash/reseed relay. Idempotent: already-seeded paths are\n" +
-			"skipped (a rotator-minted key is never clobbered). Seeds carry rotated_at\n" +
+			"skipped (a rotator-minted key is never clobbered) — but only after checking\n" +
+			"that the seeded key can still WRITE this deployment's buckets. Linode scopes a\n" +
+			"key to named buckets at create time and the grant is not implied by the key\n" +
+			"existing, so a key minted under a different objLabelPrefix authenticates and\n" +
+			"then 403s forever; presence alone made that state permanent, because the seed\n" +
+			"is what causes the skip. A verified mismatch FAILS with the remedy; an\n" +
+			"unreachable Linode API skips as before, since only positive evidence should\n" +
+			"act. --reseed mints a replacement over such a path. Seeds carry rotated_at\n" +
 			"so the rotator adopts them on its own cadence. Reads LINODE_API_TOKEN,\n" +
 			"OPENBAO_ROOT_TOKEN; obj_cluster from the object-storage tfvars.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return RunMintBootstrapObjkeys(region) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return RunMintBootstrapObjkeys(region, reseed)
+		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment whose keys to mint (required)")
+	c.Flags().BoolVar(&reseed, "reseed", false,
+		"replace a seeded key that cannot write this deployment's buckets (overwrites the OpenBao path)")
 	return c
 }
