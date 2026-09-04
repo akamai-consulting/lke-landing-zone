@@ -19,8 +19,16 @@ package upgrade
 // apart is a deliberate hold at a version that HAPPENS to be a past baseline: it
 // reads identically to a pin left behind, and it is dropped. That trade is bounded —
 // every drop is printed per file and lands as a diff in a reviewable pull request,
-// and on managed App Platform the pin reaches no cluster anyway (Linode owns the
+// and on managed App Platform the pin normally reaches no cluster (Linode owns the
 // deployed version), so a hold holds only what `llz ci assert-apl-version` resolves.
+//
+// UNLESS spec.cluster.bootstrap.manageAplVersion IS SET, which inverts that whole
+// premise: the pin then IS what deploys. `llz render` writes it into the apl-overlay,
+// the reconciler merges it onto the apl-<env> branch, and apl-core runs its
+// runtime-upgrade migrations to get there. Dropping the pin would move a LIVE
+// platform to this release's baseline, and the upgrade PR would show only a removed
+// line — no version anywhere in the diff to notice. So the sweep refuses outright
+// when any deployment owns its version; see manageAplVersionSet.
 
 import (
 	"errors"
@@ -213,6 +221,70 @@ func envSpecFiles(root string) ([]string, error) {
 
 // sweepAplPins applies dropTrackingPin across an instance's environment specs.
 // Pure over the filesystem it is given, and it writes only when write is true.
+// manageAplVersionSet reports whether any swept spec file hands apl-core's version
+// to llz. INSTANCE-WIDE RATHER THAN PER-ENV, because the root's pin reaches an
+// opted-in environment by inheritance (mergeCluster falls an absent env value
+// through to spec.defaults), so dropping the ROOT pin moves an opted-in deployment
+// just as surely as dropping its own.
+//
+// Read from the same bytes the sweep rewrites rather than from a loaded spec: the
+// sweep is a text edit over files that may not parse as a whole LandingZone yet,
+// and a loader that refused them would turn a version hazard into an upgrade that
+// cannot run at all.
+func manageAplVersionSet(files []string) (bool, error) {
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			// SKIPPED, NOT FAILED. The sweep proper reads this file too and reports the
+			// error there, with whatever it had already written — a pre-pass that
+			// errored first discarded that partial result, which is the very reporting
+			// gap TestSweepAplPinsReportsWhatItWroteBeforeFailing exists to hold.
+			continue
+		}
+		var doc struct {
+			Spec struct {
+				Defaults struct {
+					Cluster struct {
+						Bootstrap struct {
+							ManageAplVersion bool `yaml:"manageAplVersion"`
+						} `yaml:"bootstrap"`
+					} `yaml:"cluster"`
+				} `yaml:"defaults"`
+				Environments map[string]struct {
+					Cluster struct {
+						Bootstrap struct {
+							ManageAplVersion bool `yaml:"manageAplVersion"`
+						} `yaml:"bootstrap"`
+					} `yaml:"cluster"`
+				} `yaml:"environments"`
+				Cluster struct {
+					Bootstrap struct {
+						ManageAplVersion bool `yaml:"manageAplVersion"`
+					} `yaml:"bootstrap"`
+				} `yaml:"cluster"`
+			} `yaml:"spec"`
+		}
+		// A FILE THAT DOES NOT PARSE IS LEFT TO THE SWEEP'S OWN HANDLING rather than
+		// forced to "owned" here. An unparseable ROOT already defers every env pin
+		// (rootUnreadable below), and dropTrackingPin refuses a file it cannot read —
+		// so nothing is dropped on the strength of an unreadable spec either way, and
+		// short-circuiting here would suppress the deferral's own diagnosis, which
+		// names the syntax error as the thing to fix.
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			continue
+		}
+		if doc.Spec.Defaults.Cluster.Bootstrap.ManageAplVersion || doc.Spec.Cluster.Bootstrap.ManageAplVersion {
+			return true, nil
+		}
+		for _, e := range doc.Spec.Environments {
+			if e.Cluster.Bootstrap.ManageAplVersion {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func sweepAplPins(root string, write bool) (AplPinResult, error) {
 	var res AplPinResult
 	files, err := envSpecFiles(root)
@@ -234,6 +306,15 @@ func sweepAplPins(root string, write bool) (AplPinResult, error) {
 	// So the root is swept first, and whatever pin survives there governs what the
 	// env files may do.
 	files = rootFirst(root, files)
+
+	// THE PIN IS LOAD-BEARING WHEN THE INSTANCE OWNS THE VERSION, so nothing is
+	// dropped. Every pin found is reported as Refused with the reason, which keeps
+	// the upgrade's report honest rather than silently doing nothing.
+	owned, err := manageAplVersionSet(files)
+	if err != nil {
+		return res, err
+	}
+
 	rootPin, rootUnreadable := "", false
 	for _, f := range files {
 		isRoot := f == filepath.Join(root, clusterspec.LandingZoneFile)
@@ -250,6 +331,12 @@ func sweepAplPins(root string, write bool) (AplPinResult, error) {
 			res.Envs++
 		}
 		out, dropped, refused := dropTrackingPin(string(b))
+		if owned && dropped != "" {
+			res.Refused = append(res.Refused, AplPinChange{File: rel, Pin: dropped,
+				Reason: "spec.cluster.bootstrap.manageAplVersion is set, so this pin is what DEPLOYS — " +
+					"dropping it would move the live platform to this release's baseline"})
+			continue
+		}
 		// An env pin we WOULD drop, held back because spec.defaults still pins. The
 		// operator has to settle the root before the envs can track anything.
 		// `!refused` MATTERS: a refusal also carries a pin in `dropped` (so the report

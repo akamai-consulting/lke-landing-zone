@@ -81,6 +81,14 @@ var aplOverlayTargets = map[string]string{
 	clusterspec.OverlayObjFile: "env/settings/obj.yaml",
 }
 
+// aplOtomiTarget is apl-core's platform settings CR on the machine branch — the
+// file that carries `spec.version`, and therefore the deployed platform version.
+//
+// NOT IN aplOverlayTargets, because that map is for files LLZ owns OUTRIGHT and
+// writes whole. apl-core co-writes this one and LLZ owns a single key of it, so it
+// takes the key-level path (otomiOverlayFiles) exactly as the per-app CRs do.
+const aplOtomiTarget = "env/settings/otomi.yaml"
+
 // aplAppTarget is apl-core's per-app AplApp CR path on the machine branch.
 func aplAppTarget(app string) string { return "env/apps/" + app + ".yaml" }
 
@@ -200,6 +208,10 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 	// absent, so apl-operator provisions the namespace + Keycloak group + realm role
 	// team-<name>. Never clobbers a team apl-core / the App Platform Console owns.
 	if err := teamOverlayFiles(ctx, repo, cfg, files); err != nil {
+		return err
+	}
+
+	if err := otomiOverlayFiles(ctx, repo, cfg, files, reg); err != nil {
 		return err
 	}
 
@@ -391,6 +403,108 @@ func appOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[strin
 		}
 	}
 	return envFound, nil
+}
+
+// otomiOverlayFiles asserts the platform VERSION onto apl-core's own settings CR
+// when the instance has opted into owning it.
+//
+// A RENDER IS INERT UNTIL A TARGET CONSUMES IT: aplOverlayTargets covers only
+// obj.yaml and apps/teams have their own target functions, so this file needs its
+// own reader or it reaches nothing.
+//
+// No source means the instance has not opted in (see Bootstrap.ManageAplVersion),
+// so LLZ has no opinion and says nothing.
+func otomiOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string, reg *metrics.Registry) error {
+	// PUBLISHED UNCONDITIONALLY, so it goes to 0 on the pass that fixes things rather
+	// than ceasing to exist — an alert on an absent series never evaluates, the same
+	// rule the obj gauge above is written for. The absent-target arm below used to be
+	// a bare Printf, in a pod, on a reconcile loop, where nothing reads stdout: its
+	// own message says "if it persists", and nothing could tell persists from
+	// transient.
+	unusable := 0.0
+	defer func() {
+		reg.SetGauge("llz_apl_overlay_otomi_target_unusable",
+			"1 when llz is managing the apl-core version but the target settings CR cannot be merged into",
+			map[string]string{"branch": cfg.TargetBranch}, unusable)
+	}()
+
+	srcPath := envOverlayPath(cfg.Env, clusterspec.OverlayOtomiFile)
+	src, found, err := repo.ReadFile(ctx, cfg.SourceBranch, srcPath)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", srcPath, err)
+	}
+	if !found {
+		return nil // not opted in — Linode owns the version
+	}
+	// THE SOURCE IS LLZ'S OWN FILE, so a parse failure there is a real error: `llz
+	// render` wrote it and something is wrong with this repo.
+	want, err := clusterspec.OtomiOverlayVersion([]byte(src))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", srcPath, err)
+	}
+	if want == "" {
+		// Opted in (the file exists) and yet nothing to assert — the render half
+		// produced a file with no version, which is the looks-wired-does-nothing shape
+		// this channel exists to close.
+		unusable = 1
+		fmt.Printf("apl-overlay: %s carries no spec.version, so the platform version is asserted by NOTHING\n", srcPath)
+		return nil
+	}
+	// REFUSED BEFORE IT REACHES THE CLUSTER. apl-core's schema would reject it, and a
+	// rejected value converges silently: the merge is a no-op next pass, so it sits
+	// there permanently refused with nothing red. The pattern had no production
+	// caller at all until this check — it was enforced only in unit tests, on the
+	// render half.
+	if !clusterspec.AplCoreVersionAccepted(want) {
+		unusable = 1
+		fmt.Printf("apl-overlay: %q is not a version apl-core's schema accepts, so it will NOT be written to %s — "+
+			"fix spec.cluster.bootstrap.aplChartVersion\n", want, aplOtomiTarget)
+		return nil
+	}
+
+	current, exists, err := repo.ReadFile(ctx, cfg.TargetBranch, aplOtomiTarget)
+	if err != nil {
+		return fmt.Errorf("read target %s: %w", aplOtomiTarget, err)
+	}
+	// A DEGENERATE TARGET IS NOT AN ABSENT ONE, AND NEITHER IS A MERGE BASE.
+	// ghgitdata.ReadFile answers found=true for a file that exists and is EMPTY —
+	// only a 404 is found=false — so an empty, "{}", "null" or comment-only CR
+	// arrives here as "present" and merging into it yields a two-line spec.version
+	// document with no kind, no metadata and none of apl-core's eight settings,
+	// pushed over its CR. That is the {}-over-obj.yaml regression in a new file.
+	// Both fakes in this package's tests hid it by answering found=(content != "").
+	switch {
+	case !exists || !clusterspec.OtomiCRIsMergeable([]byte(current)):
+		unusable = 1
+		fmt.Printf("apl-overlay: llz is managing the apl-core version (want %s) but %s on %s is absent or not a "+
+			"settings CR, so the version is asserted by NOTHING. Expected on a fresh cluster; if it persists, "+
+			"apl-core is not keeping its settings there.\n", want, aplOtomiTarget, cfg.TargetBranch)
+		return nil
+	case !clusterspec.OtomiTargetIsSingleDocument([]byte(current)):
+		// A merge re-marshals ONE document, so writing back would silently truncate a
+		// multi-document file to its first — data loss on a file LLZ does not own.
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s holds more than one YAML document; merging would truncate it, so the "+
+			"apl-core version is NOT being asserted\n", aplOtomiTarget, cfg.TargetBranch)
+		return nil
+	}
+
+	// A MALFORMED TARGET MUST NOT WEDGE THE WHOLE RECONCILER. This pass runs last,
+	// after obj.yaml, the per-app CRs and the teams are already in `files`, and
+	// returning an error here drops all of them before OverlayCommit — so a broken
+	// file on a branch LLZ does not own would stop the obj credential fill and every
+	// app toggle, every pass, until someone hand-repaired apl-core's file.
+	updated, changed, err := clusterspec.SetOtomiVersion([]byte(current), want)
+	if err != nil {
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s does not parse (%v), so the apl-core version is NOT being asserted — "+
+			"the rest of this pass still syncs\n", aplOtomiTarget, cfg.TargetBranch, err)
+		return nil
+	}
+	if changed {
+		files[aplOtomiTarget] = string(updated)
+	}
+	return nil
 }
 
 // teamOverlayFiles reads LLZ's per-env teams manifest and, for each declared team,

@@ -344,6 +344,22 @@ type Bootstrap struct {
 	// 0005 phases 1-4 — see docs/adr/0005-managed-app-platform.md. Default false =
 	// self-install (unchanged).
 	ManagedAppPlatform bool `json:"managedAppPlatform,omitempty"` // apl_enabled
+	// ManageAplVersion hands apl-core's OWN version knob to llz.
+	//
+	// apl-core reconciles its operator as one of its own releases
+	// (helmfile.d/helmfile-04.init.yaml.gotmpl), and that release takes its image tag
+	// from `otomi.version` in the values — `values/apl-operator/apl-operator.gotmpl`
+	// renders `tag: {{ $v.otomi.version }}` with Argo force-replace. A new operator
+	// then records its own version as `deployingVersion`, compares it to the last
+	// deployed one and runs the intervening migrations (src/common/runtime-upgrade.ts).
+	//
+	// DEFAULT FALSE, and deliberately: Linode installs and versions apl-core on
+	// managed, so driving it from here is a change of ownership, not a setting. Left
+	// off, llz renders no otomi.yaml and Linode's version stands. Turned on, the
+	// deployment tracks EffectiveAplChartVersion — the env pin, else this release's
+	// baseline — and `llz ci assert-apl-deployed-version` is what tells you whether it
+	// actually took.
+	ManageAplVersion bool `json:"manageAplVersion,omitempty"`
 	// ManagedApps lists the OPTIONAL apl-core apps the operator enabled via the
 	// managed App Platform Console (e.g. harbor, loki, grafana). Managed apl-core
 	// installs only a MINIMAL core, so on a managed cluster `llz render` layers
