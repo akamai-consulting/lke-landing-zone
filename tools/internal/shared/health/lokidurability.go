@@ -52,6 +52,18 @@ type LokiIngesterSpec struct {
 	// WALClassKnown distinguishes "the PVC names no class" from "we could not read
 	// the PVC". Only the first is a finding; the second is a refusal to vouch.
 	WALClassKnown bool
+	// WALReplayCeiling is `ingester.wal.replay_memory_ceiling` as it appears in
+	// the config the ingester actually LOADED ("1536MB"). Empty means the key is
+	// absent, and absent is not a neutral default here: it means Loki's own 4GB
+	// default is in force, which above a 3Gi container limit is unreachable by
+	// construction. That distinction is the whole point of reading it.
+	WALReplayCeiling string
+	// WALCeilingKnown distinguishes "the loaded config sets no ceiling" from "we
+	// could not read the config at all". Only the first is a finding about the
+	// cluster; the second is this gate declining to vouch, and collapsing them
+	// would turn an unreadable ConfigMap into a confident diagnosis of the one
+	// bug this predicate exists to name.
+	WALCeilingKnown bool
 }
 
 // LokiWALVolumeName is the chart's name for the ingester volume mounted at
@@ -117,6 +129,52 @@ func LokiIngesterDurability(s LokiIngesterSpec, floor, wantClass string) (msgs [
 				"`kubectl -n "+s.Namespace+" get sts,deploy -l app.kubernetes.io/name=loki`", true)
 		default:
 			line("OK: "+who+" memory limit "+s.MemoryLimit+" meets the "+floor+" WAL-replay floor", false)
+		}
+	}
+
+	// The CEILING half. Read as a RELATION against the delivered limit rather
+	// than against a constant: what kills an ingester is not a particular number,
+	// it is a ceiling the cgroup can never let it reach. That framing keeps this
+	// correct if either side is retuned, and it is why no expected value is
+	// passed in.
+	switch {
+	case !s.WALCeilingKnown:
+		line("FAIL: "+who+" — could not read the Loki config that would carry "+
+			"ingester.wal.replay_memory_ceiling, so this gate is NOT vouching that WAL replay "+
+			"fits inside the memory limit. 'Could not tell' is the same evidentiary state as "+
+			"'wrong' for a setting whose absence OOMKills", true)
+	case strings.TrimSpace(s.WALReplayCeiling) == "":
+		line("FAIL: "+who+" sets no ingester.wal.replay_memory_ceiling, so Loki's own 4GB "+
+			"default is in force. Above a smaller container limit that ceiling is unreachable: "+
+			"replay grows toward it, the flush that would drain the WAL never fires, and the "+
+			"kernel OOMKills mid-replay — every retry replaying the same WAL. The apl-overlay "+
+			"asserts it at apps.loki._rawValues.loki.ingester.wal.replay_memory_ceiling "+
+			"(apl-values/_shared/apl-overlay/appvalues.yaml); note the loki.ingester path — the "+
+			"TOP-LEVEL ingester key renders the StatefulSet and never reaches Loki's config", true)
+	default:
+		ceil, ceilOK := LokiByteSize(s.WALReplayCeiling)
+		limit, limitOK := QuantityBytes(s.MemoryLimit)
+		switch {
+		case !ceilOK:
+			line("FAIL: "+who+" replay_memory_ceiling is "+strconv.Quote(s.WALReplayCeiling)+
+				", which this gate cannot parse — it is NOT vouching that replay fits", true)
+		case strings.TrimSpace(s.MemoryLimit) == "":
+			line("OK: "+who+" replay ceiling "+s.WALReplayCeiling+" with no memory limit to "+
+				"exceed — nothing can OOMKill it on the ceiling", false)
+		case !limitOK:
+			// Already FAILed above on the limit itself; say why the ceiling verdict
+			// is missing rather than emitting a pass that rests on the same
+			// unreadable number.
+			line("FAIL: "+who+" replay ceiling "+s.WALReplayCeiling+" cannot be compared against "+
+				"an unparseable memory limit "+strconv.Quote(s.MemoryLimit)+" — not vouching", true)
+		case ceil >= limit:
+			line("FAIL: "+who+" replay_memory_ceiling "+s.WALReplayCeiling+" is not below its "+
+				"memory limit "+s.MemoryLimit+", so the ceiling can never be reached: the process "+
+				"is OOMKilled before Loki decides to flush. This is the closed crashloop, not a "+
+				"tuning nit — a WAL larger than the limit can never drain", true)
+		default:
+			line("OK: "+who+" replay ceiling "+s.WALReplayCeiling+" fits inside its "+
+				s.MemoryLimit+" limit — replay flushes and continues instead of OOMKilling", false)
 		}
 	}
 
@@ -232,3 +290,54 @@ const walNotGatingReason = "the WAL PVC cannot be delivered by the apl-overlay �
 	"cluster needs the one-time recreation in docs/upstream-asks.md §1. The finding is real; it is " +
 	"not failing the lane because no cluster can currently satisfy it. The memory-limit check above " +
 	"DOES gate."
+
+// LokiByteSize converts a Loki `flagext.ByteSize` spelling ("4GB", "1536MB",
+// "1.5GiB", "1073741824") to bytes.
+//
+// A SECOND PARSER, DELIBERATELY, and not a bug that it sits beside
+// QuantityBytes. The two values it and QuantityBytes read are written in
+// different grammars by different systems: the memory limit is a Kubernetes
+// quantity (Mi/Gi binary, M/G decimal, no trailing B), while the replay ceiling
+// is parsed by Loki through go-humanize (MB/GB decimal, MiB/GiB binary, trailing
+// B expected). Feeding "1536MB" to QuantityBytes fails — it looks for an "M"
+// suffix and finds "B" — and a gate that cannot parse the value it is judging
+// fails closed, so one parser for both would report the ceiling unreadable on
+// every correctly-configured cluster.
+//
+// ok RATHER THAN A ZERO, for the reason QuantityBytes gives: a gate must be able
+// to tell "zero" from "could not tell", and a ceiling folded to 0 would compare
+// as comfortably below every limit — a pass manufactured out of a parse failure.
+func LokiByteSize(s string) (int64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	// Longest and most specific first: "MiB" must win over "MB" and "B", or
+	// "1536MiB" is read as 1536 bytes with an "MiB"-shaped tail.
+	units := []struct {
+		suf string
+		mul float64
+	}{
+		{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"TiB", 1 << 40}, {"PiB", 1 << 50},
+		{"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"TB", 1e12}, {"PB", 1e15},
+		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}, {"Pi", 1 << 50},
+		{"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12}, {"P", 1e15},
+		{"B", 1},
+	}
+	for _, u := range units {
+		if len(s) <= len(u.suf) || !strings.EqualFold(s[len(s)-len(u.suf):], u.suf) {
+			continue
+		}
+		f, err := strconv.ParseFloat(strings.TrimSpace(s[:len(s)-len(u.suf)]), 64)
+		if err != nil || f < 0 {
+			return 0, false
+		}
+		return int64(f * u.mul), true
+	}
+	// No suffix at all is a plain byte count, which flagext.ByteSize accepts.
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f < 0 {
+		return 0, false
+	}
+	return int64(f), true
+}

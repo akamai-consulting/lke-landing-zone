@@ -90,9 +90,29 @@ func answerWALPVCClass(h func(args string) ([]byte, error)) func(string) ([]byte
 	}
 }
 
+// lokiCeilingArgs is the shape of the ceiling read, matched the same way and for
+// the same reason as walPVCClassArgs: it is infrastructure every Loki fixture
+// needs answered, not something any individual fixture is about.
+const lokiCeilingArgs = "data.config"
+
+// healthyLokiConfig is the rendered config once the overlay's replay ceiling has
+// applied — the state assert-loki should call healthy.
+const healthyLokiConfig = "ingester:\n  chunk_encoding: snappy\n  wal:\n    replay_memory_ceiling: 1536MB\n"
+
+// answerLokiReplayCeiling wraps a fixture handler so the ConfigMap read resolves
+// to a config carrying the asserted ceiling.
+func answerLokiReplayCeiling(h func(args string) ([]byte, error)) func(string) ([]byte, error) {
+	return func(args string) ([]byte, error) {
+		if strings.Contains(args, lokiCeilingArgs) {
+			return []byte(healthyLokiConfig), nil
+		}
+		return h(args)
+	}
+}
+
 func withKubectl(t *testing.T, h func(args string) ([]byte, error)) {
 	t.Helper()
-	h = answerWALPVCClass(h)
+	h = answerWALPVCClass(answerLokiReplayCeiling(h))
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "kubectl" {
 			return nil, fmt.Errorf("unexpected command %q", name)
@@ -151,5 +171,6 @@ const healthyLokiWALClass = "block-storage-retain"
 
 const healthyLokiIngesterPod = `{"metadata":{"namespace":"monitoring","name":"loki-ingester-0"},
 	"spec":{"containers":[{"name":"ingester","resources":{"limits":{"memory":"3Gi"}}}],
-	 "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data-loki-ingester-0"}}]},
+	 "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data-loki-ingester-0"}},
+	  {"name":"config","configMap":{"name":"loki"}}]},
 	"status":{"phase":"Running","containerStatuses":[{"name":"ingester","ready":true}]}}`

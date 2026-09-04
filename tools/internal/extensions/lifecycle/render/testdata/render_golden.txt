@@ -121,6 +121,10 @@ apps:
           requests:
             cpu: 100m
             memory: 512Mi
+      loki:
+        ingester:
+          wal:
+            replay_memory_ceiling: 1536MB
 === apl-values/_shared/apl-overlay/obj.yaml
 kind: AplObjectStorage
 metadata:

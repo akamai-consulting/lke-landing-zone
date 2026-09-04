@@ -706,6 +706,16 @@ func OverlayUnmapped() map[string]string {
 		"harbor.metrics.serviceMonitor.enabled":                     harborMetrics,
 		"harbor.metrics.serviceMonitor.additionalLabels.prometheus": harborMetrics,
 
+		"loki.loki.ingester.wal.replay_memory_ceiling": "gated by `llz ci assert-loki` " +
+			"(health.LokiIngesterDurability), not by a field read here, and the difference is the point. " +
+			"This value does not land on a live OBJECT field an equality check could compare against: the " +
+			"chart templates it into Loki's rendered config.yaml, so the only faithful reading is the config " +
+			"the ingester actually loaded — which is what the probe opens. It is also the one row where " +
+			"equality is the WRONG question: a ceiling is correct or fatal only in RELATION to the delivered " +
+			"memory limit (at or above it, the process is OOMKilled before Loki ever decides to flush), so " +
+			"the gate compares the two rather than either against a constant. A field row asserting " +
+			"`1536MB == 1536MB` would go green on exactly the cluster this was written for",
+
 		"loki.ingester.persistence.claims": "checked as part of loki.ingester.persistence.enabled, not beside it: " +
 			"the claim entries ARE the payload of that row's appliability probe (claimTemplate turns each into the " +
 			"PersistentVolumeClaim the StatefulSet would carry), so a row of its own would send the same patch twice " +
