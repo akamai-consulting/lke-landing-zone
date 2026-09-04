@@ -14,24 +14,43 @@ package assertplatform
 // installs and owns apl-core: `apl_enabled` is a create-time boolean and the
 // Linode API carries no version field at all — not settable, not readable — so
 // nothing LLZ does moves the deployed version, and no amount of agreement between
-// the spec and the baseline says anything about what is running. An instance whose
-// platform Linode has rolled forward (or has not yet rolled forward) looks
-// identical to one in lockstep. That is the audit-pipeline shape one more time:
-// two values consistent with each other are not two correct values.
+// the spec and the baseline says anything about what is running. That is the
+// audit-pipeline shape one more time: two values consistent with each other are
+// not two correct values.
 //
-// ── GROUND TRUTH, NOT A PROXY ────────────────────────────────────────────────
+// ── READ THE IMAGE TAG. NOT THE CHART LABELS. ────────────────────────────────
 //
-// The version is read from the `helm.sh/chart` label on apl-core's own
-// apl-operator Deployment. The chart writes it from `Chart.Name-Chart.Version`
-// (templates/_helpers.tpl, "apl-operator.labels"), so the label IS the published
-// chart version — the same string BaselineAplChartVersion carries.
+// The version is the apl-operator container's IMAGE TAG, because apl-core sets it
+// from the platform version and nothing else here does:
 //
-// NOT THE CONTAINER IMAGE TAG, which is the obvious reading and is a proxy: the
-// chart takes the operator image tag from `.Values.otomi.version | default
-// .Chart.AppVersion`, so an install that sets otomi.version reports a version that
-// is not the chart's. `app.kubernetes.io/version` (the chart's appVersion) is the
-// fallback, and the verdict says which of the two it read — "collection stopped"
-// and "we read a different field" have nothing in common as remedies.
+//	values/apl-operator/apl-operator.gotmpl:  {{- $version := $v.otomi.version }}
+//	                                          tag: {{ $version }}
+//
+// `otomi.version` IS the platform version — the single knob apl-core's own
+// runtime-upgrade state machine reads and writes.
+//
+// This lane originally read `helm.sh/chart`, with `app.kubernetes.io/version` as a
+// fallback, and BOTH ARE WRONG — not stale, not degraded, wrong by construction.
+// The Deployment is rendered by the apl-operator SUB-chart, so its common-labels
+// helper interpolates that sub-chart's own coordinates:
+//
+//	charts/apl-operator/Chart.yaml:  version: 0.2.0     → helm.sh/chart: apl-operator-0.2.0
+//	                                 appVersion: 1.16.0 → app.kubernetes.io/version: "1.16.0"
+//
+// Those are constants of the operator's packaging. They do not move when the
+// platform moves, and they never equalled BaselineAplChartVersion in any state —
+// not at install, not after reconcile. A real managed cluster running v6.2.1 read
+// as "apl-core 0.2.0, a MAJOR apart", hard-failing this gating lane against a
+// perfectly in-step platform.
+//
+// The mistake that shipped it is worth naming, because the file it points at is
+// genuinely the right one: `apl-operator.labels` does live in
+// charts/apl-operator/templates/_helpers.tpl. What went unchecked was the sibling
+// Chart.yaml supplying `.Chart.Version` to it — the UMBRELLA chart's version was
+// assumed to reach a sub-chart's labels, and it does not.
+//
+// So there is NO SECOND SOURCE and deliberately no fallback: the two labels that
+// look like one are the bug. Unreadable is a hard failure.
 //
 // ── THE POLICY IS THE SPEC-SIDE POLICY, APPLIED TO REALITY ───────────────────
 //
@@ -70,17 +89,24 @@ const (
 	aplOperatorName      = "apl-operator"
 )
 
-// chartLabel / appVersionLabel are the two version-bearing labels the chart's
-// common-labels helper writes.
-const (
-	chartLabel      = "helm.sh/chart"
-	appVersionLabel = "app.kubernetes.io/version"
-	// nameLabel/aplOperatorName identify apl-core's own operator. The chart's
-	// selectorLabels helper writes `app.kubernetes.io/name: apl-operator` as a
-	// LITERAL, independent of the helm release name, so it identifies the workload
-	// even where fullname is prefixed.
-	nameLabel = "app.kubernetes.io/name"
-)
+// nameLabel/aplOperatorName identify apl-core's own operator. The chart's
+// selectorLabels helper writes `app.kubernetes.io/name: apl-operator` as a LITERAL,
+// independent of the helm release name, so it identifies the workload even where
+// fullname is prefixed.
+//
+// A LABEL IS STILL THE RIGHT SELECTOR even though no label is a trustworthy VERSION
+// source: selecting on identity and reading the version elsewhere is the point.
+const nameLabel = "app.kubernetes.io/name"
+
+// containerName is the operator container inside that Deployment. apl-core's
+// template names it `{{ .Chart.Name }}`, which is the same "apl-operator" string.
+const containerName = "apl-operator"
+
+// imageTagSource names where the version came from, for the messages. There is one
+// source, and it is still printed on every verdict: "collection stopped" and "we
+// read a different field" have nothing in common as remedies, and the reader cannot
+// tell which happened unless the lane says where it looked.
+const imageTagSource = "the apl-operator container image tag"
 
 // deployList is the sliver of `kubectl get deploy -o json` this lane reads.
 type deployList struct {
@@ -89,57 +115,45 @@ type deployList struct {
 			Name   string            `json:"name"`
 			Labels map[string]string `json:"labels"`
 		} `json:"metadata"`
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name  string `json:"name"`
+						Image string `json:"image"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
 	} `json:"items"`
 }
 
-// aplChartVersionFromLabels extracts the chart version from one object's labels.
+// imageTag returns the tag from a container image reference, or "" when it carries
+// none.
 //
-// `helm.sh/chart` is "<chart name>-<chart version>" — "apl-v6.2.1". The chart name
-// is stripped by scanning the "-" positions LEFT TO RIGHT and taking the first
-// suffix that parses, rather than by trimming a hardcoded "apl-" prefix: the label
-// is truncated to 63 characters by the helper, and a name assumption would turn a
-// renamed chart into a silent unparseable rather than a loud one.
+// The DIGEST is stripped first, because "repo/apl-core:v6.2.1@sha256:…" is a legal
+// pinned reference and a naive last-colon scan reads the digest hex as the version.
+// A digest-ONLY reference has no tag and yields "" — unreadable, which fails closed
+// rather than guessing.
 //
-// LEFT TO RIGHT, NOT THE LAST DASH, and a pre-release is exactly why. The last "-"
-// in "apl-v6.3.0-rc.1" opens "rc.1", which does not parse — so a last-dash scan
-// declared an ordinary release-candidate chart unreadable and hard-failed this
-// gating lane, while clusterspec.AplSemver deliberately TOLERATES the suffix. The
-// first parseable suffix is "v6.3.0-rc.1", which is the answer.
-func aplChartVersionFromLabels(labels map[string]string) (version, source string) {
-	if v := labels[chartLabel]; v != "" {
-		for i := range len(v) {
-			if v[i] != '-' || i+1 >= len(v) {
-				continue
-			}
-			if _, _, _, ok := clusterspec.AplSemver(v[i+1:]); ok {
-				return v[i+1:], chartLabel
-			}
-		}
-		// PRESENT BUT NOT PARSEABLE, and the appVersion is tried before giving up: a
-		// mangled `helm.sh/chart` sitting beside a perfectly good
-		// app.kubernetes.io/version was hard-failing this gating lane while the answer
-		// was on the same object. Only when neither yields anything usable does the
-		// unparseable label become the verdict — returned rather than dropped so the
-		// failure can PRINT it, because an unreadable label is a different problem
-		// from an absent one.
-		if av := labels[appVersionLabel]; av != "" {
-			if _, _, _, ok := clusterspec.AplSemver(av); ok {
-				return av, appVersionLabel
-			}
-		}
-		return v, chartLabel
+// The tag separator must come AFTER the last "/", or a registry port is mistaken
+// for one: "registry.example:5000/linode/apl-core" would otherwise report "5000".
+func imageTag(image string) string {
+	if i := strings.LastIndex(image, "@"); i >= 0 {
+		image = image[:i]
 	}
-	if v := labels[appVersionLabel]; v != "" {
-		return v, appVersionLabel
+	colon := strings.LastIndex(image, ":")
+	if colon < 0 || colon < strings.LastIndex(image, "/") {
+		return ""
 	}
-	return "", ""
+	return image[colon+1:]
 }
 
 // AplDeployedVerdict is the lane's decision.
 type AplDeployedVerdict struct {
-	// Live is the chart version read from the cluster, "" when none could be read.
+	// Live is the version read from the cluster, "" when none could be read.
 	Live string
-	// Source names the label it came from, for the failure message.
+	// Source names where it came from, for the failure message.
 	Source string
 	// Err is non-nil when the lane FAILS. Warnings are carried in Warn.
 	Err  error
@@ -149,8 +163,8 @@ type AplDeployedVerdict struct {
 // evaluateAplDeployed is the whole judgement, pure over parsed input so every arm
 // is testable without a cluster.
 //
-// FAILS CLOSED ON EVERY FORM OF "COULD NOT TELL". Zero deployments, no
-// version-bearing label, an unparseable label — each is a failure, not an empty
+// FAILS CLOSED ON EVERY FORM OF "COULD NOT TELL". Zero deployments, no operator
+// container, an untagged or unparseable image — each is a failure, not an empty
 // pass. A lane that reports success having read nothing looks exactly like the
 // drift it exists to catch, and this one is READ-ONLY, so there is no cost to
 // being loud.
@@ -168,21 +182,20 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 	}
 	if len(list.Items) == 0 {
 		return AplDeployedVerdict{Err: fmt.Errorf(
-			"no Deployment at all in namespace %s — apl-core's operator is where the deployed chart version is legible, "+
+			"no Deployment at all in namespace %s — apl-core's operator is where the deployed platform version is legible, "+
 				"so either the managed App Platform is not installed on this cluster or it has moved. Nothing was checked",
 			aplOperatorNamespace)}
 	}
 
 	// APL-CORE'S OWN OPERATOR, SELECTED BY NAME, not "whichever Deployment in this
-	// namespace carries a version label first". The namespace is not guaranteed to
-	// hold only apl-core's Deployment, and any neighbour from a different chart
-	// carries the very same helm.sh/chart and app.kubernetes.io/version labels — so
-	// an unfiltered read reports a sibling's version as apl-core's and hard-fails a
-	// gating lane on a cluster that is perfectly in step.
+	// namespace has a container first". The namespace is not guaranteed to hold only
+	// apl-core's Deployment, and a neighbour from a different chart would report its
+	// own image tag as apl-core's, hard-failing a gating lane on a cluster that is
+	// perfectly in step.
 	//
-	// The selector is app.kubernetes.io/name, a DIFFERENT label from the ones being
-	// read. Selecting on the version label itself would derive the expected set from
-	// the thing under test — the shape where a filtered query returns nothing and the
+	// The selector is app.kubernetes.io/name, a DIFFERENT field from the one being
+	// read. Selecting on the image itself would derive the expected set from the
+	// thing under test — the shape where a filtered query returns nothing and the
 	// gate passes on the bug it exists to catch.
 	var seen []string
 	for _, it := range list.Items {
@@ -190,39 +203,75 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 		if it.Metadata.Labels[nameLabel] != aplOperatorName && it.Metadata.Name != aplOperatorName {
 			continue
 		}
-		v, src := aplChartVersionFromLabels(it.Metadata.Labels)
-		if v == "" {
-			continue
+
+		// The container is chosen BY NAME, with a single-container Deployment as the
+		// only relaxation. A sidecar (a service mesh injects one without asking) is
+		// otherwise a coin toss over which image gets read.
+		cs := it.Spec.Template.Spec.Containers
+		image := ""
+		for _, c := range cs {
+			if c.Name == containerName {
+				image = c.Image
+				break
+			}
 		}
-		if _, _, _, ok := clusterspec.AplSemver(v); !ok {
-			return AplDeployedVerdict{Live: v, Source: src, Err: fmt.Errorf(
-				"%s/%s carries %s=%q, which is not a chart version this llz can parse — the deployed apl-core version is UNKNOWN",
-				aplOperatorNamespace, it.Metadata.Name, src, v)}
+		if image == "" && len(cs) == 1 {
+			image = cs[0].Image
 		}
-		return classifyAplDeployed(v, src)
+		if image == "" {
+			var names []string
+			for _, c := range cs {
+				names = append(names, c.Name)
+			}
+			return AplDeployedVerdict{Err: fmt.Errorf(
+				"the %s/%s Deployment has no container named %q, so the deployed apl-core version is UNKNOWN. Containers present: %s",
+				aplOperatorNamespace, it.Metadata.Name, containerName, strings.Join(names, ", "))}
+		}
+
+		tag := imageTag(image)
+		if tag == "" {
+			return AplDeployedVerdict{Err: fmt.Errorf(
+				"the %s/%s operator image %q carries no tag, so the deployed apl-core version is UNKNOWN — a digest-pinned image "+
+					"cannot say which platform version it is",
+				aplOperatorNamespace, it.Metadata.Name, image)}
+		}
+
+		// A NON-SEMVER TAG IS A REAL apl-core STATE, NOT A MALFORMED READ. `otomi.version`
+		// accepts a branch name — values-schema.yaml allows `[a-zA-Z]+[a-zA-Z0-9-]` beside
+		// the semver form, and the chart keys pullPolicy off exactly that distinction
+		// (`$isSemver := regexMatch "^[0-9.]+" $version` → Always vs IfNotPresent). So
+		// "main" means a floating dev install, which llz cannot grade against a
+		// baseline. It fails closed and NAMES the tag, rather than reporting drift it
+		// did not measure.
+		if _, _, _, ok := clusterspec.AplSemver(tag); !ok {
+			return AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
+				"%s/%s runs operator image %q, whose tag %q is not a version this llz can compare against %s — apl-core allows a "+
+					"branch name in otomi.version, so this is most likely a floating (non-release) platform install. The deployed "+
+					"apl-core version is UNKNOWN",
+				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.BaselineAplChartVersion)}
+		}
+		return classifyAplDeployed(tag)
 	}
 
-	// NAME WHAT IS PRESENT. The label being looked for may have been RENAMED, and
-	// no amount of staring at the absent name reveals the new one.
+	// NAME WHAT IS PRESENT. The thing being looked for may have been RENAMED, and no
+	// amount of staring at the absent name reveals the new one.
 	//
 	// THE BLAST RADIUS OF THIS ARM IS EVERY ADOPTER AT ONCE, because the lane is
 	// gating on the delivered scheduled health check — so the remedy has to be in the
-	// message. The labels are not guessed: apl-core's chart writes them from its own
-	// common-labels helper (templates/_helpers.tpl, "apl-operator.labels" — chart
-	// v6.2.1 verified), and release-e2e runs this lane against a real MANAGED cluster
-	// before any release carrying it can ship, which is what stands between a wrong
-	// assumption here and an adopter's pipeline. If Linode's install ever stops
-	// writing them, that run goes red first.
+	// message. release-e2e runs this lane against a real MANAGED cluster before any
+	// release carrying it can ship, which is what stands between a wrong assumption
+	// here and an adopter's pipeline. It is also what caught the label version of
+	// this lane; the assumption that shipped was never exercised against a cluster.
 	sort.Strings(seen)
 	return AplDeployedVerdict{Err: fmt.Errorf(
-		"no Deployment named %[1]q (or labelled %[2]s=%[1]s) in namespace %[3]s carries %[4]s or %[5]s, "+
-			"so the deployed apl-core version is UNKNOWN. Deployments present: %[6]s. "+
-			"If the managed platform has stopped labelling its operator this lane cannot answer, and the fix is a NEW llz release that "+
-			"reads whatever replaced them — `llz self-update && llz upgrade`. There is no per-instance opt-out to reach for: "+
-			"LLZ_ALLOW_APL_CHART_MAJOR_DRIFT releases a major-version BLOCK, not an unreadable one, and the two delivered call sites "+
-			"(the weekly platform job in llz-scheduled-checks.yml and the e2e assert-suite) are digest-locked, so editing them locally "+
-			"fails `llz lint`. Until a release lands, disable that scheduled job",
-		aplOperatorName, nameLabel, aplOperatorNamespace, chartLabel, appVersionLabel, strings.Join(seen, ", "))}
+		"no Deployment named %[1]q (or labelled %[2]s=%[1]s) in namespace %[3]s, "+
+			"so the deployed apl-core version is UNKNOWN. Deployments present: %[4]s. "+
+			"If the managed platform has stopped shipping its operator under that name this lane cannot answer, and the fix is a NEW "+
+			"llz release that reads whatever replaced it — `llz self-update && llz upgrade`. There is no per-instance opt-out to reach "+
+			"for: %[5]s releases a major-version BLOCK, not an unreadable one, and the two delivered call sites (the weekly platform "+
+			"job in llz-scheduled-checks.yml and the e2e assert-suite) are digest-locked, so editing them locally fails `llz lint`. "+
+			"Until a release lands, disable that scheduled job",
+		aplOperatorName, nameLabel, aplOperatorNamespace, strings.Join(seen, ", "), clusterspec.AllowMajorDriftEnv)}
 }
 
 // classifyAplDeployed applies the SPEC-SIDE drift policy to the live version.
@@ -234,45 +283,11 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 // is the worst possible place to lose an escape hatch, because LINODE moves the
 // version: the lane would have reddened `assert-suite` and the scheduled health
 // check on a condition the operator could neither fix nor opt out of.
-func classifyAplDeployed(live, source string) AplDeployedVerdict {
-	v := AplDeployedVerdict{Live: live, Source: source}
+func classifyAplDeployed(live string) AplDeployedVerdict {
+	v := AplDeployedVerdict{Live: live, Source: imageTagSource}
 	drift := clusterspec.AplChartDriftOf(live)
 
-	// DEGRADED IS ABOUT THE SOURCE, NOT THE VERDICT, so it prefixes every arm reached
-	// through the fallback — agreement included. Hanging it off the major-drift arm
-	// alone would let the lane go warn-only forever, unnoticed, whenever the
-	// authoritative label vanishes while drift happens to be small.
-	//
-	// WHY the fallback was used is deliberately not asserted: it is reached both when
-	// the chart label is ABSENT and when it is PRESENT BUT UNPARSEABLE, and naming the
-	// wrong one sends an operator hunting for a label that is sitting there and wrong.
-	degraded := ""
-	if source == appVersionLabel {
-		degraded = fmt.Sprintf(
-			"DEGRADED — this lane is not gating right now: %s is absent or unparseable on the %s Deployment in %s, so the version "+
-				"was read from %s (the chart's appVersion), which is not guaranteed to equal the chart version. Treat a persisting "+
-				"DEGRADED as a platform change llz needs to catch up with. ",
-			chartLabel, aplOperatorName, aplOperatorNamespace, appVersionLabel)
-	}
-
 	if drift == clusterspec.AplChartDriftNone {
-		// Even in agreement the authoritative label is gone, and saying so is the only
-		// thing that stops the lane rotting unnoticed.
-		v.Warn = strings.TrimSpace(degraded)
-		return v
-	}
-
-	// THE FALLBACK MAY NEVER BLOCK. app.kubernetes.io/version is the chart's
-	// appVersion, and the baseline it is graded against is a CHART version. For
-	// apl-core the two are the same string today (Chart.yaml v6.2.1 declares both),
-	// but nothing upstream guarantees they stay coupled — so a chart that ever
-	// diverges them would hard-fail this gating lane on a perfectly healthy cluster.
-	// The reading is still worth reporting; it is not worth failing on.
-	if source == appVersionLabel && clusterspec.AplChartDriftBlocks(drift) {
-		v.Warn = degraded + fmt.Sprintf(
-			"It reports apl-core %s against the %s this llz release targets, far enough apart to block had the authoritative "+
-				"label been readable — confirm by hand before treating it as drift",
-			live, clusterspec.BaselineAplChartVersion)
 		return v
 	}
 
@@ -289,9 +304,9 @@ func classifyAplDeployed(live, source string) AplDeployedVerdict {
 		}
 		v.Err = fmt.Errorf(
 			"this cluster runs apl-core %s, a MAJOR apart from the %s this llz release targets — llz has not been tested against it. "+
-				"Read %s from %s. %s, or set %s=1 to stage the move deliberately (Linode owns the rollout here, so this may not be "+
-				"a version you chose)",
-			live, clusterspec.BaselineAplChartVersion, source, aplOperatorNamespace, fix, clusterspec.AllowMajorDriftEnv)
+				"Read from %s in namespace %s. %s, or set %s=1 to stage the move deliberately (Linode owns the rollout here, so this "+
+				"may not be a version you chose)",
+			live, clusterspec.BaselineAplChartVersion, imageTagSource, aplOperatorNamespace, fix, clusterspec.AllowMajorDriftEnv)
 		return v
 	}
 
@@ -301,14 +316,14 @@ func classifyAplDeployed(live, source string) AplDeployedVerdict {
 	// v6.2.1 baseline read in the weekly check exactly like a point-release lag. The
 	// override suppresses the block, not the distance.
 	if drift == clusterspec.AplChartDriftMajorBehind || drift == clusterspec.AplChartDriftMajorAhead {
-		v.Warn = degraded + fmt.Sprintf(
+		v.Warn = fmt.Sprintf(
 			"this cluster runs apl-core %s, a MAJOR apart from the %s this llz release targets. It is not failing because %s is "+
 				"set, which is a deliberate, time-boxed staging switch — llz has NOT been tested against this platform, so unset it "+
 				"once the staged move is done rather than leaving it on",
 			live, clusterspec.BaselineAplChartVersion, clusterspec.AllowMajorDriftEnv)
 		return v
 	}
-	v.Warn = degraded + fmt.Sprintf(
+	v.Warn = fmt.Sprintf(
 		"this cluster runs apl-core %s and this llz release targets %s. Linode owns the rollout on managed App Platform "+
 			"(the API has no version field), so this is the routine mid-rollout state and does not fail — "+
 			"but it is the version llz was NOT tested against, and it is what to check first if something behaves oddly",
@@ -324,20 +339,10 @@ func assertAplDeployedVersion() error {
 		return v.Err
 	}
 	if v.Warn != "" {
-		// THE PREFIX MUST NAME WHAT HAPPENED. Applied unconditionally it labelled a
-		// cluster in EXACT AGREEMENT as having drifted, whenever its helm.sh/chart
-		// label had gone missing and the Warn carried only the DEGRADED banner —
-		// exactly the "collection stopped" versus "we read a different field"
-		// conflation the banner's own comment argues against, reintroduced one layer
-		// up by the line that prints it.
-		label := "apl-core version drift"
-		if clusterspec.AplChartDriftOf(v.Live) == clusterspec.AplChartDriftNone {
-			label = "apl-core version lane degraded"
-		}
-		fmt.Printf("::warning::%s: %s\n", label, v.Warn)
+		fmt.Printf("::warning::apl-core version drift: %s\n", v.Warn)
 		return nil
 	}
-	fmt.Printf("deployed apl-core %s matches the version this llz release targets (%s), read from %s on a Deployment in %s.\n",
+	fmt.Printf("deployed apl-core %s matches the version this llz release targets (%s), read from %s in namespace %s.\n",
 		v.Live, clusterspec.BaselineAplChartVersion, v.Source, aplOperatorNamespace)
 	return nil
 }

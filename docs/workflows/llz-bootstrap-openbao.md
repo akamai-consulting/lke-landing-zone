@@ -878,9 +878,13 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   PLATFORM apps and stay green when the hatch generated NOTHING (the generated App simply
   would not exist) — only an assertion that names it catches that.
 * **apl-deployed-version** — GATING proof that the apl-core RUNNING on this cluster is a
-  version this llz release was tested against. Read from the `helm.sh/chart` label
-  apl-core stamps on its own `apl-operator` Deployment — the chart version itself, not
-  the container image tag, which `.Values.otomi.version` can override. What stays green
+  version this llz release was tested against. Read from the IMAGE TAG of the
+  `apl-operator` container, which apl-core renders from `otomi.version` — the platform
+  version itself. Deliberately NOT the `helm.sh/chart` or `app.kubernetes.io/version`
+  labels: those are written by the apl-operator SUB-chart from its own Chart.yaml
+  (`version: 0.2.0`, `appVersion: 1.16.0`), so they describe the operator's packaging and
+  never move when the platform moves — reading them reported a healthy v6.2.1 cluster as
+  `apl-core 0.2.0, a MAJOR apart` and reddened release-e2e. What stays green
   without it: every other apl-core version signal reads the SPEC, and on Linode's managed
   App Platform the spec cannot know the answer — Linode installs the platform,
   `apl_enabled` is a create-time boolean, and the Linode API exposes no version field at

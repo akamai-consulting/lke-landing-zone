@@ -10,9 +10,20 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 )
 
+// baselineImage is an operator image on the version this llz release targets.
+func baselineImage() string {
+	return "docker.io/linode/apl-core:" + clusterspec.BaselineAplChartVersion
+}
+
 // deployJSON builds a `kubectl get deploy -o json` body with one Deployment
-// carrying the given labels.
-func deployJSON(name string, labels map[string]string) []byte {
+// carrying the given labels and a single apl-operator container on `image`.
+func deployJSON(name string, labels map[string]string, image string) []byte {
+	return deployJSONContainers(name, labels, map[string]string{containerName: image})
+}
+
+// deployJSONContainers is the same with an explicit container name→image map, for
+// the sidecar and wrong-name arms.
+func deployJSONContainers(name string, labels map[string]string, containers map[string]string) []byte {
 	var b strings.Builder
 	b.WriteString(`{"items":[{"metadata":{"name":"` + name + `","labels":{`)
 	first := true
@@ -23,7 +34,16 @@ func deployJSON(name string, labels map[string]string) []byte {
 		first = false
 		fmt.Fprintf(&b, "%q:%q", k, v)
 	}
-	b.WriteString(`}}}]}`)
+	b.WriteString(`}},"spec":{"template":{"spec":{"containers":[`)
+	first = true
+	for n, img := range containers {
+		if !first {
+			b.WriteString(",")
+		}
+		first = false
+		fmt.Fprintf(&b, `{"name":%q,"image":%q}`, n, img)
+	}
+	b.WriteString(`]}}}}]}`)
 	return []byte(b.String())
 }
 
@@ -32,8 +52,8 @@ func deployJSON(name string, labels map[string]string) []byte {
 // the wrong reason. If this one breaks, none of the others mean anything.
 func TestAplDeployedMatchingBaselinePasses(t *testing.T) {
 	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		chartLabel: "apl-" + clusterspec.BaselineAplChartVersion,
-	}), nil)
+		nameLabel: aplOperatorName,
+	}, baselineImage()), nil)
 	if v.Err != nil {
 		t.Fatalf("a cluster on the baseline must pass: %v", v.Err)
 	}
@@ -43,8 +63,40 @@ func TestAplDeployedMatchingBaselinePasses(t *testing.T) {
 	if v.Live != clusterspec.BaselineAplChartVersion {
 		t.Errorf("live = %q, want the baseline %q", v.Live, clusterspec.BaselineAplChartVersion)
 	}
-	if v.Source != chartLabel {
-		t.Errorf("source = %q, want the chart label — the image tag is a proxy and must never be the source", v.Source)
+}
+
+// THE REGRESSION THIS LANE SHIPPED, reproduced from a REAL managed cluster.
+//
+// The first cut read `helm.sh/chart`, falling back to `app.kubernetes.io/version`.
+// Both are written by the apl-operator SUB-chart's common-labels helper from that
+// sub-chart's own Chart.yaml (version: 0.2.0, appVersion: "1.16.0") — constants of
+// the operator's packaging that do not move when the PLATFORM moves. A cluster
+// running v6.2.1 therefore read as "apl-core 0.2.0, a MAJOR apart", and release-e2e
+// went red against a platform that was perfectly in step.
+//
+// The fixture carries the exact label values a real cluster showed, so the old
+// reading cannot be restored without this going red. It is also why there is no
+// fallback any more: BOTH labels are wrong, so either one as a second source
+// reintroduces the bug.
+func TestAplDeployedIgnoresTheSubChartsOwnLabels(t *testing.T) {
+	raw := deployJSON("apl-operator", map[string]string{
+		nameLabel:                   aplOperatorName,
+		"helm.sh/chart":             "apl-operator-0.2.0",
+		"app.kubernetes.io/version": "1.16.0",
+	}, baselineImage())
+
+	v := evaluateAplDeployed(raw, nil)
+	if v.Err != nil {
+		t.Fatalf("a cluster on the baseline must pass even though the sub-chart labels read 0.2.0/1.16.0: %v", v.Err)
+	}
+	if v.Live != clusterspec.BaselineAplChartVersion {
+		t.Fatalf("live = %q, want %q — the sub-chart's packaging version was read as the platform version, "+
+			"which is exactly the bug release-e2e caught", v.Live, clusterspec.BaselineAplChartVersion)
+	}
+	for _, forbidden := range []string{"0.2.0", "1.16.0"} {
+		if strings.Contains(v.Live, forbidden) {
+			t.Errorf("live = %q must never come from the sub-chart's own coordinates (%s)", v.Live, forbidden)
+		}
 	}
 }
 
@@ -62,14 +114,26 @@ func TestAplDeployedFailsClosed(t *testing.T) {
 		{"unparseable listing", []byte("not json"), nil, "did not parse"},
 		{"no deployments at all", []byte(`{"items":[]}`), nil, "no Deployment at all"},
 		{
-			"deployments with no version label",
-			deployJSON("apl-operator", map[string]string{"app.kubernetes.io/name": "apl-operator"}),
-			nil, "Deployments present: apl-operator",
+			"the operator Deployment is absent",
+			deployJSON("something-else", map[string]string{nameLabel: "something-else"}, baselineImage()),
+			nil, "Deployments present: something-else",
 		},
 		{
-			"a version label that does not parse",
-			deployJSON("apl-operator", map[string]string{chartLabel: "apl-not-a-version"}),
-			nil, "not a chart version",
+			"no container by that name",
+			deployJSONContainers("apl-operator", map[string]string{nameLabel: aplOperatorName},
+				map[string]string{"istio-proxy": "istio:1.0.0", "other": "other:1.0.0"}),
+			nil, "no container named",
+		},
+		{
+			"a digest-pinned image carries no tag",
+			deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+				"linode/apl-core@sha256:"+strings.Repeat("a", 64)),
+			nil, "carries no tag",
+		},
+		{
+			"a tag that is not a version",
+			deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName}, "linode/apl-core:main"),
+			nil, "not a version this llz can compare",
 		},
 	}
 	for _, tc := range cases {
@@ -85,32 +149,85 @@ func TestAplDeployedFailsClosed(t *testing.T) {
 	}
 }
 
-// NAME WHAT IS PRESENT. If the label were renamed upstream, the absent name tells
-// the reader nothing — the Deployments that DO exist are the only lead.
-func TestAplDeployedNamesWhatItFound(t *testing.T) {
-	v := evaluateAplDeployed([]byte(`{"items":[{"metadata":{"name":"apl-operator","labels":{}}},{"metadata":{"name":"other","labels":{}}}]}`), nil)
+// A NON-SEMVER TAG IS A REAL apl-core STATE AND MUST BE NAMED. `otomi.version`
+// accepts a branch name, and the chart keys pullPolicy off exactly that distinction,
+// so "main" means a floating dev install rather than a corrupt read. The failure has
+// to print the tag: "we could not reach the cluster" and "the platform is on a
+// branch build" have nothing in common as remedies.
+func TestAplDeployedNamesANonSemverTag(t *testing.T) {
+	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+		nameLabel: aplOperatorName,
+	}, "linode/apl-core:main"), nil)
 	if v.Err == nil {
-		t.Fatal("no version-bearing label must fail")
+		t.Fatal("a tag llz cannot grade is UNKNOWN, and unknown fails")
 	}
-	for _, want := range []string{"apl-operator", "other", chartLabel, appVersionLabel} {
-		if !strings.Contains(v.Err.Error(), want) {
-			t.Errorf("the failure must name %q so the reader can find the new label; got: %v", want, v.Err)
+	if !strings.Contains(v.Err.Error(), `"main"`) {
+		t.Errorf("the failure must name the tag it found, got: %v", v.Err)
+	}
+	if v.Live != "main" {
+		t.Errorf("the unusable tag must still be carried on the verdict, got %q", v.Live)
+	}
+}
+
+// THE TAG PARSER, and every arm here is a reference form that really occurs.
+func TestImageTag(t *testing.T) {
+	cases := map[string]string{
+		"linode/apl-core:v6.2.1":                                   "v6.2.1",
+		"docker.io/linode/apl-core:v6.2.1":                         "v6.2.1",
+		"linode/apl-core:v6.3.0-rc.1":                              "v6.3.0-rc.1",
+		"apl-core:v6.2.1":                                          "v6.2.1",
+		"registry.example:5000/linode/apl-core:v6.2.1":             "v6.2.1",
+		"registry.example:5000/linode/apl-core":                    "", // a port is NOT a tag
+		"linode/apl-core":                                          "",
+		"linode/apl-core@sha256:" + strings.Repeat("a", 64):        "", // digest only: no tag
+		"linode/apl-core:v6.2.1@sha256:" + strings.Repeat("a", 64): "v6.2.1",
+	}
+	for image, want := range cases {
+		if got := imageTag(image); got != want {
+			t.Errorf("imageTag(%q) = %q, want %q", image, got, want)
 		}
 	}
 }
 
-// The fallback exists because the chart writes both labels, and the verdict must
-// SAY which one it read: "we could not collect" and "we read the other field" have
-// nothing in common as remedies.
-func TestAplDeployedFallsBackToAppVersion(t *testing.T) {
-	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		appVersionLabel: clusterspec.BaselineAplChartVersion,
-	}), nil)
+// A SIDECAR MUST NOT BE READ AS THE OPERATOR. A service mesh injects one without
+// asking, and "the first container" is then a coin toss that reports istio's version
+// as the platform's.
+func TestAplDeployedPicksTheOperatorContainer(t *testing.T) {
+	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
+		map[string]string{nameLabel: aplOperatorName},
+		map[string]string{"istio-proxy": "istio/proxyv2:1.20.0", containerName: baselineImage()}), nil)
 	if v.Err != nil {
-		t.Fatalf("the appVersion fallback must be usable: %v", v.Err)
+		t.Fatalf("an injected sidecar must not break the read: %v", v.Err)
 	}
-	if v.Source != appVersionLabel {
-		t.Errorf("source = %q, want %q", v.Source, appVersionLabel)
+	if v.Live != clusterspec.BaselineAplChartVersion {
+		t.Errorf("live = %q, want %q — a sidecar's tag was read as the platform version",
+			v.Live, clusterspec.BaselineAplChartVersion)
+	}
+}
+
+// A SINGLE-CONTAINER DEPLOYMENT IS THE ONE RELAXATION, so an upstream rename of the
+// container alone does not blind the lane while the answer is unambiguous.
+func TestAplDeployedAcceptsASoleContainerUnderAnotherName(t *testing.T) {
+	v := evaluateAplDeployed(deployJSONContainers("apl-operator",
+		map[string]string{nameLabel: aplOperatorName},
+		map[string]string{"operator": baselineImage()}), nil)
+	if v.Err != nil {
+		t.Fatalf("a sole container is unambiguous and must be read: %v", v.Err)
+	}
+	if v.Live != clusterspec.BaselineAplChartVersion {
+		t.Errorf("live = %q, want %q", v.Live, clusterspec.BaselineAplChartVersion)
+	}
+}
+
+// A RELEASE CANDIDATE IS AN ORDINARY PLATFORM VERSION. clusterspec.AplSemver
+// tolerates the suffix on purpose, and an rc must reach a VERDICT rather than the
+// unparseable failure arm.
+func TestAplDeployedToleratesAPreReleaseTag(t *testing.T) {
+	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+		nameLabel: aplOperatorName,
+	}, "linode/apl-core:"+clusterspec.BaselineAplChartVersion+"-rc.1"), nil)
+	if v.Err != nil {
+		t.Errorf("an rc of the baseline must not fail the lane: %v", v.Err)
 	}
 }
 
@@ -128,7 +245,7 @@ func TestAplDeployedPolicyMatchesTheSpecSidePolicy(t *testing.T) {
 	for _, live := range []string{
 		clusterspec.BaselineAplChartVersion, "6.2.0", "6.1.0", "6.0.0", "5.0.0", "7.0.0", "6.9.9",
 	} {
-		got := classifyAplDeployed(live, chartLabel)
+		got := classifyAplDeployed(live)
 		drift := clusterspec.AplChartDriftOf(live)
 		switch {
 		case drift == clusterspec.AplChartDriftNone:
@@ -157,14 +274,14 @@ func TestAplDeployedPolicyMatchesTheSpecSidePolicy(t *testing.T) {
 // — while the spec-side gate had honoured LLZ_ALLOW_APL_CHART_MAJOR_DRIFT all along.
 func TestAplDeployedMajorDriftHonoursTheEscapeHatch(t *testing.T) {
 	const major = "7.0.0"
-	if got := classifyAplDeployed(major, chartLabel); got.Err == nil {
+	if got := classifyAplDeployed(major); got.Err == nil {
 		t.Fatal("without the override a major apart must fail")
 	} else if !strings.Contains(got.Err.Error(), clusterspec.AllowMajorDriftEnv) {
 		t.Errorf("the failure must name the override, or the operator cannot find it: %v", got.Err)
 	}
 
 	t.Setenv(clusterspec.AllowMajorDriftEnv, "1")
-	got := classifyAplDeployed(major, chartLabel)
+	got := classifyAplDeployed(major)
 	if got.Err != nil {
 		t.Errorf("%s=1 must permit a staged major on the live lane exactly as it does on the spec side: %v",
 			clusterspec.AllowMajorDriftEnv, got.Err)
@@ -177,7 +294,7 @@ func TestAplDeployedMajorDriftHonoursTheEscapeHatch(t *testing.T) {
 // The warning has to be actionable on a managed cluster, where the reader cannot
 // move the version themselves: it must name both versions and say who owns the roll.
 func TestAplDeployedWarningNamesBothVersionsAndTheOwner(t *testing.T) {
-	v := classifyAplDeployed("6.1.0", chartLabel)
+	v := classifyAplDeployed("6.1.0")
 	if v.Warn == "" {
 		t.Fatal("a minor behind must warn")
 	}
@@ -188,45 +305,16 @@ func TestAplDeployedWarningNamesBothVersionsAndTheOwner(t *testing.T) {
 	}
 }
 
-// A RELEASE CANDIDATE IS AN ORDINARY CHART. The last "-" in "apl-v6.3.0-rc.1"
-// opens "rc.1", which does not parse — so a last-dash scan declared the label
-// unreadable and hard-failed this GATING lane on a cluster that was merely running
-// an rc. clusterspec.AplSemver tolerates the suffix on purpose, and this must too.
-func TestAplChartVersionFromLabelsToleratesPreRelease(t *testing.T) {
-	cases := map[string]string{
-		"apl-v6.2.1":       "v6.2.1",
-		"apl-v6.3.0-rc.1":  "v6.3.0-rc.1",
-		"apl-6.0.0":        "6.0.0",
-		"some-chart-1.2.3": "1.2.3",
-	}
-	for label, want := range cases {
-		got, src := aplChartVersionFromLabels(map[string]string{chartLabel: label})
-		if got != want {
-			t.Errorf("aplChartVersionFromLabels(%q) = %q, want %q", label, got, want)
-		}
-		if src != chartLabel {
-			t.Errorf("source for %q = %q, want %q", label, src, chartLabel)
-		}
-	}
-	// And an rc must reach a VERDICT, not the unparseable failure arm.
-	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:  aplOperatorName,
-		chartLabel: "apl-" + clusterspec.BaselineAplChartVersion + "-rc.1",
-	}), nil)
-	if v.Err != nil {
-		t.Errorf("an rc of the baseline must not fail the lane: %v", v.Err)
-	}
-}
-
-// A SIBLING IN THE SAME NAMESPACE IS NOT APL-CORE. Any Deployment from any chart
-// carries helm.sh/chart and app.kubernetes.io/version, so reading "the first item
-// with a version label" reports a neighbour's version as apl-core's — and hard-fails
+// A SIBLING IN THE SAME NAMESPACE IS NOT APL-CORE. Reading "the first Deployment
+// with a container" reports a neighbour's image tag as apl-core's — and hard-fails
 // a gating lane on a cluster that is perfectly in step. The neighbour here sorts
 // first and is a MAJOR away, so an unfiltered read fails loudly.
 func TestAplDeployedIgnoresSiblingDeployments(t *testing.T) {
 	raw := []byte(`{"items":[` +
-		`{"metadata":{"name":"aaa-other","labels":{"helm.sh/chart":"other-1.0.0","app.kubernetes.io/name":"other"}}},` +
-		`{"metadata":{"name":"apl-operator","labels":{"helm.sh/chart":"apl-` + clusterspec.BaselineAplChartVersion + `","app.kubernetes.io/name":"apl-operator"}}}` +
+		`{"metadata":{"name":"aaa-other","labels":{"app.kubernetes.io/name":"other"}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"other","image":"other:1.0.0"}]}}}},` +
+		`{"metadata":{"name":"apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + baselineImage() + `"}]}}}}` +
 		`]}`)
 	v := evaluateAplDeployed(raw, nil)
 	if v.Err != nil {
@@ -240,71 +328,13 @@ func TestAplDeployedIgnoresSiblingDeployments(t *testing.T) {
 // ...and when apl-core's operator is genuinely absent, a namespace full of other
 // charts must still FAIL. Filtering must not become a way to skip.
 func TestAplDeployedFailsWhenOnlySiblingsArePresent(t *testing.T) {
-	v := evaluateAplDeployed(deployJSON("other", map[string]string{
-		chartLabel: "other-1.0.0", nameLabel: "other",
-	}), nil)
+	v := evaluateAplDeployed(deployJSONContainers("other", map[string]string{nameLabel: "other"},
+		map[string]string{"other": "other:1.0.0"}), nil)
 	if v.Err == nil {
 		t.Fatal("no apl-operator Deployment must FAIL — a filtered query that matches nothing is the vacuous pass this lane refuses")
 	}
 	if !strings.Contains(v.Err.Error(), "other") {
 		t.Errorf("the failure must name what IS present, got: %v", v.Err)
-	}
-}
-
-// THE FALLBACK IS A WEAKER SOURCE AND MUST NEVER BLOCK. app.kubernetes.io/version
-// is the chart's appVersion; the baseline it is compared against is a CHART
-// version. They are the same string for apl-core today and nothing upstream
-// guarantees they stay coupled — so grading the fallback as if it were the chart
-// version would hard-fail a gating lane on a healthy cluster the day they diverge.
-func TestAplDeployedAppVersionFallbackNeverBlocks(t *testing.T) {
-	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:       aplOperatorName,
-		appVersionLabel: "9.0.0", // a major apart: blocking, if it were the chart version
-	}), nil)
-	if v.Err != nil {
-		t.Fatalf("a blocking-looking appVersion must be REPORTED, not failed: %v", v.Err)
-	}
-	if v.Warn == "" {
-		t.Fatal("it must still warn — a weaker source is not a reason for silence")
-	}
-	for _, want := range []string{appVersionLabel, chartLabel, "not guaranteed"} {
-		if !strings.Contains(v.Warn, want) {
-			t.Errorf("the warning must say which label it read and why that is weaker (missing %q): %s", want, v.Warn)
-		}
-	}
-	// The chart label, by contrast, is ground truth and DOES block.
-	v = evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:  aplOperatorName,
-		chartLabel: "apl-9.0.0",
-	}), nil)
-	if v.Err == nil {
-		t.Error("a major apart read from the CHART label must still fail — softening the fallback must not soften the real source")
-	}
-}
-
-// AN UNPARSEABLE CHART LABEL MUST NOT BEAT A USABLE appVersion SITTING BESIDE IT.
-// The fallback was consulted only when helm.sh/chart was ABSENT, so a mangled label
-// hard-failed this gating lane while the answer was on the same object.
-func TestAplDeployedFallsBackWhenTheChartLabelIsMangled(t *testing.T) {
-	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:       aplOperatorName,
-		chartLabel:      "apl-garbage",
-		appVersionLabel: clusterspec.BaselineAplChartVersion,
-	}), nil)
-	if v.Err != nil {
-		t.Fatalf("a usable appVersion beside a mangled chart label must be used, not failed: %v", v.Err)
-	}
-	if v.Source != appVersionLabel {
-		t.Errorf("source = %q, want %q so the reader knows which label answered", v.Source, appVersionLabel)
-	}
-	// With BOTH unusable there is genuinely no answer, and that still fails.
-	v = evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:       aplOperatorName,
-		chartLabel:      "apl-garbage",
-		appVersionLabel: "also-garbage",
-	}), nil)
-	if v.Err == nil {
-		t.Error("two unreadable labels is still UNKNOWN, and unknown fails")
 	}
 }
 
@@ -334,7 +364,7 @@ func TestAplOperatorNamesAgreeWithBootstrapcluster(t *testing.T) {
 // instruction that cannot be followed is worse than none — it spends the reader's
 // time before they work out it is wrong.
 func TestBlockingRemedyMatchesTheDriftDirection(t *testing.T) {
-	behind := classifyAplDeployed("5.0.0", chartLabel)
+	behind := classifyAplDeployed("5.0.0")
 	if behind.Err == nil {
 		t.Fatal("a major behind must block")
 	}
@@ -345,7 +375,7 @@ func TestBlockingRemedyMatchesTheDriftDirection(t *testing.T) {
 		t.Errorf("it must say who can actually move it, got: %v", behind.Err)
 	}
 
-	ahead := classifyAplDeployed("9.0.0", chartLabel)
+	ahead := classifyAplDeployed("9.0.0")
 	if ahead.Err == nil {
 		t.Fatal("a major ahead must block")
 	}
@@ -361,63 +391,19 @@ func TestBlockingRemedyMatchesTheDriftDirection(t *testing.T) {
 	}
 }
 
-// A LANE THAT HAS STOPPED GATING MUST SAY SO. Never blocking on the weaker source is
-// deliberate, but it has a cost: if apl-core stops writing helm.sh/chart entirely
-// this lane becomes warn-only forever and nobody is told the gate stopped gating.
-func TestDegradedFallbackAnnouncesItself(t *testing.T) {
+// EVERY VERDICT MUST SAY WHERE IT LOOKED. This is what made the sub-chart-label bug
+// diagnosable from a CI log alone: the failure printed the source it read, so the
+// wrong source was visible without touching a cluster.
+func TestVerdictNamesItsSource(t *testing.T) {
 	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:       aplOperatorName,
-		appVersionLabel: "9.0.0",
-	}), nil)
-	if v.Err != nil {
-		t.Fatalf("the weaker source must not block: %v", v.Err)
+		nameLabel: aplOperatorName,
+	}, baselineImage()), nil)
+	if v.Source != imageTagSource {
+		t.Errorf("source = %q, want %q", v.Source, imageTagSource)
 	}
-	if !strings.HasPrefix(v.Warn, "DEGRADED") {
-		t.Errorf("the degradation must lead, not be buried: %s", v.Warn)
-	}
-	if !strings.Contains(v.Warn, "not gating") {
-		t.Errorf("it must say the gate is not gating: %s", v.Warn)
-	}
-}
-
-// DEGRADED IS ABOUT THE SOURCE, NOT THE VERDICT. The banner hung off the major-drift
-// arm alone, so if helm.sh/chart disappeared while drift was minor — or absent —
-// the lane said "routine mid-rollout state", or nothing at all, and went warn-only
-// forever without naming the degradation. Every arm reachable through the fallback
-// must announce it.
-func TestDegradedIsAnnouncedOnEveryFallbackArm(t *testing.T) {
-	fallback := func(version string) AplDeployedVerdict {
-		return evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-			nameLabel:       aplOperatorName,
-			appVersionLabel: version,
-		}), nil)
-	}
-	for _, tc := range []struct{ name, version string }{
-		{"in agreement", clusterspec.BaselineAplChartVersion},
-		{"minor drift", "6.1.0"},
-		{"blocking drift", "9.0.0"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := fallback(tc.version)
-			if v.Err != nil {
-				t.Fatalf("the weaker source must never block: %v", v.Err)
-			}
-			if !strings.HasPrefix(v.Warn, "DEGRADED") {
-				t.Errorf("every fallback arm must announce the degradation, got %q", v.Warn)
-			}
-			if !strings.Contains(v.Warn, chartLabel) {
-				t.Errorf("it must name the label that went missing, got %q", v.Warn)
-			}
-		})
-	}
-
-	// ...and the authoritative source must NOT be labelled degraded.
-	ok := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
-		nameLabel:  aplOperatorName,
-		chartLabel: "apl-" + clusterspec.BaselineAplChartVersion,
-	}), nil)
-	if strings.Contains(ok.Warn, "DEGRADED") {
-		t.Errorf("a healthy authoritative read is not degraded, got %q", ok.Warn)
+	blocked := classifyAplDeployed("9.0.0")
+	if !strings.Contains(blocked.Err.Error(), imageTagSource) {
+		t.Errorf("a blocking failure must name where it read the version, got: %v", blocked.Err)
 	}
 }
 
@@ -428,7 +414,7 @@ func TestDegradedIsAnnouncedOnEveryFallbackArm(t *testing.T) {
 // the block, not the distance.
 func TestStagedMajorReadsDifferentlyFromAPatchLag(t *testing.T) {
 	t.Setenv(clusterspec.AllowMajorDriftEnv, "1")
-	staged := classifyAplDeployed("7.0.0", chartLabel)
+	staged := classifyAplDeployed("7.0.0")
 	if staged.Err != nil {
 		t.Fatalf("the override must permit it: %v", staged.Err)
 	}
@@ -439,35 +425,11 @@ func TestStagedMajorReadsDifferentlyFromAPatchLag(t *testing.T) {
 		t.Errorf("a major apart is not the routine mid-rollout state, got %q", staged.Warn)
 	}
 
-	lag := classifyAplDeployed("6.1.0", chartLabel)
+	lag := classifyAplDeployed("6.1.0")
 	if !strings.Contains(lag.Warn, "routine mid-rollout") {
 		t.Errorf("a minor lag IS the routine state, got %q", lag.Warn)
 	}
 	if strings.Contains(lag.Warn, clusterspec.AllowMajorDriftEnv) {
 		t.Errorf("a patch lag has nothing to do with the override, got %q", lag.Warn)
-	}
-}
-
-// AGREEMENT IS NOT DRIFT. The `::warning::` prefix was unconditional, so a cluster on
-// exactly the baseline whose helm.sh/chart label had gone missing — Warn carrying only
-// the DEGRADED banner — was annotated as having drifted. That is the "collection
-// stopped" versus "we read a different field" conflation the banner argues against,
-// reintroduced by the line that prints it.
-func TestWarningLabelNamesWhatHappened(t *testing.T) {
-	agree := classifyAplDeployed(clusterspec.BaselineAplChartVersion, appVersionLabel)
-	if agree.Err != nil {
-		t.Fatalf("agreement must not fail: %v", agree.Err)
-	}
-	if clusterspec.AplChartDriftOf(agree.Live) != clusterspec.AplChartDriftNone {
-		t.Fatal("premise: the baseline must read as no drift")
-	}
-	if !strings.HasPrefix(agree.Warn, "DEGRADED") {
-		t.Errorf("a fallback read still announces the degradation, got %q", agree.Warn)
-	}
-
-	// And a real gap still classifies as drift.
-	lag := classifyAplDeployed("6.1.0", chartLabel)
-	if clusterspec.AplChartDriftOf(lag.Live) == clusterspec.AplChartDriftNone {
-		t.Error("premise: 6.1.0 must read as drift against the baseline")
 	}
 }
