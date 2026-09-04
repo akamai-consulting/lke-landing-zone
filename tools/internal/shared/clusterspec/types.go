@@ -97,6 +97,21 @@ type Team struct {
 	// "secret/gsap" grants create/update/read on secret/data/gsap/* and
 	// secret/metadata/gsap/*. Must begin with "secret/".
 	OpenbaoSubtree string `json:"openbaoSubtree"`
+	// ResourceQuota overrides entries in the team's AplTeamSettingSet
+	// resourceQuota. Optional: unset renders the secure-minimal defaults
+	// (services.loadbalancers "0", services.nodeports "0", pods "50") exactly as
+	// before, so an instance that does not set it sees no render diff.
+	//
+	// Keys are Kubernetes ResourceQuota resource names, values quantities — both
+	// as strings, because that is what the CR takes. A key that names a default
+	// REPLACES it in place; any other key is appended (sorted) after the
+	// defaults, so the rendered order is stable across runs.
+	//
+	// Raising services.loadbalancers is the one entry worth thinking twice about:
+	// each LoadBalancer a team creates provisions a Linode NodeBalancer with a
+	// public IP and NO firewall attached by default. Budget for that and attach
+	// one; see docs/landing-zone-spec.md.
+	ResourceQuota map[string]string `json:"resourceQuota,omitempty"`
 }
 
 // AplRole is the Keycloak realm role (and same-named group) apl-core provisions

@@ -95,6 +95,18 @@ spec:
   teams:
     - name: platform                  # apl team id → Keycloak role team-platform
       openbaoSubtree: secret/platform # → write on secret/data/platform/*
+      # Optional per-team ResourceQuota overrides. Unset renders the secure
+      # defaults unchanged: services.loadbalancers "0", services.nodeports "0",
+      # pods "50". A key naming a default replaces it; any other key is appended.
+      #
+      # services.loadbalancers is the one to think twice about: every
+      # LoadBalancer a team creates provisions a Linode NodeBalancer with a
+      # public IP and NO firewall attached. It is also NOT how you get public
+      # ingress for an app — this quota covers team namespaces only, and the
+      # platform ingress gateway sits outside it. See docs/landing-zone-spec.md.
+      # resourceQuota:
+      #   services.loadbalancers: "1"
+      #   pods: "100"
 
   # ── Shared VPCs (optional — most instances leave this out) ──────────────────
   # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —

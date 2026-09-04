@@ -140,7 +140,7 @@ func TestReconcile_MissingBranchIsNoOp(t *testing.T) {
 func TestReconcile_ProvisionsTeamsWhenAbsent(t *testing.T) {
 	repo := &fakeRepo{files: map[string]string{
 		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
-		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
+		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings(clusterspec.Team{Name: "platform"}),
 		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
 		// target env/teams/platform/* is ABSENT (not in map → read returns not-found)
 	}}
@@ -162,7 +162,7 @@ func TestReconcile_ProvisionsTeamsWhenAbsent(t *testing.T) {
 func TestReconcile_NeverClobbersExistingTeam(t *testing.T) {
 	repo := &fakeRepo{files: map[string]string{
 		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
-		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
+		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings(clusterspec.Team{Name: "platform"}),
 		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
 		// target ALREADY has the team, with console-owned edits (a member):
 		aplTeamTarget("platform", clusterspec.TeamSettingsFile): "kind: AplTeamSettingSet\nmetadata:\n  name: platform\nspec:\n  members:\n    - alice\n",

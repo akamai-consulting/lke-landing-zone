@@ -17,7 +17,11 @@ package clusterspec
 // the team tools. Values are secure, minimal defaults — the platform admin tunes
 // them in the console; LLZ only needs the team to EXIST so login works.
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 const (
 	// OverlayTeamsFile is the per-env manifest listing team names (spec.teams is instance-wide, rendered per env); the
@@ -64,11 +68,64 @@ func TeamNames(manifest []byte) ([]string, error) {
 	return names, nil
 }
 
+// defaultTeamQuotaOrder is the RENDER ORDER of the built-in quota entries. It is
+// deliberately not alphabetical: it is the order the renderer has always emitted,
+// and every instance has that byte sequence committed. Sorting these would show up
+// as render drift on every existing instance for no benefit, so the built-ins keep
+// their historical order and only ADDITIONAL keys are sorted (see teamQuota).
+var defaultTeamQuotaOrder = []string{"services.loadbalancers", "services.nodeports", "pods"}
+
+// defaultTeamQuota is the secure-minimal quota a team gets unless its spec entry
+// overrides an entry. Both LoadBalancers and NodePorts are zero: each is a way for
+// a team workload to open a public entrypoint of its own, which the landing zone
+// wants to be a deliberate, reviewed act rather than a side effect of a Service
+// manifest.
+var defaultTeamQuota = map[string]string{
+	"services.loadbalancers": "0",
+	"services.nodeports":     "0",
+	"pods":                   "50",
+}
+
+// teamQuota merges a team's spec overrides onto the defaults and returns the
+// entries in render order: the built-ins first, in defaultTeamQuotaOrder (with any
+// overridden VALUE substituted in place), then every additional key sorted. Sorting
+// the tail keeps the output deterministic — a Go map range is randomised, and an
+// unstable render would fail the committed-manifest drift check on every run.
+func teamQuota(overrides map[string]string) [][2]string {
+	out := make([][2]string, 0, len(defaultTeamQuota)+len(overrides))
+	for _, k := range defaultTeamQuotaOrder {
+		v := defaultTeamQuota[k]
+		if o, ok := overrides[k]; ok {
+			v = o
+		}
+		out = append(out, [2]string{k, v})
+	}
+	extra := make([]string, 0, len(overrides))
+	for k := range overrides {
+		if _, isDefault := defaultTeamQuota[k]; !isDefault {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(extra)
+	for _, k := range extra {
+		out = append(out, [2]string{k, overrides[k]})
+	}
+	return out
+}
+
 // RenderTeamSettings is a team's AplTeamSettingSet — the CR apl-operator
 // provisions the namespace + Keycloak group + realm role team-<name> from. Secure
 // minimal defaults: no managed monitoring, private-only network policy, a modest
 // quota, and self-service scoped to non-destructive actions.
-func RenderTeamSettings(name string) string {
+//
+// The quota is the one block the spec can tune (spec.teams[].resourceQuota); every
+// other field is fixed here and tuned by the platform admin in the console. A team
+// with no resourceQuota renders byte-for-byte what it always did.
+func RenderTeamSettings(t Team) string {
+	var quota strings.Builder
+	for _, kv := range teamQuota(t.ResourceQuota) {
+		fmt.Fprintf(&quota, "    - name: %s\n      value: %q\n", kv[0], kv[1])
+	}
 	return fmt.Sprintf(`kind: AplTeamSettingSet
 metadata:
   name: %[1]s
@@ -87,20 +144,14 @@ spec:
     egressPublic: false
     ingressPrivate: true
   resourceQuota:
-    - name: services.loadbalancers
-      value: "0"
-    - name: services.nodeports
-      value: "0"
-    - name: pods
-      value: "50"
-  selfService:
+%[2]s  selfService:
     teamMembers:
       createServices: true
       downloadDockerLogin: true
       downloadKubeconfig: true
       editSecurityPolicies: false
       useCloudShell: true
-`, name)
+`, t.Name, quota.String())
 }
 
 // RenderTeamApps is a team's AplTeamTool — team-tool resource sizing. Minimal

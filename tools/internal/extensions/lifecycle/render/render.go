@@ -566,7 +566,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(overlay, clusterspec.OverlayTeamsFile)] = clusterspec.RenderTeamsManifest(teams)
 		for _, t := range teams {
 			td := filepath.Join(overlay, "teams", t.Name)
-			targets[filepath.Join(td, clusterspec.TeamSettingsFile)] = clusterspec.RenderTeamSettings(t.Name)
+			targets[filepath.Join(td, clusterspec.TeamSettingsFile)] = clusterspec.RenderTeamSettings(t)
 			targets[filepath.Join(td, clusterspec.TeamAppsFile)] = clusterspec.RenderTeamApps(t.Name)
 		}
 	}

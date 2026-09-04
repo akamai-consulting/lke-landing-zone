@@ -418,6 +418,42 @@ untouched — there is no load-time default — and opt in by adding a team here
 retrofit path). Full walkthrough:
 [docs/runbooks/openbao-team-login.md](runbooks/openbao-team-login.md).
 
+`resourceQuota` (optional) tunes the team's `AplTeamSettingSet` quota. Unset, a
+team renders the secure-minimal defaults — and renders them byte-for-byte as it
+always has, so adding this field drifts nothing:
+
+| resource | default | why |
+|---|---|---|
+| `services.loadbalancers` | `"0"` | a LoadBalancer Service provisions a **Linode NodeBalancer with a public IP**; opening one should be a reviewed act, not a side effect of a Service manifest |
+| `services.nodeports` | `"0"` | a NodePort is the other way a team workload reaches the public node interface |
+| `pods` | `"50"` | a modest ceiling; raise it for a busy team |
+
+Keys are Kubernetes ResourceQuota resource names and values are quantities, both
+as strings (that is what the CR takes). A key naming a default **replaces** it in
+place; any other key is appended after the defaults, sorted, so the render is
+deterministic. `llz render` rejects a malformed name or a negative/non-numeric
+quantity — without that check the error would surface much later, when
+apl-operator applies the CR into a cluster nobody is watching.
+
+```yaml
+teams:
+  - name: platform
+    openbaoSubtree: secret/platform
+    resourceQuota:
+      services.loadbalancers: "1"   # allow ONE team-owned NodeBalancer
+      pods: "100"
+      requests.cpu: "8"             # a key with no default — appended
+```
+
+> **Raising `services.loadbalancers` has a cost and a security edge.** Each
+> LoadBalancer the team creates bills as a NodeBalancer *and* comes up with **no
+> Cloud Firewall attached**, i.e. reachable from the whole internet on whatever
+> ports the Service declares. If you raise it, plan to attach a firewall to the
+> resulting NodeBalancer. Note also that this quota governs **team namespaces
+> only** — the platform's own ingress gateway lives outside it, so raising this
+> is *not* how you get public ingress for an app. Route those through the shared
+> ingress gateway instead.
+
 > **`llz render` does not write apl-core's `values.yaml`.** LLZ runs exclusively on
 > Linode's **managed** App Platform, where apl-core owns its own values (ADR
 > [0005](adr/0005-managed-app-platform.md)) — `template-scripts/ci/scaffold-render-check.sh`
