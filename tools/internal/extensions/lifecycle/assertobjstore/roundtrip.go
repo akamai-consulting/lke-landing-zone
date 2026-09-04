@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kube"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 )
@@ -72,6 +73,18 @@ type objConsumer struct {
 	// it — and the failure would look like "Loki cannot write", which is the worst
 	// possible wrong answer. Every candidate tried is named in the failure.
 	ConfigRefs []string
+	// Component is the optional apl-core app this consumer belongs to, as it is
+	// named in `spec.cluster.bootstrap.managedApps` and in the component registry.
+	//
+	// WHY THE CHECK NEEDS IT AT ALL. Both consumers here are OPTIONAL apps. An
+	// instance that never enabled Harbor has no harbor namespace and no
+	// registry-storage-credentials Secret, and probeObjConsumer correctly reports
+	// an absent credential Secret as a failure — "this consumer cannot be writing
+	// at all" is true. Run unconditionally on a weekly cron, that makes the lane
+	// permanently red on every instance that does not run Harbor, and a gate
+	// nobody can turn green is a gate that gets switched off. Narrowing to the
+	// apps the spec says are enabled is what lets this be scheduled at all.
+	Component string
 }
 
 // objConsumers are the two workloads whose object-storage writes are load-bearing.
@@ -83,7 +96,8 @@ type objConsumer struct {
 // normalized somewhere.
 var objConsumers = []objConsumer{
 	{
-		Name: "loki",
+		Name:      "loki",
+		Component: "loki",
 		// The Secret apl-core's Loki release actually mounts. NOT
 		// `loki-object-store` — that is the OPENBAO PATH name
 		// (secret/loki/object-store, credpaths.CredPaths) and the two were conflated. The
@@ -101,7 +115,8 @@ var objConsumers = []objConsumer{
 		},
 	},
 	{
-		Name: "harbor",
+		Name:      "harbor",
+		Component: "harbor",
 		// Same correction as loki: `harbor-registry-s3` is the OpenBao path name
 		// (secret/harbor/registry-s3); the registry mounts this one.
 		SecretRef:      "harbor/registry-storage-credentials",
@@ -330,11 +345,59 @@ func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict
 	return v
 }
 
-func Run(only []string, keyPrefix string, settle, interval time.Duration) error {
+// enabledConsumers narrows the consumer set to the optional apl-core apps this
+// deployment actually declares, so an instance that never enabled Harbor is not
+// held to Harbor's write path.
+//
+// FAIL-OPEN ON AN UNREADABLE SPEC, and that direction is deliberate. If the spec
+// cannot be loaded this returns every consumer and says so: narrowing on evidence
+// we do not have is how a gate quietly stops checking the thing it exists for,
+// and a false red is recoverable in a way a vacuous green is not.
+//
+// SELF-INSTALL CLUSTERS ARE NOT NARROWED. managedApps is meaningful only where
+// Linode installs a minimal apl-core and the operator turns extras on in the
+// Console; on a self-install cluster component toggles drive what exists and the
+// list is documented as ignored. Reading it there would narrow on a field that
+// means nothing.
+func enabledConsumers(all []objConsumer, root, env string) (sel []objConsumer, skipped []string) {
+	if env == "" {
+		return all, nil
+	}
+	lz, err := clusterspec.LoadSplit(root)
+	if err != nil {
+		return all, nil
+	}
+	e, ok := lz.Env(env)
+	if !ok || !e.Cluster.Bootstrap.ManagedAppPlatform {
+		return all, nil
+	}
+	for _, c := range all {
+		if c.Component == "" || e.Cluster.Bootstrap.ManagedAppEnabled(c.Component) {
+			sel = append(sel, c)
+			continue
+		}
+		skipped = append(skipped, c.Component)
+	}
+	return sel, skipped
+}
+
+func Run(only []string, keyPrefix, root, env string, settle, interval time.Duration) error {
 	fmt.Println("## Object-storage round-trip assertion (Loki + Harbor can WRITE)")
 
-	consumers := objConsumers
+	consumers, skipped := enabledConsumers(objConsumers, root, env)
+	for _, name := range skipped {
+		// PRINTED, NOT SILENT. A narrowed check that does not say what it dropped
+		// reads identically to a check that covered everything, which is the shape
+		// this whole lane exists to refuse.
+		fmt.Printf("skip: %s is not in spec.cluster.bootstrap.managedApps for %s — not checked\n", name, env)
+	}
+	// --only is an OVERRIDE, applied after the spec narrowing and against the full
+	// set: an operator naming a consumer explicitly has asked for that one to be
+	// checked, and silently dropping it because the spec disagrees would answer a
+	// different question than the one asked.
 	if len(only) > 0 {
+		// Built from objConsumers, NOT from the narrowed set — that is what makes
+		// this an override rather than a filter on top of a filter.
 		byName := map[string]objConsumer{}
 		for _, c := range objConsumers {
 			byName[c.Name] = c

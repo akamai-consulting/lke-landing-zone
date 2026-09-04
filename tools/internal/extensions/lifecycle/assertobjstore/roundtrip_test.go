@@ -20,6 +20,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -255,4 +258,122 @@ func objSecretJSON(access, secret string) []byte {
 		"AWS_SECRET_ACCESS_KEY": base64.StdEncoding.EncodeToString([]byte(secret)),
 	}})
 	return b
+}
+
+// specRoot writes a minimal instance whose prod deployment declares the given
+// managedApps, so the narrowing is exercised against a real LoadSplit rather than
+// a hand-built struct — the parse is part of what can break.
+func specRoot(t *testing.T, managed string, apl bool) string {
+	t.Helper()
+	root := t.TempDir()
+	lz := `apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: inst
+spec:
+  instance:
+    upstreamOrg: akamai-consulting
+    repo: acme/inst
+    forge: github
+  teams:
+    - name: platform
+      openbaoSubtree: secret/platform
+`
+	if err := os.WriteFile(filepath.Join(root, "landingzone.yaml"), []byte(lz), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "environments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := fmt.Sprintf(`apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata:
+  name: prod
+spec:
+  cluster:
+    clusterLabel: inst-prod
+    region: us-ord
+    k8sVersion: v1.33.6+lke7
+    nodePool: {type: g8-dedicated-8-4, count: 5}
+    bootstrap:
+      name: inst-prod
+      managedAppPlatform: %t
+      managedApps: [%s]
+    objectStorage:
+      cluster: us-ord-1
+`, apl, managed)
+	if err := os.WriteFile(filepath.Join(root, "environments", "prod.yaml"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func names(cs []objConsumer) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// THE REASON THIS CHECK CAN BE SCHEDULED AT ALL. Harbor is optional; an instance
+// that never enabled it has no registry-storage-credentials Secret, and
+// probeObjConsumer reports an absent Secret as a failure. Without the narrowing
+// the weekly lane is permanently red on those instances, and a gate nobody can
+// turn green is one that gets switched off.
+func TestAnUndeclaredAppIsNotHeldToItsWritePath(t *testing.T) {
+	sel, skipped := enabledConsumers(objConsumers, specRoot(t, "loki", true), "prod")
+	if got := names(sel); len(got) != 1 || got[0] != "loki" {
+		t.Errorf("selected %v, want just loki", got)
+	}
+	if len(skipped) != 1 || skipped[0] != "harbor" {
+		t.Errorf("skipped %v, want [harbor] — a silent narrowing reads like full coverage", skipped)
+	}
+}
+
+// The narrowing must not become an excuse. An instance that DOES declare the app
+// is held to it, which is the case that caught a 42-day outage.
+func TestADeclaredAppIsChecked(t *testing.T) {
+	sel, skipped := enabledConsumers(objConsumers, specRoot(t, "loki, harbor", true), "prod")
+	if len(sel) != 2 {
+		t.Errorf("selected %v, want both consumers", names(sel))
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped %v with both declared", skipped)
+	}
+}
+
+// FAIL-OPEN, and only in this direction. An unreadable spec must widen to every
+// consumer rather than narrow: a false red is recoverable, a check that quietly
+// stopped looking is the failure this whole lane exists to refuse.
+func TestAnUnreadableSpecChecksEverything(t *testing.T) {
+	for name, root := range map[string]string{
+		"no spec at all": t.TempDir(),
+		"unknown env":    specRoot(t, "loki", true),
+		"self-install":   specRoot(t, "loki", false),
+	} {
+		env := "prod"
+		if name == "unknown env" {
+			env = "staging"
+		}
+		sel, skipped := enabledConsumers(objConsumers, root, env)
+		if len(sel) != len(objConsumers) {
+			t.Errorf("%s: selected %v, want every consumer — narrowing on evidence we do not "+
+				"have is how a gate stops checking the thing it exists for", name, names(sel))
+		}
+		if len(skipped) != 0 {
+			t.Errorf("%s: reported skips %v while checking everything", name, skipped)
+		}
+	}
+}
+
+// managedApps is documented as IGNORED on a self-install cluster (component
+// toggles drive those), so reading it there would narrow on a field that means
+// nothing. Pinned separately from the unreadable cases because it is a different
+// reason for the same answer.
+func TestSelfInstallClustersAreNotNarrowedByManagedApps(t *testing.T) {
+	sel, _ := enabledConsumers(objConsumers, specRoot(t, "loki", false), "prod")
+	if len(sel) != len(objConsumers) {
+		t.Errorf("a self-install cluster was narrowed by managedApps: %v", names(sel))
+	}
 }
