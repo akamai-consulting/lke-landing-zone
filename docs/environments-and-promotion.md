@@ -352,7 +352,7 @@ branching the repo:
 
 | Knob | Where | Typical pipeline use |
 |---|---|---|
-| `aplChartVersion` | `spec.cluster.bootstrap.aplChartVersion` (env YAML) | bump `dev` first, promote the pin to `staging`/`prod` once green |
+| `aplChartVersion` | `spec.cluster.bootstrap.aplChartVersion` (env YAML) | **Rarely worth setting.** On managed App Platform Linode owns the deployed version, so a pin promotes nothing to a cluster — it only moves what `llz ci assert-apl-version` resolves. `llz upgrade` drops a pin llz set so the env tracks the release baseline; set one only to hold an env's *assertion* at a version of your own choosing |
 | `k8s_version` | `cluster/<env>.tfvars` | canary a new LKE-E version on `dev` |
 | node sizing / count | `cluster/<env>.tfvars` | smaller `dev`, production-sized `prod` |
 | region | `cluster/<env>.tfvars` | co-locate or spread stages |

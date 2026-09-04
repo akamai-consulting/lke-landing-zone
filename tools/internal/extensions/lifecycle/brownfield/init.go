@@ -11,7 +11,8 @@ package brownfield
 // source APL/k8s versions describe the platform being left behind. k8s is left at
 // the template default and flagged (a +lke version must be valid in the account).
 //
-// The apl-core target tracks the platform baseline (d.DefaultAplChartVersion) rather
+// The apl-core target tracks the platform baseline (d.DefaultAplChartVersion) — it is
+// REPORTED, never written into the spec, so the instance keeps tracking it — rather
 // than a literal of its own. It used to pin 5.0.0, which stopped being a target the
 // moment the baseline moved to 6.x: `llz ci assert-apl-version` refuses anything
 // below the floor, so every imported instance was scaffolded DEAD ON ARRIVAL and
@@ -98,7 +99,12 @@ func RunInit(d Deps, o InitOpts) error {
 
 	fmt.Printf("\n%s\n", color.Bold("Imported into "+o.Dir))
 	fmt.Printf("  spec authored for env %q from %s; review %s/%s for the manual steps.\n", o.Env, o.Report, o.Dir, migrationTodoFile)
-	fmt.Printf("  apl-core pinned to %s; k8s_version left at the template default — set a valid +lke version.\n", d.DefaultAplChartVersion)
+	// NOT PINNED, AND THE WORDING MATTERS. The scaffold leaves
+	// spec.cluster.bootstrap.aplChartVersion UNSET so the imported instance resolves
+	// to clusterspec.BaselineAplChartVersion and keeps tracking it across upgrades.
+	// Seeding the baseline as a literal would make every imported instance born
+	// carrying a pin the next `llz upgrade` retires.
+	fmt.Printf("  apl-core tracks this llz release's baseline (%s), unpinned; k8s_version left at the template default — set a valid +lke version.\n", d.DefaultAplChartVersion)
 	return nil
 }
 
@@ -173,10 +179,9 @@ func applyComponentToggles(d Deps, env string, assigns []string) error {
 // (the source version isn't a valid LKE target).
 func reportToEnvSpec(d Deps, rep importReport) EnvSpec {
 	o := EnvSpec{
-		Region:          firstNonEmpty(linodeRegion(rep), rep.Cluster.Region),
-		ClusterDomain:   rep.DNS.DomainSuffix,
-		ObjCluster:      reportObjCluster(rep),
-		AplChartVersion: d.DefaultAplChartVersion,
+		Region:        firstNonEmpty(linodeRegion(rep), rep.Cluster.Region),
+		ClusterDomain: rep.DNS.DomainSuffix,
+		ObjCluster:    reportObjCluster(rep),
 	}
 	if nt, nc := largestPool(rep); nt != "" {
 		o.NodeType = nt

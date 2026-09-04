@@ -21,13 +21,12 @@ import yamlv3 "gopkg.in/yaml.v3"
 // looking at a cluster reveals. Declaring only what import fills keeps the
 // boundary honest: a field appearing here is a claim that adoption can discover it.
 type EnvSpec struct {
-	Region          string
-	ClusterDomain   string
-	ObjCluster      string
-	AplChartVersion string
-	NodeType        string
-	NodeCount       string
-	SubnetCIDR      string
+	Region        string
+	ClusterDomain string
+	ObjCluster    string
+	NodeType      string
+	NodeCount     string
+	SubnetCIDR    string
 }
 
 // Deps carries what this package cannot reach for itself.

@@ -1639,7 +1639,12 @@ categories:
     #                       immutability is a property of apiserver validation and
     #                       nothing static can read it off this repo. Fixtures,
     #                       probe and grading are all in assertions/assertplatform.
-    budget: 1952
+    #   1,951 / 129 files  -1 the `AplChartVersion: spec.AplChartVersion` mapping into
+    #                       envdef.Opts, which lost its last writer when `llz import
+    #                       init` stopped seeding the pin. An imported instance is now
+    #                       born UNPINNED so it tracks the baseline, and a field
+    #                       nothing sets was a claim with no source behind it.
+    budget: 1951
     exact: true
     include:
       - "tools/internal/cli/*.go"

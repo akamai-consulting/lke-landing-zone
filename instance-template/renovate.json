@@ -17,7 +17,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Versions carrying an explicit `# renovate: datasource=… depName=…` annotation (e.g. apl_chart_version in tfvars, image tags in values). Accepts both HCL `name = \"v\"` and YAML `key: v` (quoted or bare).",
+      "description": "Versions carrying an explicit `# renovate: datasource=… depName=…` annotation (e.g. a chart version in tfvars, image tags in values). Accepts both HCL `name = \"v\"` and YAML `key: v` (quoted or bare).",
       "managerFilePatterns": ["/\\.(tf|tfvars|ya?ml)$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*[A-Za-z0-9_.-]+\\s*[:=]\\s*\"?(?<currentValue>[^\"\\s]+)\"?"

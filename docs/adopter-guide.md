@@ -41,7 +41,7 @@ provision them:
 | Prerequisite | Why | Notes |
 |---|---|---|
 | **Linode account with LKE-Enterprise** | The cluster, VPC, Object Storage, and Cloud Firewalls are all Linode | LKE-E (`+lke` k8s versions), not standard LKE. Production accounts need an executive sponsor + InfoSec approval — start this first (longest lead time); follow the [Linode account request checklist](infosec/linode-account-request-checklist.md) |
-| **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | Pinned via `apl_chart_version`; verify with `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions` (the `repo add` is required first — without it `search repo` reports no results rather than an error) |
+| **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | **Linode owns the deployed version** on managed App Platform — there is no tfvar and no API field for it. `llz` tracks a baseline it is tested against (`clusterspec.BaselineAplChartVersion`) and `llz ci assert-apl-deployed-version` reports when the cluster has drifted from it. To see what upstream has published: `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions` (the `repo add` is required first — without it `search repo` reports no results rather than an error) |
 | **A GitOps repo reachable over HTTPS** | apl-core's values schema requires an HTTPS Git URL that every node can reach | Must be reachable over HTTPS by every node — use github.com, gitlab.com, or an internal HTTPS mirror |
 | **Your own instance repo** | The TF-managed bootstrap Argo CD Application tracks *your* repo over SSH; `gh` targets it | Created for you by `llz new --push` (the `instance_repo` copier answer) — but its **owner must already exist**: `llz new` creates the repository, never the GitHub org that holds it, so [create the org](https://github.com/organizations/new) first (or answer `instance_repo` with your own user). **Forking this template is *not* required** — `upstream_org` defaults to `akamai-consulting` and the charts are public on GHCR. Fork only if you want to publish your own artifacts; then see §5 |
 | **GHCR pull access** | Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` | The packages are **public** — Argo CD pulls them anonymously, no credential needed. (A private fork can still seed a repo credential from `GHCR_READ_TOKEN` + `GHCR_USERNAME`; the Terraform gate honors it when set.) |
@@ -90,13 +90,21 @@ PR ("LLZ platform artifacts"). **After forking, repoint** the `packageName` /
 `registryAliases` in `renovate.json` from `akamai-consulting` to your fork/registry —
 the same repoint you do for the module `git::` host.
 
-For an **upstream chart** whose version lives in tfvars (e.g. `apl_chart_version`),
-add a one-line annotation above it so the annotation manager bumps it too:
+For an **upstream chart** whose version lives in tfvars, add a one-line annotation
+above it so the annotation manager bumps it too:
 
 ```hcl
-# renovate: datasource=helm depName=apl registryUrl=https://<your-apl-helm-repo>
-apl_chart_version = "v6.1.0"
+# renovate: datasource=helm depName=<chart> registryUrl=https://<your-helm-repo>
+<chart>_chart_version = "v1.2.3"
 ```
+
+> This used to be shown with `apl_chart_version`, which is no longer a Terraform
+> variable at all: LLZ runs on Linode's **managed** App Platform, where Linode
+> installs and versions apl-core, so there is nothing in tfvars for Renovate to bump.
+> (`spec.cluster.bootstrap.aplChartVersion` survives as a spec field, and
+> `llz env add --apl-chart-version` still writes one if you ask for it — but neither
+> reaches a cluster.) See `cluster.bootstrap.aplChartVersion` in the field reference below for what
+> the remaining spec field does — and does not — control.
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
 (workflows, overlays), the template repo/ref you generated from is recorded once,
@@ -161,7 +169,7 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 | `cluster.bootstrap.domainSuffix` | **MUST NOT SET** | Linode owns the `lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; the spec validator **rejects** a value outright (a stale one would misroute the Keycloak issuer + Harbor URL). `llz ci resolve-harbor-url` resolves `harbor.<domain>` from the live cluster |
 | `cluster.bootstrap.managedAppPlatform` | MUST-SET (`true`) | LLZ never self-installs apl-core; validated on every env. `llz env add` seeds it into `spec.defaults` for you |
 | `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). → apl-core `otomi.git.repoUrl` (Linode-owned on managed); the tfvar also feeds the Argo CD values-repo credential Secret |
-| `cluster.bootstrap.aplChartVersion` | optional | **Omit it.** On managed App Platform Linode owns the deployed apl-core version — bootstrap does not consume this field, so a pin deploys nothing. It survives only as the version `llz ci assert-apl-version` resolves; omitted, it uses the baseline this llz tracks. Set it only to make that check assert a version other than the baseline. (It was also read by an apl-core chart-schema check, retired along with the rendered values.yaml that check took as input.) |
+| `cluster.bootstrap.aplChartVersion` | optional | **Omit it.** On managed App Platform Linode owns the deployed apl-core version — bootstrap does not consume this field, so a pin deploys nothing. It survives only as the version `llz ci assert-apl-version` resolves; omitted, it uses the baseline this llz tracks — and `llz upgrade` REMOVES a pin that names a version llz itself set, so the field tracks each release by construction rather than needing a hand edit per bump. A pin llz never set is yours and survives the upgrade untouched — with one honest caveat: a deliberate hold at a version that *happens* to be a past baseline (`v6.2.0`, say) is indistinguishable in the file from an instance that was tracking us and got left behind, so it is dropped and you re-add it. Every drop is printed per file and arrives as a diff in a reviewable upgrade PR, and on managed App Platform a hold holds nothing that runs — only which version `llz ci assert-apl-version` resolves. What is actually RUNNING is a separate question, answered only by `llz ci assert-apl-deployed-version`, which reads the cluster. (It was also read by an apl-core chart-schema check, retired along with the rendered values.yaml that check took as input.) |
 | `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (`revision` defaults to a per-env **`apl-<env>`** branch that apl-core owns and pushes to — kept off `main`, see [apl-core-values-branch-isolation.md](designs/apl-core-values-branch-isolation.md); `username` defaults to `x-access-token`); the values-repo `revision` is **no longer a tfvar** — apl-core owns both on managed |
 | The Loki/Harbor S3 bucket names + endpoint | derived | `llz render` derives them from the env name + `cluster.objectStorage.cluster` into the apl-overlay (`apl-values/<env>/apl-overlay/obj.yaml`) — **not a cluster-bootstrap tfvar** |
 | `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). (apl-core 6.x auto-generates the Loki admin password — no `loki_admin_password` input.) |

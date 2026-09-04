@@ -38,13 +38,17 @@ func brownfieldDeps() brownfield.Deps {
 		ValidateEnvName: validate.EnvName,
 		EnvAdd: func(env string, spec brownfield.EnvSpec) error {
 			return environments.Run(cliopts.Global.DryRun, env, envdef.Opts{
-				Region:          spec.Region,
-				ClusterDomain:   spec.ClusterDomain,
-				ObjCluster:      spec.ObjCluster,
-				AplChartVersion: spec.AplChartVersion,
-				NodeType:        spec.NodeType,
-				NodeCount:       spec.NodeCount,
-				SubnetCIDR:      spec.SubnetCIDR,
+				Region:        spec.Region,
+				ClusterDomain: spec.ClusterDomain,
+				ObjCluster:    spec.ObjCluster,
+				// NO AplChartVersion: an imported instance is deliberately born
+				// UNPINNED so it tracks clusterspec.BaselineAplChartVersion across
+				// every future bump. The field left EnvSpec with its last writer —
+				// this struct's own header says a field appearing there is a claim
+				// that adoption can discover it, and nothing discovers this any more.
+				NodeType:   spec.NodeType,
+				NodeCount:  spec.NodeCount,
+				SubnetCIDR: spec.SubnetCIDR,
 			})
 		},
 		EnvSpecFile: environments.SpecFile,

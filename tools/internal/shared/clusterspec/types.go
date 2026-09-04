@@ -331,7 +331,7 @@ type HA struct {
 type Bootstrap struct {
 	Name             string    `json:"name"`                       // cluster_name
 	DomainSuffix     string    `json:"domainSuffix"`               // cluster_domain
-	AplChartVersion  string    `json:"aplChartVersion,omitempty"`  // apl_chart_version
+	AplChartVersion  string    `json:"aplChartVersion,omitempty"`  // NOT a tfvar; see clusterspec/aplversion.go
 	AplValues        AplValues `json:"aplValues,omitempty"`        // apl_values_repo_*
 	AppsRepoRevision string    `json:"appsRepoRevision,omitempty"` // apps_repo_revision
 	// ManagedAppPlatform pivots this cluster from LLZ self-installing apl-core to
