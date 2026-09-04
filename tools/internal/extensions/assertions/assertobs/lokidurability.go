@@ -24,6 +24,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/kubectlprobe"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // lokiIngesterContainer is the container within an ingester pod that holds the
@@ -124,6 +125,12 @@ type lokiPodSpec struct {
 			PersistentVolumeClaim *struct {
 				ClaimName string `json:"claimName"`
 			} `json:"persistentVolumeClaim"`
+			// The config volume's backing ConfigMap, so the replay ceiling is read
+			// from the object the ingester actually mounts rather than from a name
+			// this probe assumes.
+			ConfigMap *struct {
+				Name string `json:"name"`
+			} `json:"configMap"`
 		} `json:"volumes"`
 	} `json:"spec"`
 }
@@ -179,6 +186,10 @@ func lokiIngesterSpecs(nameMatch string) (specs []health.LokiIngesterSpec, answe
 			continue // not an ingester pod
 		}
 		for _, v := range p.Spec.Volumes {
+			if v.Name == lokiConfigVolumeName && v.ConfigMap != nil {
+				spec.WALReplayCeiling, spec.WALCeilingKnown =
+					lokiReplayCeiling(p.Metadata.Namespace, v.ConfigMap.Name)
+			}
 			if v.Name != health.LokiWALVolumeName {
 				continue
 			}
@@ -218,4 +229,52 @@ func pvcStorageClass(ns, name string) (class string, known bool) {
 		return "", false
 	}
 	return strings.TrimSpace(out), true
+}
+
+// lokiConfigVolumeName is the chart's name for the volume holding Loki's
+// rendered config.yaml, which the ingester loads at startup.
+//
+// A NAME THIS PROBE ASSUMES, said plainly, and the only one left in it. The
+// resource limits and the WAL volume are read off the pod, so a chart rename
+// cannot make them lie; the ceiling lives in a file this probe has to locate
+// first. The mitigation is that a miss reports UNKNOWN rather than ABSENT —
+// health.LokiIngesterDurability fails on both, but names which — so a rename
+// surfaces as "could not read the config" pointing here, not as a false
+// diagnosis of a missing ceiling pointing at the overlay.
+const lokiConfigVolumeName = "config"
+
+// lokiReplayCeiling reads ingester.wal.replay_memory_ceiling out of the config
+// the ingester loads. known=false means the ConfigMap or its key could not be
+// read; known=true with an empty string means the config genuinely sets no
+// ceiling, which is the finding.
+//
+// PARSED AS YAML, not grepped. `replay_memory_ceiling:` can legally appear
+// nested under a different top-level section, and a substring match would read a
+// neighbouring block's value as the ingester's — a gate confidently quoting a
+// number from the wrong place is worse than one that says it cannot tell.
+func lokiReplayCeiling(ns, cm string) (ceiling string, known bool) {
+	if ns == "" || cm == "" {
+		return "", false
+	}
+	out, ok := kubectlprobe.JSONPathOK("-n", ns, "get", "configmap", cm,
+		"-o", "jsonpath={.data.config\\.yaml}")
+	if !ok || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	var doc struct {
+		Ingester struct {
+			WAL struct {
+				ReplayMemoryCeiling any `yaml:"replay_memory_ceiling"`
+			} `yaml:"wal"`
+		} `yaml:"ingester"`
+	}
+	if yaml.Unmarshal([]byte(out), &doc) != nil {
+		return "", false
+	}
+	if doc.Ingester.WAL.ReplayMemoryCeiling == nil {
+		// The config parsed and simply does not set it: ABSENT, which is the
+		// finding, not a refusal to vouch.
+		return "", true
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", doc.Ingester.WAL.ReplayMemoryCeiling)), true
 }

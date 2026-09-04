@@ -18,6 +18,12 @@ func healthyIngester() LokiIngesterSpec {
 		WALVolumeSource: "persistentVolumeClaim",
 		WALStorageClass: wantClass,
 		WALClassKnown:   true,
+		// The ceiling the overlay asserts, and the reason it is part of "healthy"
+		// rather than an extra: a 3Gi limit with Loki's 4GB default ceiling is the
+		// production crashloop, so a fixture without it would be asserting that
+		// the known-broken shape passes.
+		WALReplayCeiling: "1536MB",
+		WALCeilingKnown:  true,
 	}
 }
 
@@ -92,6 +98,8 @@ func TestUnreadableStatesAreReportedAsFailures(t *testing.T) {
 		"unparseable limit":    func(s *LokiIngesterSpec) { s.MemoryLimit = "3 gigabytes" },
 		"no WAL volume":        func(s *LokiIngesterSpec) { s.WALVolumeSource = "" },
 		"unreadable PVC class": func(s *LokiIngesterSpec) { s.WALClassKnown = false },
+		"unreadable config":    func(s *LokiIngesterSpec) { s.WALCeilingKnown = false },
+		"unparseable ceiling":  func(s *LokiIngesterSpec) { s.WALReplayCeiling = "lots" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := healthyIngester()
@@ -258,5 +266,84 @@ func TestTheVolumeHalfReportsWithoutGating(t *testing.T) {
 	if _, failed := verdict(t, onlyLimitBad); !failed {
 		t.Error("a below-floor memory limit did NOT fail the lane — that half is deliverable " +
 			"and is the one that catches the OOM this whole check is named for")
+	}
+}
+
+// THE DEFECT THIS PROPERTY WAS ADDED FOR, as measured on a live cluster: the
+// limit is correct, the WAL is on the right class, every previously-asserted
+// property is green — and the ingester still OOMKills every ~11s forever,
+// because no ceiling is set and Loki's 4GB default cannot be reached inside a
+// 3Gi cgroup. Before this predicate that cluster was graded HEALTHY.
+func TestAnAbsentCeilingFailsEvenWhenEverythingElseIsRight(t *testing.T) {
+	s := healthyIngester()
+	s.WALReplayCeiling = ""
+	got, failed := verdict(t, s)
+	if !failed {
+		t.Errorf("an ingester with no replay ceiling was graded healthy — this is the exact "+
+			"shape that ran 205 restarts over 2d7h with ingestion down:\n%s", got)
+	}
+	if !strings.Contains(got, "replay_memory_ceiling") {
+		t.Errorf("the finding does not name the setting an operator must add:\n%s", got)
+	}
+}
+
+// A ceiling AT OR ABOVE the limit is the same failure spelled differently: the
+// process is killed before Loki ever decides to flush. Pinned separately from
+// the absent case because the remedy differs — one adds a key, the other
+// corrects a number — and because "it is set" is exactly the reasoning that
+// would wave this through.
+func TestACeilingThatDoesNotFitInsideTheLimitFails(t *testing.T) {
+	for _, ceiling := range []string{"3Gi", "4GB", "8GiB"} {
+		s := healthyIngester()
+		s.WALReplayCeiling = ceiling
+		if got, failed := verdict(t, s); !failed {
+			t.Errorf("ceiling %s passed against a 3Gi limit, but it can never be reached:\n%s",
+				ceiling, got)
+		}
+	}
+}
+
+// CONTROL for the above: the grammars really are different, and this is the
+// assertion that would have caught reusing QuantityBytes for both. "1536MB" is
+// ~1.54e9 bytes and fits inside 3Gi (~3.22e9); QuantityBytes cannot parse it at
+// all, so a single-parser implementation fails this test rather than shipping a
+// gate that is red on every correct cluster.
+func TestTheAssertedCeilingSpellingParsesAndFits(t *testing.T) {
+	if _, ok := QuantityBytes("1536MB"); ok {
+		t.Errorf("QuantityBytes now parses a humanize spelling; if that is deliberate, this " +
+			"test and LokiByteSize's rationale both need revisiting")
+	}
+	got, ok := LokiByteSize("1536MB")
+	if !ok {
+		t.Fatalf("LokiByteSize could not parse the spelling the overlay ships")
+	}
+	limit, _ := QuantityBytes("3Gi")
+	if got >= limit {
+		t.Errorf("the asserted ceiling %d is not below the asserted limit %d", got, limit)
+	}
+}
+
+// Both grammars, including the ones that differ only by a trailing B. A suffix
+// table ordered wrong reads "1536MiB" as 1536 bytes and passes every comparison
+// for the wrong reason.
+func TestLokiByteSizeReadsBothGrammars(t *testing.T) {
+	for in, want := range map[string]int64{
+		"1536MB":     1536e6,
+		"1536MiB":    1536 << 20,
+		"1.5GB":      1.5e9,
+		"4GB":        4e9,
+		"1073741824": 1 << 30,
+		"512Mi":      512 << 20,
+	} {
+		got, ok := LokiByteSize(in)
+		if !ok || got != want {
+			t.Errorf("LokiByteSize(%q) = %d, %v; want %d", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"", "lots", "3 gigabytes", "-1GB"} {
+		if got, ok := LokiByteSize(bad); ok {
+			t.Errorf("LokiByteSize(%q) = %d, true; want a refusal — a folded zero compares "+
+				"as below every limit and manufactures a pass", bad, got)
+		}
 	}
 }

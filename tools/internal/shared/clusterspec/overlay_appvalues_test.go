@@ -45,6 +45,10 @@ spec:
                 requests:
                     cpu: 100m
                     memory: 512Mi
+        loki:
+            ingester:
+                wal:
+                    replay_memory_ceiling: 1536MB
 `
 
 func lokiWant(t *testing.T) AppOverlay {

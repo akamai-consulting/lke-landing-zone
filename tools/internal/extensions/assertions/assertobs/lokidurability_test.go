@@ -36,6 +36,29 @@ const (
 // lookup with it unless a test says otherwise.
 const walClass = "block-storage-retain"
 
+// assertedLokiConfig is the rendered Loki config as it looks once the overlay's
+// ceiling has applied. Written as real config.yaml text, not as the struct the
+// probe decodes into, for the same reason ingesterPodJSON is: a decoder bug must
+// show up as a wrong answer rather than agree with itself.
+const assertedLokiConfig = `auth_enabled: true
+ingester:
+  chunk_encoding: snappy
+  wal:
+    replay_memory_ceiling: 1536MB
+limits_config:
+  max_cache_freshness_per_query: 10m
+`
+
+// noCeilingLokiConfig is the SHIPPED-BUT-BROKEN shape observed in production:
+// the ingester block exists and carries apl-core's own key, and the ceiling is
+// simply absent, so Loki's 4GB default is in force.
+const noCeilingLokiConfig = `auth_enabled: true
+ingester:
+  chunk_encoding: snappy
+limits_config:
+  max_cache_freshness_per_query: 10m
+`
+
 func findings(t *testing.T, listJSON string) (string, bool) {
 	t.Helper()
 	return findingsWithClass(t, listJSON, walClass)
@@ -48,10 +71,28 @@ func findings(t *testing.T, listJSON string) (string, bool) {
 // every PVC-backed case would fail for the wrong reason.
 func findingsWithClass(t *testing.T, listJSON, class string) (string, bool) {
 	t.Helper()
+	return findingsWithConfig(t, listJSON, class, assertedLokiConfig, nil)
+}
+
+// findingsWithConfig fakes all THREE reads the probe makes: the pod list, the
+// WAL PVC's class, and the ConfigMap carrying Loki's rendered config. cmErr, when
+// set, makes the ConfigMap read fail so the "could not tell" arm can be exercised
+// as something other than an empty string — an unreadable config and a config
+// that sets nothing are different findings.
+func findingsWithConfig(t *testing.T, listJSON, class, cfg string, cmErr error) (string, bool) {
+	t.Helper()
 	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
 		for _, a := range args {
 			if strings.Contains(a, "storageClassName") {
 				return []byte(class), nil
+			}
+		}
+		for _, a := range args {
+			if a == "configmap" {
+				if cmErr != nil {
+					return nil, cmErr
+				}
+				return []byte(cfg), nil
 			}
 		}
 		return []byte(listJSON), nil
@@ -260,5 +301,58 @@ func TestARenamedIngesterContainerIsStillGraded(t *testing.T) {
 	}
 	if strings.Contains(got, "nothing was examined") {
 		t.Errorf("the renamed ingester was skipped, so the fleet read empty:\n%s", got)
+	}
+}
+
+// THE DEFECT, READ OFF A REAL CONFIG. The pod is exactly the shape the overlay
+// asserts — 3Gi, PVC, right class — and the only difference is a config that
+// sets no ceiling. Before this the probe never opened the config at all, so this
+// cluster graded healthy while OOMKilling every ~11 seconds.
+func TestTheProbeFailsAPodWhoseConfigSetsNoCeiling(t *testing.T) {
+	got, failed := findingsWithConfig(t, ingesterPodJSON("3Gi", volPVC), walClass,
+		noCeilingLokiConfig, nil)
+	if !failed {
+		t.Fatalf("an ingester with no replay ceiling passed the probe:\n%s", got)
+	}
+	if !strings.Contains(got, "replay_memory_ceiling") {
+		t.Errorf("the finding does not name the missing setting:\n%s", got)
+	}
+}
+
+// UNREADABLE IS NOT ABSENT. Both fail, but an operator sent to add a key that is
+// already there — because the probe could not read the ConfigMap — is being sent
+// to the wrong place. The two arms must be distinguishable in the text.
+func TestAnUnreadableConfigIsNotReportedAsAnAbsentCeiling(t *testing.T) {
+	got, failed := findingsWithConfig(t, ingesterPodJSON("3Gi", volPVC), walClass,
+		"", errors.New("connection refused"))
+	if !failed {
+		t.Fatalf("an unreadable Loki config was graded a pass:\n%s", got)
+	}
+	if strings.Contains(got, "sets no ingester.wal.replay_memory_ceiling") {
+		t.Errorf("an unreadable config was diagnosed as an absent ceiling — that sends the "+
+			"operator to edit an overlay that may already be correct:\n%s", got)
+	}
+	if !strings.Contains(got, "could not read") {
+		t.Errorf("the refusal to vouch does not say the config was unreadable:\n%s", got)
+	}
+}
+
+// PARSED, NOT GREPPED. `replay_memory_ceiling` under some other top-level block
+// is not the ingester's, and a substring match would quote it as though it were.
+// The value here would PASS if matched naively, so a regression turns this red.
+func TestACeilingUnderAnotherSectionIsNotReadAsTheIngesters(t *testing.T) {
+	misleading := `auth_enabled: true
+ingester:
+  chunk_encoding: snappy
+some_other_component:
+  wal:
+    replay_memory_ceiling: 1536MB
+`
+	got, failed := findingsWithConfig(t, ingesterPodJSON("3Gi", volPVC), walClass, misleading, nil)
+	if !failed {
+		t.Fatalf("a ceiling belonging to another section was accepted as the ingester's:\n%s", got)
+	}
+	if !strings.Contains(got, "sets no ingester.wal.replay_memory_ceiling") {
+		t.Errorf("expected the ABSENT finding for the ingester block:\n%s", got)
 	}
 }

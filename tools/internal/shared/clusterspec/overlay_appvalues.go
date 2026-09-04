@@ -62,6 +62,35 @@ const OverlayAppValuesFile = "appvalues.yaml"
 // OOM-restart Loki alone (self-heal) instead of taking the node with it.
 const LokiWALReplayMemoryLimit = "3Gi"
 
+// LokiWALReplayCeiling bounds the memory WAL replay may consume before Loki
+// flushes to object storage and continues, and it is the SECOND half of the
+// limit above — neither is load-bearing without the other.
+//
+// THE FAILURE IT ENCODES, measured on a live cluster. Loki's own default for
+// `ingester.wal.replay_memory_ceiling` is 4GB. Set a 3Gi container limit and
+// leave the ceiling unset and the two disagree in the one direction that cannot
+// recover: replay grows toward a 4GB ceiling inside a 3.2GB cgroup, so the
+// ceiling is unreachable, the flush that would drain the WAL never fires, and
+// the kernel OOMKills the process ~11 seconds in. Every retry replays the same
+// WAL and dies at the same place. Observed at 205 restarts over 2d7h with log
+// ingestion down, on an ingester whose limit was CORRECT and whose gate was green.
+//
+// The limit above cannot be raised to escape this — 4Gi was considered and
+// rejected there for node-eviction reasons that still hold. The ceiling is the
+// knob that makes a 3Gi limit survivable instead of a trap.
+//
+// AND THE PVC MADE IT PERMANENT. persistence below moved the WAL off emptyDir so
+// it survives pod recreation — which is right, and which also removed the escape
+// hatch the emptyDir era relied on ("delete the pod, lose un-flushed chunks").
+// After that change a replay that cannot fit has no way out at all. That is why
+// this constant lands with the PVC rather than after it.
+//
+// ~48% of the limit, not 90%: the ceiling bounds the replay buffer, not the
+// process. The ingester also holds its index, its gRPC buffers and the Go heap's
+// own slack inside the same cgroup, and a ceiling just under the limit OOMs on
+// that overhead while reporting a ceiling that "fits".
+const LokiWALReplayCeiling = "1536MB"
+
 // LokiIngesterStorageClass pins the ingester's WAL volume to the encrypted,
 // retain-policy class the llz-cluster-foundation chart ships. Loki is NOT covered
 // by cluster.defaultStorageClass on managed (apl-core leaves it unset there and
@@ -113,7 +142,14 @@ func RenderAppValuesOverlayShared() string {
 func aplAppRawValues() map[string]map[string]any {
 	return map[string]map[string]any{
 		"argocd": {"configs": map[string]any{"cm": argoHealthCustomizations()}},
-		"loki":   {"ingester": lokiIngesterValues()},
+		// TWO KEYS, TWO DESTINATIONS, and conflating them is the whole reason the
+		// ceiling was missing. In the grafana/loki chart the TOP-LEVEL `ingester`
+		// renders the StatefulSet (replicas, persistence, resources) and never
+		// appears in Loki's config.yaml, while `loki.ingester` is templated INTO
+		// that config file. A replay ceiling written under the first key is
+		// accepted by Helm, read by nothing, and leaves the default in force —
+		// the exact silent no-op this file's header warns about.
+		"loki":   {"ingester": lokiIngesterValues(), "loki": lokiRuntimeConfigValues()},
 		"harbor": {"metrics": harborMetricsValues()},
 	}
 }
@@ -176,6 +212,30 @@ func lokiIngesterValues() map[string]any {
 					"storageClass": LokiIngesterStorageClass,
 					"accessModes":  []any{"ReadWriteOnce"},
 				},
+			},
+		},
+	}
+}
+
+// lokiRuntimeConfigValues is the `loki.*` half: values templated into Loki's
+// rendered config.yaml rather than into a Kubernetes object.
+//
+// ITS GATE is `llz ci assert-loki` (health.LokiIngesterDurability), which reads
+// the ceiling back off the config the ingester actually loaded and fails when it
+// is absent or does not fit inside the delivered memory limit. Absent is a
+// FAILURE there rather than a default, because absent is precisely the state
+// that OOMKills: it means Loki's own 4GB default is in force above a 3Gi limit.
+//
+// ONLY `wal` IS SET. `loki.ingester` is rendered with `{{- with }}` + `toYaml`
+// over the whole map, and apl-core already supplies `chunk_encoding: snappy`
+// there. Helm deep-merges maps, so adding `wal` keeps that sibling; REPLACING
+// the map would silently drop it. Do not add keys here without checking what
+// apl-core already puts in the same block.
+func lokiRuntimeConfigValues() map[string]any {
+	return map[string]any{
+		"ingester": map[string]any{
+			"wal": map[string]any{
+				"replay_memory_ceiling": LokiWALReplayCeiling,
 			},
 		},
 	}
