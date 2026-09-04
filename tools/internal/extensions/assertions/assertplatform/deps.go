@@ -1,6 +1,8 @@
 package assertplatform
 
 import (
+	"errors"
+
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
@@ -8,7 +10,7 @@ import (
 
 // Deps carries what this package cannot reach for itself.
 //
-// Small, and it should be: five assertion lanes that observe and report. The only
+// Small, and it should be: assertion lanes that observe and report. The only
 // capabilities here are "run a diagnostic command" and "read the spec" — nothing
 // that writes, which is what an assertion-only extension looks like when the
 // declaration is honest.
@@ -31,15 +33,15 @@ type Deps struct {
 	// failure report, and a stdout-only, error-gated read discards exactly that.
 	ExecCombined func(name string, args ...string) string
 
-	// Writer is the six named cluster mutations, scoped by this extension's
+	// Writer is the named cluster mutations, scoped by this extension's
 	// declared grants. The two ephemeral `delete workflow` calls used to go
 	// through ExecCombined, which could equally have run `delete namespace`.
 	Writer capability.Writer
 
 	// Exec captures a command's stdout. The classified cluster reads go through
 	// internal/kubectlprobe, which owns its own seam; this is for the calls that want
-	// raw JSON back rather than a probe verdict — two of them now (the Argo sweep and
-	// the apl-deployed-version lane), which is why this no longer says "the one call".
+	// raw JSON back rather than a probe verdict: the Argo sweep and the
+	// apl-deployed-version lane.
 	Exec func(name string, args ...string) ([]byte, error)
 
 	// LoadSpec reads the instance's LandingZone spec. Injected because the search
@@ -56,10 +58,19 @@ var deps = Deps{
 	ExecCombined: func(string, ...string) string { return "" },
 	// Refuses until installed: an un-installed Deps must not mutate a cluster.
 	Writer: capability.For(extension.Binding{}).Writer,
-	Exec:   func(string, ...string) ([]byte, error) { return nil, nil },
+	Exec:   uninstalledExec,
 	LoadSpec: func() (*clusterspec.LandingZone, bool, error) {
 		return nil, false, nil
 	},
+}
+
+// uninstalledExec is what an un-installed Exec seam answers: an ERROR naming the
+// wiring fault. Returning (nil, nil) fails closed too, but a caller then reports
+// "the listing did not parse as JSON", sending the reader after a platform that
+// changed shape when the real fault is that nobody called Install — the same
+// misattribution the lanes were just fixed to avoid.
+func uninstalledExec(string, ...string) ([]byte, error) {
+	return nil, errors.New("the Exec capability was never installed (assertplatform.Install)")
 }
 
 // Install wires the capabilities main owns. Call once, before any lane runs.
@@ -77,7 +88,7 @@ func Install(d Deps) {
 		d.ExecCombined = func(string, ...string) string { return "" }
 	}
 	if d.Exec == nil {
-		d.Exec = func(string, ...string) ([]byte, error) { return nil, nil }
+		d.Exec = uninstalledExec
 	}
 	if d.LoadSpec == nil {
 		d.LoadSpec = func() (*clusterspec.LandingZone, bool, error) { return nil, false, nil }

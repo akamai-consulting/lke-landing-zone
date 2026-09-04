@@ -879,12 +879,14 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   would not exist) — only an assertion that names it catches that.
 * **apl-deployed-version** — GATING proof that the apl-core RUNNING on this cluster is a
   version this llz release was tested against. Read from the IMAGE TAG of the
-  `apl-operator` container, which apl-core renders from `otomi.version` — the platform
-  version itself. Deliberately NOT the `helm.sh/chart` or `app.kubernetes.io/version`
-  labels: those are written by the apl-operator SUB-chart from its own Chart.yaml
-  (`version: 0.2.0`, `appVersion: 1.16.0`), so they describe the operator's packaging and
-  never move when the platform moves — reading them reported a healthy v6.2.1 cluster as
-  `apl-core 0.2.0, a MAJOR apart` and reddened release-e2e. What stays green
+  `apl-operator` container. Deliberately NOT that Deployment's `helm.sh/chart` or
+  `app.kubernetes.io/version` labels: two charts write this one Deployment — the published
+  `apl` chart installs it (labels `apl-v6.2.1` / `v6.2.1`), then apl-core's own
+  `charts/apl-operator` release REPLACES it and relabels from that chart's Chart.yaml
+  (`apl-operator-0.2.0` / `1.16.0`). So the labels carry the platform version exactly once,
+  in a window no check runs in, and the operator chart's packaging constants ever after —
+  a healthy v6.2.1 cluster reads as `apl-core 0.2.0`. The tag survives the swap because
+  both charts render it from the platform version. What stays green
   without it: every other apl-core version signal reads the SPEC, and on Linode's managed
   App Platform the spec cannot know the answer — Linode installs the platform,
   `apl_enabled` is a create-time boolean, and the Linode API exposes no version field at

@@ -732,3 +732,81 @@ func TestLanePropagatesTheVerdict(t *testing.T) {
 		t.Error("an un-installed Exec seam reads nothing, and nothing is UNKNOWN")
 	}
 }
+
+// A FOREIGN IMAGE ON THE PRIMARY PATH MUST BE REFUSED, not just on the relaxation.
+//
+// Name-matching is not identity: any chart called apl-operator produces a container
+// of that name, because apl-core's template names it `{{ .Chart.Name }}`. The gate
+// was applied to the sole-container fallback only, so the path it relaxes stayed
+// laxer than the relaxation — and a foreign image tagged with the baseline exited 0
+// reporting agreement, which is a wrong GREEN on a gating lane.
+func TestForeignImageIsRefusedOnTheNamedContainerPath(t *testing.T) {
+	for _, image := range []string{
+		"docker.io/evilcorp/backdoor:" + clusterspec.BaselineAplChartVersion,
+		"quay.io/someone/totally-different:v6.2.1",
+	} {
+		raw := []byte(`{"items":[{"metadata":{"name":"apl-operator","labels":{}},` +
+			`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + image + `"}]}}}}]}`)
+		v := evaluateAplDeployed(raw, nil)
+		if v.Err == nil {
+			t.Errorf("%q is not apl-core and must not be read as the platform version (live=%q)", image, v.Live)
+		}
+	}
+	// The real image on the same path still passes — the gate must not break the
+	// case it exists to protect.
+	ok := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{nameLabel: aplOperatorName},
+		baselineImage()), nil)
+	if ok.Err != nil {
+		t.Errorf("apl-core's own image must still be read: %v", ok.Err)
+	}
+}
+
+// A LABEL MATCH OUTRANKS A NAME-ONLY MATCH, so kubectl's ordering cannot decide the
+// verdict.
+//
+// Holding the first FAILURE was not enough: a stale Deployment normally carries a
+// readable old tag, so it produced a verdict and won outright. Both orderings must
+// now give the same answer — that equality is the real assertion, because a lane
+// whose result depends on list order is wrong in one of the two orders whatever the
+// expected value is.
+func TestAStaleNameMatchDoesNotBeatTheLabelledOperator(t *testing.T) {
+	stale := `{"metadata":{"name":"apl-operator","labels":{}},"spec":{"template":{"spec":{"containers":[` +
+		`{"name":"apl-operator","image":"docker.io/linode/apl-core:v5.0.0"}]}}}}`
+	real := `{"metadata":{"name":"z-renamed-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + baselineImage() + `"}]}}}}`
+
+	for _, tc := range []struct{ name, body string }{
+		{"stale first", stale + "," + real},
+		{"stale last", real + "," + stale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := evaluateAplDeployed([]byte(`{"items":[`+tc.body+`]}`), nil)
+			if v.Err != nil {
+				t.Fatalf("the labelled operator answers the question and must win: %v", v.Err)
+			}
+			if v.Live != clusterspec.BaselineAplChartVersion {
+				t.Errorf("live = %q, want %q — a stale name-match was read instead", v.Live, clusterspec.BaselineAplChartVersion)
+			}
+		})
+	}
+}
+
+// AN UNINSTALLED SEAM IS A WIRING FAULT, NOT A PLATFORM CHANGE. Returning (nil, nil)
+// fails closed, but reports "the listing did not parse as JSON" — sending the reader
+// after a platform that changed shape when nobody called Install.
+func TestUninstalledExecNamesTheWiringFault(t *testing.T) {
+	orig := deps
+	t.Cleanup(func() { deps = orig })
+
+	Install(Deps{})
+	err := assertAplDeployedVersion()
+	if err == nil {
+		t.Fatal("an un-installed seam reads nothing, and nothing is UNKNOWN")
+	}
+	if strings.Contains(err.Error(), "did not parse as JSON") {
+		t.Errorf("that blames the platform for a wiring fault: %v", err)
+	}
+	if !strings.Contains(err.Error(), "never installed") {
+		t.Errorf("the failure must name the actual fault, got: %v", err)
+	}
+}
