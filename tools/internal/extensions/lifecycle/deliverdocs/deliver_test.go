@@ -305,3 +305,104 @@ func TestDeliverDocsCmdRunsAndPrunes(t *testing.T) {
 		t.Errorf("the pointer is not pinned to the org/ref it was given:\n%s", readme)
 	}
 }
+
+// A directory the ADOPTER created under docs/ must survive the prune.
+//
+// It did not. The prune walked the instance's docs/ and RemoveAll'd every
+// top-level entry outside the keep-set, which is every entry the template does
+// not ship -- so an adopter who put their own operator docs in docs/<theirs>/,
+// exactly as the docs/local.md this template ships tells them they may, lost the
+// whole tree on their next `llz upgrade`. Silently: the run reports a count of
+// "referenced" entries, and a deleted directory looks like one of those.
+//
+// The removal set is now the template's own docs/ tree, which is precisely what
+// the `cp -a` ahead of this verb delivered.
+func TestRunDeliverDocsPreservesAdopterDirs(t *testing.T) {
+	tmpl := t.TempDir() // stands in for the template checkout (--template-root)
+	inst := t.TempDir() // the instance repo root
+
+	write := func(root, p, c string) {
+		full := filepath.Join(root, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// What the template ships.
+	for _, p := range []string{
+		"docs/quickstart.md", "docs/local.md",
+		"docs/runbooks/recover.md", "docs/playbooks/rotate.md",
+		"docs/secrets.md", "docs/adopter-guide.md", "docs/designs/reconciler.md",
+	} {
+		write(tmpl, p, "template")
+	}
+
+	// The instance: the delivered tree (post `cp -a`) plus the adopter's own docs.
+	docs := filepath.Join(inst, "docs")
+	for _, p := range []string{
+		"quickstart.md", "local.md",
+		"runbooks/recover.md", "playbooks/rotate.md",
+		"secrets.md", "adopter-guide.md", "designs/reconciler.md",
+	} {
+		write(docs, p, "template")
+	}
+	write(docs, "acme/README.md", "the adopter's own index")
+	write(docs, "acme/managed-apps.md", "the adopter's own runbook")
+	write(docs, "acme-notes.md", "a loose adopter file")
+
+	if err := Run(docs, "myorg", "v1.2.3", inst, tmpl); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The adopter's tree is untouched.
+	for _, p := range []string{"acme/README.md", "acme/managed-apps.md", "acme-notes.md"} {
+		if _, err := os.Stat(filepath.Join(docs, p)); err != nil {
+			t.Errorf("adopter-owned entry was pruned: %s (%v)", p, err)
+		}
+	}
+	// The template's non-keep-set docs still go.
+	for _, p := range []string{"secrets.md", "adopter-guide.md", "designs"} {
+		if _, err := os.Stat(filepath.Join(docs, p)); !os.IsNotExist(err) {
+			t.Errorf("expected template doc %s to be pruned", p)
+		}
+	}
+	// The keep-set stays.
+	for _, p := range []string{"quickstart.md", "local.md", "runbooks/recover.md", "playbooks/rotate.md"} {
+		if _, err := os.Stat(filepath.Join(docs, p)); err != nil {
+			t.Errorf("keep-set entry pruned: %s", p)
+		}
+	}
+}
+
+// An adopter directory whose name COLLIDES with one the template ships is still
+// pruned -- the removal set is names, so there is no way to tell the two apart.
+// Pinned so the limitation is a decision on the record rather than a surprise.
+func TestRunDeliverDocsCollidingAdopterDirIsPruned(t *testing.T) {
+	tmpl, inst := t.TempDir(), t.TempDir()
+	write := func(root, p, c string) {
+		full := filepath.Join(root, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(tmpl, "docs/quickstart.md", "template")
+	write(tmpl, "docs/designs/reconciler.md", "template")
+
+	docs := filepath.Join(inst, "docs")
+	write(docs, "quickstart.md", "template")
+	write(docs, "designs/mine.md", "adopter reused a template directory name")
+
+	if err := Run(docs, "myorg", "v1.2.3", inst, tmpl); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(docs, "designs")); !os.IsNotExist(err) {
+		t.Errorf("a name the template ships is pruned even when the adopter reused it; " +
+			"if this ever changes, docs/local.md's guidance must change with it")
+	}
+}
