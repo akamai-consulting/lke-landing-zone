@@ -230,9 +230,35 @@ func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 			return fmt.Errorf("read %s rotated_at: %w", e.BaoPath, err)
 		}
 		if !IsDue(rotatedAt, now, rotateAfter) {
-			skipped = append(skipped, e.Name)
-			fmt.Printf("%s: not due (rotated_at=%s, threshold %dd)\n", e.Name, rotatedAt, rotateAfter)
-			continue
+			// AGE IS NOT THE ONLY REASON TO ROTATE. IsDue asks how old the
+			// credential is and nothing else, so a key that cannot write a single
+			// byte is "not due" and left alone for the whole window — and this
+			// rotator is what owns object-storage keys after first boot, so nothing
+			// else was ever going to notice.
+			//
+			// Measured: a production instance ran 42 days with both consumers
+			// returning 403 AccessDenied on every write, because the keys were
+			// scoped to one objLabelPrefix and the buckets created under another.
+			// The rotator ticked daily throughout and reported "not due" every time.
+			//
+			// This is the same presence-vs-validity gap mint-bootstrap-objkeys had
+			// (it skipped a SEEDED path rather than a WORKING one); the fix there
+			// added seededKeyGrants, and this reuses it rather than re-deriving the
+			// question.
+			//
+			// NO CHURN RISK: the replacement is minted against e.Buckets, so it
+			// grants them by construction and the next tick sees a healthy key.
+			grants, why, known := currentKeyStillGrants(ctx, lc, bao, e)
+			if !known || grants {
+				skipped = append(skipped, e.Name)
+				fmt.Printf("%s: not due (rotated_at=%s, threshold %dd)\n", e.Name, rotatedAt, rotateAfter)
+				continue
+			}
+			// Only positive evidence rotates off-schedule. known=false — a listing
+			// that failed, a PAT with no bucket grant to check — keeps the old
+			// behaviour above.
+			fmt.Printf("::warning::%s: not due by age, but rotating anyway — the recorded key %s\n",
+				e.Name, why)
 		}
 		if !apply {
 			fmt.Printf("%s: DUE — would rotate (dry-run)\n", e.Name)
@@ -345,3 +371,23 @@ func openLinodeRotatorBaoStore(ctx context.Context) (openbao.BaoStore, error) {
 //
 // Tests that need to substitute the store still can -- it is still a var.
 var OpenBaoStore = openbao.OpenInClusterStore
+
+// currentKeyStillGrants asks whether the credential recorded at e.BaoPath can
+// still write this deployment's buckets.
+//
+// known=false is "do not act", and it covers three states on purpose: a PAT
+// (which has no bucket grant to check at all), an unreadable OpenBao field, and
+// a Linode listing that failed. Rotating a live credential is not free — it
+// mints against an account key cap and starts a drain — so it happens only on
+// evidence that the current one is broken, never on the absence of evidence that
+// it works.
+func currentKeyStillGrants(ctx context.Context, lc LinodeAPI, bao openbao.BaoStore, e CredEntry) (grants bool, why string, known bool) {
+	if e.Kind != CredKindObjKey {
+		return false, "", false
+	}
+	access, _, err := bao.Get(ctx, e.BaoPath, e.PresentField)
+	if err != nil || strings.TrimSpace(access) == "" {
+		return false, "", false
+	}
+	return seededKeyGrants(ctx, lc, access, e)
+}
