@@ -164,48 +164,35 @@ func imageTag(image string) string {
 	return image[colon+1:]
 }
 
-// oldestAplMajor is the lowest major apl-core version any llz release has targeted,
-// derived from clusterspec.AplBaselineHistory rather than written down, so it stays
-// true as the history grows. Returns -1 when the history yields nothing parseable.
-func oldestAplMajor() int {
-	oldest := -1
-	for _, b := range clusterspec.AplBaselineHistory {
-		m, _, _, ok := clusterspec.AplSemver(b)
-		if !ok {
-			continue
-		}
-		if oldest < 0 || m < oldest {
-			oldest = m
-		}
-	}
-	return oldest
-}
+// aplCoreLowestPublishedMajor is the lowest MAJOR apl-core has ever published: the
+// chart index at https://linode.github.io/apl-core carries majors 3, 4, 5 and 6,
+// and this repo's own docs discuss running 5.x. A tag below it is not a platform
+// version at all.
+//
+// APL-CORE'S HISTORY, NOT LLZ'S. Deriving this from AplBaselineHistory — whose
+// lowest major is 6 — collapsed it onto exactly the condition
+// AplChartDriftMajorBehind fires on. Every genuinely old platform was then reported
+// as "not a version", and LLZ_ALLOW_APL_CHART_MAJOR_DRIFT went INERT for the one
+// case it exists for: a managed cluster on an older major, which the adopter can
+// neither fix nor revert.
+//
+// A constant rather than a derivation, because this floor only moves if apl-core
+// publishes something OLDER than 3.x, which released history cannot do.
+const aplCoreLowestPublishedMajor = 3
 
-// implausibleMajor reports whether a tag parses as a version that PREDATES every
-// apl-core release llz has ever targeted — which means it is not a platform version
-// at all.
+// implausibleMajor reports whether a tag parses as a version apl-core has never
+// published — not a platform version at all, as opposed to an old one.
 //
-// It exists because three different faults all produce a plausible-looking semver
-// that would otherwise be graded as "a major behind" and told to raise a rollout
-// with Linode:
-//
-//   - `otomi.version` unset. The chart renders `tag:` null and Helm's
-//     `default .Chart.AppVersion` fires, so the tag becomes the operator sub-chart's
-//     appVersion, 1.16.0 — the same sub-chart constant this lane exists to stop
-//     reading, arriving by a new route.
-//   - a foreign container read through the sole-container relaxation (istio's
-//     1.20.0, say), for a Deployment that has been relabelled.
-//   - apl-core decoupling its image version from its chart version.
-//
-// All three are "this is not the platform version", not "the platform is old", and
-// they need a different remedy than the drift arms give.
+// Two faults produce a plausible-looking semver that would otherwise be graded as
+// drift and told to raise a rollout with Linode: `otomi.version` unset (the chart's
+// `default .Chart.AppVersion` fires and the tag becomes the operator chart's
+// appVersion, 1.16.0), and a foreign container read through the sole-container
+// relaxation. Both mean "this is not the platform version", and need a different
+// remedy than the drift arms give. An OLD major must fall through to those arms,
+// override included.
 func implausibleMajor(tag string) bool {
 	maj, _, _, ok := clusterspec.AplSemver(tag)
-	if !ok {
-		return false
-	}
-	oldest := oldestAplMajor()
-	return oldest >= 0 && maj < oldest
+	return ok && maj < aplCoreLowestPublishedMajor
 }
 
 // unreadableRemedy is the paragraph every "llz cannot read the version" failure
@@ -319,18 +306,18 @@ func operatorImage(deploy string, cs []deployContainer) (string, *AplDeployedVer
 // having read nothing looks exactly like the drift it exists to catch.
 func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 	if readErr != nil {
-		return AplDeployedVerdict{Err: fmt.Errorf(
+		return AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
 			"could not read the apl-operator Deployment in namespace %s, so the deployed apl-core version is UNKNOWN — "+
 				"that is a failure, not a pass: %w", aplOperatorNamespace, readErr)}
 	}
 	var list deployList
 	if err := json.Unmarshal(raw, &list); err != nil {
-		return AplDeployedVerdict{Err: fmt.Errorf(
+		return AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
 			"the apl-operator Deployment listing in namespace %s did not parse as JSON, so the deployed apl-core version is UNKNOWN: %w",
 			aplOperatorNamespace, err)}
 	}
 	if len(list.Items) == 0 {
-		return AplDeployedVerdict{Err: fmt.Errorf(
+		return AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
 			"no Deployment at all in namespace %s — apl-core's operator is where the deployed platform version is legible, "+
 				"so either the managed App Platform is not installed on this cluster or it has moved. Nothing was checked",
 			aplOperatorNamespace)}
@@ -359,22 +346,28 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 	candidates := append(append([]deployItem{}, byLabel...), byName...)
 
 	var held *AplDeployedVerdict
+	// EVERY "cannot answer" GOES THROUGH hold, so the invariant above covers all four
+	// arms. Two of them returned outright, so a stale first candidate on a branch
+	// build, or one with an unset otomi.version, failed the lane while the healthy
+	// operator sat later in the same list.
+	hold := func(v AplDeployedVerdict) {
+		if held == nil {
+			h := v
+			held = &h
+		}
+	}
 	for _, it := range candidates {
 		image, bad := operatorImage(it.Metadata.Name, it.Spec.Template.Spec.Containers)
 		if bad != nil {
-			if held == nil {
-				held = bad
-			}
+			hold(*bad)
 			continue
 		}
 
 		tag := imageTag(image)
 		if tag == "" {
-			if held == nil {
-				held = &AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
-					"the %s/%s operator image %q carries no usable tag (%s), so the deployed apl-core version is UNKNOWN.%s",
-					aplOperatorNamespace, it.Metadata.Name, image, tagFailure(image), unreadableRemedy())}
-			}
+			hold(AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
+				"the %s/%s operator image %q carries no usable tag (%s), so the deployed apl-core version is UNKNOWN.%s",
+				aplOperatorNamespace, it.Metadata.Name, image, tagFailure(image), unreadableRemedy())})
 			continue
 		}
 
@@ -390,19 +383,21 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 		// llz verifies, and this arm has no per-instance override — if managed ever
 		// ships "latest" this goes red fleet-wide.
 		if _, _, _, ok := clusterspec.AplSemver(tag); !ok {
-			return AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
+			hold(AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
 				"%s/%s runs operator image %q, whose tag %q is not a version this llz can compare against %s — apl-core allows a "+
 					"branch name in otomi.version, so this is most likely a floating (non-release) platform install. The deployed "+
 					"apl-core version is UNKNOWN.%s",
-				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.BaselineAplChartVersion, unreadableRemedy())}
+				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.BaselineAplChartVersion, unreadableRemedy())})
+			continue
 		}
 		if implausibleMajor(tag) {
-			return AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
-				"%s/%s runs operator image %q, whose tag %q predates every apl-core release llz has targeted (the oldest is %s), "+
+			hold(AplDeployedVerdict{Live: tag, Source: imageTagSource, Err: fmt.Errorf(
+				"%s/%s runs operator image %q, whose tag %q predates every apl-core release (the oldest major published is %d), "+
 					"so it is not a platform version at all rather than an old one. The usual cause is otomi.version being unset, "+
 					"which makes the chart fall back to the apl-operator sub-chart's own appVersion; a foreign container in this "+
 					"Deployment reads the same way. The deployed apl-core version is UNKNOWN.%s",
-				aplOperatorNamespace, it.Metadata.Name, image, tag, clusterspec.AplBaselineHistory[0], unreadableRemedy())}
+				aplOperatorNamespace, it.Metadata.Name, image, tag, aplCoreLowestPublishedMajor, unreadableRemedy())})
+			continue
 		}
 		return classifyAplDeployed(tag)
 	}

@@ -11,6 +11,8 @@ import (
 )
 
 // baselineImage is an operator image on the version this llz release targets.
+var errTest = errors.New("connection refused")
+
 func baselineImage() string {
 	return "docker.io/linode/apl-core:" + clusterspec.BaselineAplChartVersion
 }
@@ -499,12 +501,59 @@ func TestATagPredatingEveryBaselineIsNotAPlatformVersion(t *testing.T) {
 			t.Errorf("the failure must name the likely cause so the reader can check it, got: %v", v.Err)
 		}
 	}
-	// ...and the guard must not swallow a genuine old MAJOR that llz really did target.
-	old := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+}
+
+// THE GUARD MUST NOT SWALLOW A GENUINELY OLD PLATFORM — and it did.
+//
+// The floor was derived from AplBaselineHistory, whose lowest major is 6, which is
+// exactly the condition AplChartDriftMajorBehind fires on. So every real old
+// platform (apl-core has published majors 3, 4, 5 and 6) was reported as "not a
+// version at all", and LLZ_ALLOW_APL_CHART_MAJOR_DRIFT went INERT for the one case
+// it exists for — a managed cluster on an older major, which the adopter can
+// neither fix nor revert.
+//
+// The control the old test used was 6.0.0, which is not a major behind at all, so
+// it sat on the wrong side of the boundary and could not see the collapse.
+func TestAnOldPlatformMajorIsDriftNotGarbage(t *testing.T) {
+	raw := deployJSON("apl-operator", map[string]string{
 		nameLabel: aplOperatorName,
-	}, "docker.io/linode/apl-core:6.0.0"), nil)
-	if old.Err != nil && strings.Contains(old.Err.Error(), "predates every apl-core release") {
-		t.Errorf("6.0.0 IS a version llz targeted and must be graded as drift, not disqualified: %v", old.Err)
+	}, "docker.io/linode/apl-core:5.1.0")
+
+	v := evaluateAplDeployed(raw, nil)
+	if v.Err == nil {
+		t.Fatal("a major behind must block without the override")
+	}
+	if strings.Contains(v.Err.Error(), "predates every apl-core release") ||
+		strings.Contains(v.Err.Error(), "not a platform version at all") {
+		t.Errorf("apl-core 5.x IS a platform version — it must be graded as drift: %v", v.Err)
+	}
+	if !strings.Contains(v.Err.Error(), clusterspec.AllowMajorDriftEnv) {
+		t.Errorf("a major-behind block must name the override: %v", v.Err)
+	}
+
+	// THE OVERRIDE MUST ACTUALLY WORK THROUGH THE LANE, not just through the
+	// classifier. Nothing tested that composition, which is how it went inert.
+	t.Setenv(clusterspec.AllowMajorDriftEnv, "1")
+	staged := evaluateAplDeployed(raw, nil)
+	if staged.Err != nil {
+		t.Errorf("%s=1 must permit a staged major THROUGH THE LANE: %v", clusterspec.AllowMajorDriftEnv, staged.Err)
+	}
+	if staged.Warn == "" {
+		t.Error("a staged major must still warn")
+	}
+}
+
+// ...while the sub-chart constants stay disqualified with the override set: the
+// override releases a version BLOCK, never an unreadable value.
+func TestTheOverrideDoesNotExcuseANonPlatformVersion(t *testing.T) {
+	t.Setenv(clusterspec.AllowMajorDriftEnv, "1")
+	for _, tag := range []string{"1.16.0", "0.2.0"} {
+		v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+			nameLabel: aplOperatorName,
+		}, "docker.io/linode/apl-core:"+tag), nil)
+		if v.Err == nil {
+			t.Errorf("%q is not a platform version and the override must not admit it (live=%q)", tag, v.Live)
+		}
 	}
 }
 
@@ -776,5 +825,61 @@ func TestUninstalledExecNamesTheWiringFault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "never installed") {
 		t.Errorf("the failure must name the actual fault, got: %v", err)
+	}
+}
+
+// EVERY "cannot answer" ARM HOLDS RATHER THAN RETURNING. The scan documents that a
+// candidate which cannot answer does not end it, but two of the four arms —
+// non-semver and implausible-major — returned outright, so a stale first candidate
+// on a branch build failed the lane while the healthy operator sat later in the
+// same list. Fail-closed, but a false RED on a fleet-wide weekly check, in exactly
+// the rename-in-progress case the label/name split exists to survive.
+func TestEveryUnreadableArmHoldsForALaterCandidate(t *testing.T) {
+	good := `{"metadata":{"name":"apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+		`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + baselineImage() + `"}]}}}}`
+	for _, tc := range []struct{ name, firstImage string }{
+		{"non-semver tag", "docker.io/linode/apl-core:main"},
+		{"implausible major", "docker.io/linode/apl-core:1.16.0"},
+		{"untagged", "docker.io/linode/apl-core"},
+		{"no operator container", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := `{"metadata":{"name":"aaa-apl-operator","labels":{"app.kubernetes.io/name":"apl-operator"}},` +
+				`"spec":{"template":{"spec":{"containers":[{"name":"apl-operator","image":"` + tc.firstImage + `"}]}}}}`
+			v := evaluateAplDeployed([]byte(`{"items":[`+first+`,`+good+`]}`), nil)
+			if v.Err != nil {
+				t.Fatalf("a healthy operator later in the list must be reached: %v", v.Err)
+			}
+			if v.Live != clusterspec.BaselineAplChartVersion {
+				t.Errorf("live = %q, want %q", v.Live, clusterspec.BaselineAplChartVersion)
+			}
+		})
+	}
+}
+
+// EVERY VERDICT CARRIES ITS SOURCE, including the three arms that fail before any
+// container is read — the comment on imageTagSource claims it and nothing checked.
+func TestEvenEarlyFailuresCarryTheSource(t *testing.T) {
+	for name, v := range map[string]AplDeployedVerdict{
+		"read error":       evaluateAplDeployed(nil, errTest),
+		"unparseable JSON": evaluateAplDeployed([]byte("not json"), nil),
+		"no deployments":   evaluateAplDeployed([]byte(`{"items":[]}`), nil),
+	} {
+		if v.Source != imageTagSource {
+			t.Errorf("%s: source = %q, want %q", name, v.Source, imageTagSource)
+		}
+	}
+}
+
+// The empty-tag arm of tagFailure — the one fail-closed state with no coverage.
+func TestAnEmptyTagIsNamedAsSuch(t *testing.T) {
+	v := evaluateAplDeployed(deployJSON("apl-operator", map[string]string{
+		nameLabel: aplOperatorName,
+	}, "docker.io/linode/apl-core:"), nil)
+	if v.Err == nil {
+		t.Fatal("an empty tag is UNKNOWN")
+	}
+	if !strings.Contains(v.Err.Error(), "its tag is empty") {
+		t.Errorf("the three-way distinction must name this state: %v", v.Err)
 	}
 }

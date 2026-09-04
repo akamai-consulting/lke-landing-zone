@@ -296,6 +296,24 @@ component's live output, anything that renames or reformats something a second
 component parses, and anything whose failure mode is *silence*. Those are the
 ones that stay green while broken, and they are the only reason this file exists.
 
+## What release-e2e actually gates
+
+A gating lane's failure reaches an adopter only if someone acts on it, and the
+mechanism here is weaker than it looks. `release-e2e` fires on `release:
+[prereleased]`; `llz-release.yml`, which attaches the binaries, fires on
+`released` — after a **human** promotes. There is no `needs:` between them and the
+e2e is not a required check, so nothing mechanically blocks a promotion over a red
+run. What stands between a wrong assumption in a lane and every adopter's pipeline
+is a person choosing not to promote.
+
+Two consequences worth holding onto:
+
+* A lane that is `Gating: true` gates the *run*, not the *release*. Writing
+  "release-e2e stands between this and the fleet" in a comment overstates it.
+* The GHES leg reports FAILURE on every release independently of any lane (it is
+  unconfigured), so "the e2e is red" is not by itself evidence about the change
+  under test — read the github.com lane's jobs.
+
 ## When a lane goes red
 
 A gate's job is not finished when it fails — it is finished when its failure says
