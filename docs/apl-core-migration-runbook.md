@@ -46,8 +46,10 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       got left behind, so the upgrade drops it and you re-add it. A hold on
       anything else — including a release candidate — survives untouched.
       To see what is actually RUNNING — the only version that matters on managed —
-      use `llz ci assert-apl-deployed-version`, which reads the chart version
-      apl-core stamps on its own `apl-operator` Deployment. To see what is
+      use `llz ci assert-apl-deployed-version`, which reads the image tag of the
+      `apl-operator` container — apl-core renders it from `otomi.version`, the
+      platform version. (Not the Deployment's chart labels — apl-core relabels them,
+      so a healthy v6.2.1 cluster reads as `0.2.0`.) To see what is
       published, `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`.
       Note the `v`: apl-core's published chart version gained the prefix at 6.1.0, and a
       bare `6.x.y` still resolves but only via helm's "unable to find exact
