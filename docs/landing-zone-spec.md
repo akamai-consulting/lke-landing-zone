@@ -234,6 +234,36 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.bootstrap.name`, and **`cluster.bootstrap.managedAppPlatform: true`**
 (LLZ never self-installs apl-core — `llz env add` seeds it into `spec.defaults`).
 
+**`cluster.bootstrap.manageAplVersion`** — hands apl-core's own version knob to
+LLZ. Default **false**, and the default is the point: on managed App Platform
+Linode installs *and versions* apl-core, so turning this on is a change of
+ownership rather than a setting.
+
+Set true, `llz render` writes `apl-values/<env>/apl-overlay/otomi.yaml` carrying
+`spec.version` (the env's `aplChartVersion`, else this release's baseline). The
+in-cluster reconciler merges that **one key** into apl-core's own
+`env/settings/otomi.yaml` on the `apl-<env>` branch — a key-level merge, because
+apl-core co-writes that file and owns every other field in it. apl-operator picks
+the change up on its next poll and runs its runtime-upgrade migrations, so the
+platform moves on the reconciler's schedule, not on your commit. Verify with
+`llz ci assert-apl-deployed-version`, which reads the cluster rather than the spec.
+
+Two consequences worth knowing before you set it:
+
+* **Inheritance is opt-in ONLY.** Like `managedAppPlatform`, it merges as
+  `defaults || env` — so once it is true in `spec.defaults`, no environment can
+  turn it off. Try it on a single environment first, not in the defaults.
+* **The off-switch is not automatic.** `llz render` never deletes, so setting it
+  back to false leaves the rendered overlay file in place, and the reconciler
+  infers the opt-in from that file's presence. Delete
+  `apl-values/<env>/apl-overlay/otomi.yaml` as well to hand the version back to
+  Linode.
+
+While it is on, `cluster.bootstrap.aplChartVersion` stops being merely what
+`llz ci assert-apl-version` resolves and becomes **what deploys** — so `llz
+upgrade`'s pin sweep refuses to drop it, rather than silently moving a live
+platform to the new baseline.
+
 **`spec.instance.objLabelPrefix`** — the per-instance namespace on every Object
 Storage bucket and key label, so a deployment's buckets become
 `<objLabelPrefix>-loki-{chunks,ruler,admin}-<env>` and

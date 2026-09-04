@@ -23,7 +23,14 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/metrics"
 )
 
-// branchRepo is fakeRepo with the branch actually honoured. The shared fake keys
+// branchRepo is fakeRepo with the branch actually honoured, and with found meaning
+// PRESENT rather than non-empty — which is what the shipped adapter does.
+// ghgitdata.ReadFile returns found=true for a file that exists and is EMPTY; only a
+// 404 is found=false. The package's other fake answers found=(content != ""), so it
+// cannot express "exists and is empty", and that hid a defect which blanked
+// apl-core's CR through exactly that state. A harness that cannot represent a real
+// state is where the blind spot lives.
+// The shared fake keys
 // one map by path alone, which cannot express "the source branch says v6.2.1-rc.2
 // while the target branch still says v6.2.1" — and that difference is the entire
 // behaviour under test.
@@ -39,7 +46,7 @@ func (r *branchRepo) ReadFile(_ context.Context, branch, path string) (string, b
 		m = r.src
 	}
 	c, ok := m[path]
-	return c, ok && c != "", nil
+	return c, ok, nil
 }
 
 func (r *branchRepo) OverlayCommit(_ context.Context, branch string, files map[string]string, _ string, _ int) (string, bool, error) {
@@ -129,5 +136,83 @@ func TestAnAbsentTargetIsNotCreated(t *testing.T) {
 	}
 	if _, ok := repo.gotFiles[aplOtomiTarget]; ok {
 		t.Errorf("a version-only CR must not be created over an absent target: %q", repo.gotFiles[aplOtomiTarget])
+	}
+}
+
+// A DEGENERATE TARGET IS NOT A MERGE BASE.
+//
+// ghgitdata.ReadFile answers found=true for a file that exists and is EMPTY, so an
+// empty / "{}" / "null" / comment-only settings CR arrives as "present". Merging
+// into it produced a two-line spec.version document with no kind, no metadata and
+// none of apl-core's eight settings, pushed over its CR — the {}-over-obj.yaml
+// regression in a new file. Every one of these must write NOTHING.
+func TestADegenerateTargetIsNeverMergedInto(t *testing.T) {
+	for _, tc := range []struct{ name, target string }{
+		{"empty", ""},
+		{"newline only", "\n"},
+		{"empty map", "{}\n"},
+		{"null", "null\n"},
+		{"comment only", "# apl-core placeholder\n"},
+		{"no kind", "spec:\n  version: v6.2.1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := otomiRepo("6.2.2")
+			repo.tgt = map[string]string{aplOtomiTarget: tc.target}
+			if err := Reconcile(context.Background(), testCfg(), repo, credsOK, metrics.NewRegistry()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if got, ok := repo.gotFiles[aplOtomiTarget]; ok {
+				t.Errorf("wrote over a degenerate CR: %q", got)
+			}
+		})
+	}
+}
+
+// A VERSION apl-core WOULD REJECT MUST NOT REACH THE BRANCH. Its schema pattern is
+// the authority, and a rejected value converges silently — the merge is a no-op on
+// the next pass, so it sits there permanently refused with nothing red.
+func TestAVersionAplCoreWouldRejectIsNotWritten(t *testing.T) {
+	repo := otomiRepo("")
+	repo.src[envOverlayPath("primary", clusterspec.OverlayOtomiFile)] =
+		"kind: AplCapabilitySet\nspec:\n  version: '6.2.9'\n" // bare, no leading v
+	if err := Reconcile(context.Background(), testCfg(), repo, credsOK, metrics.NewRegistry()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got, ok := repo.gotFiles[aplOtomiTarget]; ok {
+		t.Errorf("apl-core's schema rejects that version — it must not be written: %q", got)
+	}
+}
+
+// A MULTI-DOCUMENT TARGET MUST NOT BE TRUNCATED. The merge re-marshals one
+// document, so writing back would silently drop the rest of a file LLZ does not own.
+func TestAMultiDocumentTargetIsNotTruncated(t *testing.T) {
+	repo := otomiRepo("6.2.2")
+	repo.tgt = map[string]string{aplOtomiTarget: liveOtomiTarget + "---\nkind: Other\nspec:\n  keep: true\n"}
+	if err := Reconcile(context.Background(), testCfg(), repo, credsOK, metrics.NewRegistry()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got, ok := repo.gotFiles[aplOtomiTarget]; ok {
+		t.Errorf("a multi-document target must be left alone, got: %q", got)
+	}
+}
+
+// A MALFORMED TARGET MUST NOT WEDGE THE REST OF THE PASS. This runs last, after
+// obj.yaml and the per-app CRs are already staged, so returning an error dropped
+// every one of them before the commit — the obj credential fill and all app toggles
+// stopped, every pass, until someone hand-repaired a file on a branch LLZ does not own.
+func TestAMalformedTargetDoesNotWedgeTheReconciler(t *testing.T) {
+	repo := otomiRepo("6.2.2")
+	repo.src[sharedOverlayPath(clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayShared()
+	repo.src[envOverlayPath("primary", clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayEnv("acme", "primary", "us-ord-1")
+	repo.tgt[aplOtomiTarget] = "kind: AplCapabilitySet\nspec:\n  version: [oops\n"
+
+	if err := Reconcile(context.Background(), testCfg(), repo, credsOK, metrics.NewRegistry()); err != nil {
+		t.Fatalf("a broken file on the machine branch must not fail the pass: %v", err)
+	}
+	if _, ok := repo.gotFiles[aplOverlayTargets[clusterspec.OverlayObjFile]]; !ok {
+		t.Errorf("obj.yaml must still sync while otomi.yaml is unreadable: %v", keysOf(repo.gotFiles))
+	}
+	if _, ok := repo.gotFiles[aplOtomiTarget]; ok {
+		t.Error("the unreadable target must not be written")
 	}
 }

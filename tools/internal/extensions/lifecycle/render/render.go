@@ -539,6 +539,17 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Cluster.Bootstrap, e.Components)
 	// The platform's OWN version — no file unless manageAplVersion is set. See
 	// clusterspec.RenderOtomiOverlayEnv.
+	// THE OFF-SWITCH IS NOT SELF-ENFORCING, and that is a known gap rather than an
+	// oversight. Render only ever ADDS targets — nothing in this package deletes —
+	// and reportDrift walks `targets`, so a file that has stopped being a target is
+	// invisible to `llz render --check`. The reconciler infers the opt-in from this
+	// file's PRESENCE, so an instance that sets manageAplVersion true, renders,
+	// commits, then sets it false keeps asserting the version forever.
+	//
+	// Closing it properly means teaching render to prune, which is a change to every
+	// rendered target and not this feature's to make. Until then the off-switch is
+	// documented as "delete the file too" in docs/landing-zone-spec.md, and this is
+	// the note that stops the next reader assuming it is handled.
 	if otomi := clusterspec.RenderOtomiOverlayEnv(e.Cluster.Bootstrap); otomi != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayOtomiFile)] = otomi
 	}

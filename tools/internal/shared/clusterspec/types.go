@@ -352,6 +352,7 @@ type Bootstrap struct {
 	// renders `tag: {{ $v.otomi.version }}` with Argo force-replace. A new operator
 	// then records its own version as `deployingVersion`, compares it to the last
 	// deployed one and runs the intervening migrations (src/common/runtime-upgrade.ts).
+	//
 	// DEFAULT FALSE, and deliberately: Linode installs and versions apl-core on
 	// managed, so driving it from here is a change of ownership, not a setting. Left
 	// off, llz renders no otomi.yaml and Linode's version stands. Turned on, the

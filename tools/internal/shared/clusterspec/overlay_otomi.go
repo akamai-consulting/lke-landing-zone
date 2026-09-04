@@ -1,8 +1,11 @@
 package clusterspec
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
 // overlay_otomi.go — the apl-core version, rendered as apl-core's own settings CR.
@@ -98,6 +101,62 @@ func OtomiOverlayVersion(src []byte) (string, error) {
 	}
 	v, _ := spec["version"].(string)
 	return strings.TrimSpace(v), nil
+}
+
+// AplCoreVersionAccepted reports whether apl-core's values schema would accept a
+// version. UNANCHORED on purpose: JSON Schema `pattern` is a partial match, so this
+// mirrors what apl-core actually enforces rather than a stricter rule of our own.
+//
+// It exists because the pattern had NO production caller — it was checked only in
+// this package's tests, on the RENDER half, while the reconciler took a version
+// straight from the overlay source to the machine branch unvalidated. A value
+// apl-core rejects converges silently: the merge is a no-op on the next pass, so it
+// sits there, permanently refused, with nothing red.
+func AplCoreVersionAccepted(v string) bool {
+	return aplCoreVersionPattern.MatchString(strings.TrimSpace(v))
+}
+
+// OtomiCRIsMergeable reports whether a target file is a real apl-core settings CR
+// and therefore safe to merge a single key into.
+//
+// AN EXISTING-BUT-DEGENERATE FILE IS NOT A MERGE BASE. The production
+// ghgitdata.ReadFile answers found=true for a file that exists and is EMPTY — only
+// a 404 is found=false — so an empty, "{}", "null" or comment-only
+// env/settings/otomi.yaml reaches the merge as "present". Merging into nothing
+// yields a two-line `spec.version` document with no kind, no metadata and none of
+// apl-core's eight settings, pushed over its CR: the `{}`-over-obj.yaml regression
+// this whole key-level path exists to avoid, reached through a degenerate target
+// instead of an absent one.
+//
+// Requiring `kind` is the cheap discriminator — every apl-core settings CR carries
+// one, and nothing LLZ would want to merge into lacks it.
+func OtomiCRIsMergeable(current []byte) bool {
+	m, err := unmarshalMap(current)
+	if err != nil || len(m) == 0 {
+		return false
+	}
+	kind, _ := m["kind"].(string)
+	return strings.TrimSpace(kind) != ""
+}
+
+// OtomiTargetIsSingleDocument reports whether a target holds exactly one YAML
+// document. A merge re-marshals ONE document, so a multi-document file would come
+// back silently truncated to its first — data loss on a file LLZ does not own.
+func OtomiTargetIsSingleDocument(current []byte) bool {
+	dec := yaml.NewDecoder(bytes.NewReader(current))
+	docs := 0
+	for {
+		var n yaml.Node
+		err := dec.Decode(&n)
+		if err != nil {
+			break
+		}
+		docs++
+		if docs > 1 {
+			return false
+		}
+	}
+	return docs == 1
 }
 
 // SetOtomiVersion asserts spec.version on apl-core's OWN otomi settings CR,
