@@ -3,6 +3,7 @@ package credrotate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -125,6 +126,9 @@ type stubLinode struct {
 	verifyErr     error
 	patCreates    int
 	objCreates    int
+	// listErr makes the key listing fail, so "the grant is wrong" and "the grant
+	// could not be read" can be exercised as different states.
+	listErr error
 }
 
 func (s *stubLinode) ListProfileTokens(context.Context) ([]map[string]any, error) { return s.pats, nil }
@@ -137,7 +141,7 @@ func (s *stubLinode) DeleteProfileToken(_ context.Context, id uint64) error {
 	return nil
 }
 func (s *stubLinode) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
-	return s.objkeys, nil
+	return s.objkeys, s.listErr
 }
 func (s *stubLinode) CreateObjectStorageKeyBuckets(context.Context, string, string, []string, string) (map[string]any, error) {
 	s.objCreates++
@@ -244,4 +248,104 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		}
 	})
 
+}
+
+// THE 42-DAY WINDOW, as a test. IsDue asks only how old the credential is, so a
+// key that cannot write a single byte reads as healthy for the whole rotation
+// period — and this rotator is what owns object-storage keys after first boot,
+// so nothing else was going to notice. Measured on a production instance: 403
+// AccessDenied on every write for 42 days while the rotator ticked daily and
+// reported "not due" each time, with ROTATE_AFTER_DAYS defaulting to 80.
+func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	t.Setenv("REGION", "primary")
+	t.Setenv("OBJ_CLUSTER", "us-ord-1")
+	t.Setenv("OBJ_LABEL_PREFIX", "acme")
+	t.Setenv("LINODE_TOKEN", "minting")
+	recent := strconvI(now.Unix() - 1*86400)
+
+	// Scoped to somebody else's buckets — what a key minted under a different
+	// objLabelPrefix looks like, which is the shape that produced the outage.
+	stale := []map[string]any{{
+		"id": jn(10), "label": "acme-obj-primary", "access_key": "OLD",
+		"bucket_access": []any{
+			map[string]any{"bucket_name": "platform-loki-chunks-primary", "permissions": "read_write"},
+		},
+	}}
+
+	t.Run("cannot write -> rotated despite being fresh", func(t *testing.T) {
+		lc := &stubLinode{objkeys: stale}
+		bao := &stubBao{data: map[string]map[string]string{
+			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+		}}
+		withRotatorStubs(t, lc, bao, now)
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if lc.objCreates != 1 {
+			t.Errorf("objCreates=%d, want 1 — a key that cannot write must not wait out the "+
+				"age threshold", lc.objCreates)
+		}
+		if bao.data["secret/obj/platform"]["AWS_ACCESS_KEY_ID"] != "AK" {
+			t.Errorf("the replacement was not written: %v", bao.data["secret/obj/platform"])
+		}
+	})
+
+	// CONTROL. A fresh key that DOES grant its buckets must still be left alone,
+	// or the rotator mints on every tick and burns the account key cap.
+	t.Run("still grants -> untouched", func(t *testing.T) {
+		lc := &stubLinode{objkeys: []map[string]any{{
+			"id": jn(10), "label": "acme-obj-primary", "access_key": "OLD",
+			"bucket_access": []any{
+				map[string]any{"bucket_name": "acme-loki-chunks-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-loki-ruler-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-loki-admin-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-harbor-registry-primary", "permissions": "read_write"},
+			},
+		}}}
+		bao := &stubBao{data: map[string]map[string]string{
+			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+		}}
+		withRotatorStubs(t, lc, bao, now)
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if lc.objCreates != 0 {
+			t.Errorf("objCreates=%d, want 0 — a healthy key must not be rotated off-schedule", lc.objCreates)
+		}
+	})
+
+	// FAIL-CLOSED AGAINST CHURN, which is the opposite direction from the check
+	// itself. Rotating costs a mint against the account key cap and starts a
+	// drain, so an unreadable listing must keep the old behaviour rather than
+	// treat "cannot tell" as "broken".
+	t.Run("cannot tell -> untouched", func(t *testing.T) {
+		lc := &stubLinode{listErr: errors.New("connection reset")}
+		bao := &stubBao{data: map[string]map[string]string{
+			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+		}}
+		withRotatorStubs(t, lc, bao, now)
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if lc.objCreates != 0 {
+			t.Errorf("objCreates=%d, want 0 — an unverifiable grant must not trigger a rotation",
+				lc.objCreates)
+		}
+	})
+
+	// A dry run reports without minting, same as the age path.
+	t.Run("dry-run -> reported, not minted", func(t *testing.T) {
+		lc := &stubLinode{objkeys: stale}
+		bao := &stubBao{data: map[string]map[string]string{
+			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+		}}
+		withRotatorStubs(t, lc, bao, now)
+		if err := RunRotateLinodeCreds(context.Background(), false); err != nil {
+			t.Fatal(err)
+		}
+		if lc.objCreates != 0 {
+			t.Errorf("dry-run minted %d key(s)", lc.objCreates)
+		}
+	})
 }
