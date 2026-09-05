@@ -141,19 +141,27 @@ refuses to create a token with scopes greater than the requesting token's, and
 are in, and one of them cannot be escaped from inside CI:
 
 ```bash
-# scopes of the LIVE broad PAT — needs account:read_only, which it has
-curl -s -H "Authorization: Bearer $LINODE_API_TOKEN" \
-  https://api.linode.com/v4/profile/tokens | jq -r '.data[] | select(.token != null) | .scopes'
+# Ask the broad PAT directly whether it can already reach the new resource.
+# Do NOT try to find its entry in GET /v4/profile/tokens: every row carries a
+# 16-char `token` prefix, so `select(.token != null)` filters nothing, and
+# without matching on .label you will happily read a NARROW token's scopes —
+# which already list the new grant — and conclude Case A when you are in B.
+curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $LINODE_API_TOKEN" \
+  https://api.linode.com/v4/nodebalancers     # 200 -> Case A;  401 -> Case B
 ```
+
+Substitute the endpoint for whichever resource the upgrade added.
 
 **Case A — the broad PAT already covers the new resource.** The usual case: the
 broad set is far wider than the narrow one, so most additions are already
 inside it. (`nodebalancers` is an example — the broad PAT has carried
-`nodebalancers:read_write` throughout.) One dispatch:
+`nodebalancers:read_write` throughout, so **this PR's own upgrade is Case A**.)
+One dispatch:
 
 ```
 secret-rotation.yml  →  scope=linode-pat-propagate-only
                         confirm=rotate:linode-pat-propagate-only
+                        reason=<why>            # non-blank; the plan refuses without it
 ```
 
 That skips the broad create and re-runs the per-region matrix, minting a fresh
@@ -171,15 +179,31 @@ the cycle by hand:
    from the `create-linode-pat` step's `scopes:` literal in
    `.github/workflows/llz-secret-rotation.yml`, 90-day expiry.
 2. Update `LINODE_API_TOKEN` in each `infra-<env>` GitHub environment.
-3. Then run `scope=linode-pat-propagate-only` as in Case A.
-4. Revoke the old broad PAT once a rotation has succeeded.
+3. **On a `broadPatRotator` instance, also write the new token to OpenBao:**
+
+   ```bash
+   llz openbao set secret/linode/broad-pat token=<new PAT> --yes
+   ```
+
+   The GitHub secret is only CI's copy. The in-cluster rotator reads its own
+   from `secret/linode/broad-pat` via ESO
+   (`broad-pat-rotator-linode-token`), and if you revoke the old token without
+   updating that path the CronJob 401s on every run from then on. It does not
+   self-heal: `seed-broad-pat` is skip-if-present, so a re-bootstrap will not
+   repair it either.
+4. Then run `scope=linode-pat-propagate-only` as in Case A.
+5. Revoke the old broad PAT **only after** a rotation has succeeded and, on a
+   `broadPatRotator` instance, after step 3.
 
 > **`scope=linode-pat` is not the Case B remedy on any instance.** Beyond the
 > subset problem, on a `broadPatRotator`-enabled instance the create step
 > *stands down* — `llz` emits a `skipped` record and the action exits 0 without
 > minting, because the in-cluster rotator owns that credential (ADR 0001). The
-> job goes green having done nothing, and the run degenerates into the
-> propagate-only path anyway.
+> job then reports success having done nothing. Whether anything else happens
+> depends on `pat-apply`: at its dispatch default of `false` the propagate job's
+> gate (`pat-apply == 'true'`) is not met either, so the whole run is a green
+> no-op. Set `pat-apply=true` and you get the propagate-only path — reached the
+> long way round, and still not a fix for Case B.
 
 Then confirm the new grant is actually live. A token minted before the upgrade
 looks identical from the outside:
