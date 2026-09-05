@@ -115,11 +115,32 @@ func TestDropTrackingPinValueForms(t *testing.T) {
 }
 
 // writeEnv is a minimal env spec carrying one pin.
+//
+// manageAplVersion: false IS PART OF THE MINIMUM, and stating it is what keeps
+// these tests about the thing they test. The field defaults ON, and an owned
+// deployment's pin is what DEPLOYS — the sweep refuses to touch it, by design. So
+// a fixture that omitted the field would have every drop/keep assertion below
+// come back "refused", testing the ownership guard over and over instead of the
+// pin sweep. Ownership has its own tests in aplpin_owned_test.go.
 func writeEnv(t *testing.T, dir, name, pin string) {
 	t.Helper()
-	body := "name: " + name + "\ncluster:\n  bootstrap:\n    name: platform-" + name + "\n"
+	// A ROOT THAT HANDS THE VERSION TO LINODE, written once and never clobbered.
+	// The field defaults ON, and an owned deployment's pin is what DEPLOYS — the
+	// sweep refuses to touch it, by design. Without this every drop/keep assertion
+	// below would come back "refused", testing the ownership guard over and over
+	// instead of the pin sweep. Ownership has its own tests in aplpin_owned_test.go.
+	if _, err := os.Stat(filepath.Join(dir, clusterspec.LandingZoneFile)); os.IsNotExist(err) {
+		writeInstanceFile(t, dir, clusterspec.LandingZoneFile,
+			"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n")
+	}
+	// THE REAL SHAPE, spec-wrapped. The bare `cluster:` form these fixtures used
+	// parses as YAML but matches nothing the ownership resolver reads, so a stated
+	// manageAplVersion was invisible and every deployment fell through to the
+	// default — which is now ON, and refuses the sweep.
+	body := "spec:\n  cluster:\n    bootstrap:\n      name: platform-" + name +
+		"\n      manageAplVersion: false\n"
 	if pin != "" {
-		body += "    aplChartVersion: " + pin + "\n"
+		body += "      aplChartVersion: " + pin + "\n"
 	}
 	writeInstanceFile(t, dir, filepath.Join("environments", name+".yaml"), body)
 }
@@ -272,10 +293,10 @@ func TestDropTrackingPinHandlesCRLF(t *testing.T) {
 func TestSweepAplPinsCoversTheSpecRoot(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: v6.2.0\n        managedAppPlatform: true\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: v6.2.0\n        managedAppPlatform: true\n")
 	// The delivered example sits right beside it and must not be touched.
 	writeInstanceFile(t, dir, "landingzone.yaml.example",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: v6.2.0\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: v6.2.0\n")
 
 	res, err := sweepAplPins(dir, true)
 	if err != nil {
@@ -826,7 +847,7 @@ func TestFlowPathFailsClosedLikeTheBlockPath(t *testing.T) {
 func TestSweepDefersEnvPinsWhileTheSpecRootStillPins(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n")
 	writeEnv(t, dir, "prod", "v6.2.0")
 
 	res, err := sweepAplPins(dir, true)
@@ -860,7 +881,7 @@ func TestSweepDefersEnvPinsWhileTheSpecRootStillPins(t *testing.T) {
 func TestSweepDropsEnvPinsWhenTheSpecRootIsClean(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        managedAppPlatform: true\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        managedAppPlatform: true\n")
 	writeEnv(t, dir, "prod", "v6.2.0")
 
 	res, err := sweepAplPins(dir, true)
@@ -918,7 +939,7 @@ func TestNullPinIsNotAPin(t *testing.T) {
 func TestSweepDoesNotFileARefusalAsDeferred(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n")
 	// Two active keys: unrewritable whatever the root does.
 	writeInstanceFile(t, dir, filepath.Join("environments", "prod.yaml"),
 		"a:\n      aplChartVersion: v6.2.0\nb:\n      aplChartVersion: v6.1.0\n")
@@ -943,7 +964,7 @@ func TestDryRunSeesTheRootItWouldHaveWritten(t *testing.T) {
 	dir := t.TempDir()
 	// Both are ours, so a real run retires both and nothing is deferred.
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: v6.2.0\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: v6.2.0\n")
 	writeEnv(t, dir, "prod", "v6.2.0")
 
 	dry, err := sweepAplPins(dir, false)
@@ -1067,7 +1088,7 @@ func TestPinDetectionAcrossYAMLShapes(t *testing.T) {
 		{"single-line flow", "a: { aplChartVersion: v6.2.0 }\n", "v6.2.0"},
 		{"multi-line flow", "a: {\n  aplChartVersion: v6.2.0\n}\n", "v6.2.0"},
 		{"null", "a:\n  aplChartVersion: ~\n", ""},
-		{"nested deeply", "spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: v6.2.0\n", "v6.2.0"},
+		{"nested deeply", "spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: v6.2.0\n", "v6.2.0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1187,7 +1208,7 @@ func TestDeferralNamesWhyTheRootBlockedIt(t *testing.T) {
 	// And the other cause still reads as itself.
 	dir2 := t.TempDir()
 	writeInstanceFile(t, dir2, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n")
 	writeEnv(t, dir2, "prod", "v6.2.0")
 	res2, err := sweepAplPins(dir2, true)
 	if err != nil {
@@ -1275,7 +1296,7 @@ func TestDropTrackingPinRefusesAnchors(t *testing.T) {
 func TestBelowFloorDefaultBlocksWhenAnEnvInheritsIt(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 5.0.0\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 5.0.0\n")
 	writeEnv(t, dir, "prod", "") // no pin: resolves through spec.defaults
 	t.Chdir(dir)
 
@@ -1291,7 +1312,7 @@ func TestBelowFloorDefaultBlocksWhenAnEnvInheritsIt(t *testing.T) {
 // deferral was skipped and every env pin was deleted underneath a default that
 // really pins — resolving those deployments backward the moment the file is loaded.
 func TestFoundAplPinSkipsNullSites(t *testing.T) {
-	root := "spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion:\n  other:\n    aplChartVersion: 6.0.1\n"
+	root := "spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion:\n  other:\n    aplChartVersion: 6.0.1\n"
 	if got := foundAplPin(root); got != "6.0.1" {
 		t.Errorf("foundAplPin = %q, want 6.0.1 — a null first site must not hide a real pin", got)
 	}
@@ -1337,7 +1358,7 @@ func TestFlowSpliceKeepsCRLFConsistent(t *testing.T) {
 func TestARootThatDefersEnvsIsNotReportedHarmless(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 5.0.0\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 5.0.0\n")
 	writeEnv(t, dir, "prod", "v6.2.0") // one of ours: slated to retire, hence deferred
 	t.Chdir(dir)
 
@@ -1381,7 +1402,7 @@ func TestDropTrackingPinRefusesAliasValues(t *testing.T) {
 func TestARootPinIsNotHarmlessWhenThereAreNoEnvs(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 5.0.0\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 5.0.0\n")
 	t.Chdir(dir)
 
 	var steps []string
@@ -1403,7 +1424,7 @@ func TestAnOverriddenRootPinIsStillGraded(t *testing.T) {
 		t.Run(pin, func(t *testing.T) {
 			dir := t.TempDir()
 			writeInstanceFile(t, dir, "landingzone.yaml",
-				"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: "+pin+"\n")
+				"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: "+pin+"\n")
 			writeEnv(t, dir, "prod", "6.0.1") // never a baseline: KEPT, a permanent override
 			t.Chdir(dir)
 
@@ -1422,7 +1443,7 @@ func TestAnOverriddenRootPinIsStillGraded(t *testing.T) {
 	// A root pin that is FINE stays a plain note, not a blocking one.
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n")
 	writeEnv(t, dir, "prod", "6.0.2")
 	t.Chdir(dir)
 	out := captureStderr(t, func() { retrackAplPins(false) })
@@ -1534,7 +1555,7 @@ func TestACommentDoesNotSuppressTheBlockingWarning(t *testing.T) {
 // backward resolution, and one no existing guard covered, because they all trust
 // findPinSites to have looked.
 func TestFindPinSitesReadsEveryDocument(t *testing.T) {
-	multi := "---\nsomething: else\n---\nspec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n"
+	multi := "---\nsomething: else\n---\nspec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n"
 	if got := foundAplPin(multi); got != "6.0.1" {
 		t.Errorf("foundAplPin = %q, want 6.0.1 — a pin in the second document is still a pin", got)
 	}
@@ -1560,7 +1581,7 @@ func TestFindPinSitesReadsEveryDocument(t *testing.T) {
 func TestDeferredEnvsAreCounted(t *testing.T) {
 	dir := t.TempDir()
 	writeInstanceFile(t, dir, "landingzone.yaml",
-		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        aplChartVersion: 6.0.1\n")
+		"spec:\n  defaults:\n    cluster:\n      bootstrap:\n        manageAplVersion: false\n        aplChartVersion: 6.0.1\n")
 	writeEnv(t, dir, "prod", "v6.2.0") // ours, so deferred behind the root
 	res, err := sweepAplPins(dir, true)
 	if err != nil {

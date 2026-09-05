@@ -59,9 +59,12 @@ func mergeCluster(base, over Cluster) Cluster {
 	// every env (a plain bool can't distinguish "explicitly false" from "unset", so
 	// this is opt-in inheritance — which matches an instance-wide, non-per-env pivot).
 	out.Bootstrap.ManagedAppPlatform = base.Bootstrap.ManagedAppPlatform || over.Bootstrap.ManagedAppPlatform
-	// Same opt-in inheritance, same reason: an instance-wide decision about who owns
-	// the platform version, not a per-env dial.
-	out.Bootstrap.ManageAplVersion = base.Bootstrap.ManageAplVersion || over.Bootstrap.ManageAplVersion
+	// OVERRIDE, not opt-in OR, now that the field is tri-state and defaults ON. An
+	// `||` cannot express "this env opts OUT": false||true is true, so a deployment
+	// that deliberately leaves the version with Linode would have the instance-wide
+	// default silently switch it back on. The env wins when it states a value; nil
+	// falls through to the instance, and nil at both resolves to the default.
+	out.Bootstrap.ManageAplVersion = pickBoolPtr(base.Bootstrap.ManageAplVersion, over.Bootstrap.ManageAplVersion)
 	out.Bootstrap.ManagedApps = pickSlice(base.Bootstrap.ManagedApps, over.Bootstrap.ManagedApps)
 	out.Bootstrap.AplChartVersion = pickStr(base.Bootstrap.AplChartVersion, over.Bootstrap.AplChartVersion)
 	out.Bootstrap.AppsRepoRevision = pickStr(base.Bootstrap.AppsRepoRevision, over.Bootstrap.AppsRepoRevision)

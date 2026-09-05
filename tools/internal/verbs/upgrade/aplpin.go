@@ -232,6 +232,38 @@ func envSpecFiles(root string) ([]string, error) {
 // and a loader that refused them would turn a version hazard into an upgrade that
 // cannot run at all.
 func manageAplVersionSet(files []string) (bool, error) {
+	type bootstrapDoc struct {
+		Spec struct {
+			Defaults struct {
+				Cluster struct {
+					Bootstrap struct {
+						ManageAplVersion *bool `yaml:"manageAplVersion"`
+					} `yaml:"bootstrap"`
+				} `yaml:"cluster"`
+			} `yaml:"defaults"`
+			Environments map[string]struct {
+				Cluster struct {
+					Bootstrap struct {
+						ManageAplVersion *bool `yaml:"manageAplVersion"`
+					} `yaml:"bootstrap"`
+				} `yaml:"cluster"`
+			} `yaml:"environments"`
+			Cluster struct {
+				Bootstrap struct {
+					ManageAplVersion *bool `yaml:"manageAplVersion"`
+				} `yaml:"bootstrap"`
+			} `yaml:"cluster"`
+		} `yaml:"spec"`
+	}
+
+	// POINTERS, AND THE RESOLUTION IS NOT AN OR ANY MORE. The field defaults to
+	// TRUE, so "absent" no longer means "not owned" — it means owned. An `||` over
+	// raw bools would have read every unstated deployment as opted out, i.e. the
+	// exact inversion of the new default, and the sweep would go on dropping pins
+	// that are now load-bearing.
+	var rootDefault *bool
+	var envs []*bool
+	parsedAny := false
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -241,29 +273,7 @@ func manageAplVersionSet(files []string) (bool, error) {
 			// gap TestSweepAplPinsReportsWhatItWroteBeforeFailing exists to hold.
 			continue
 		}
-		var doc struct {
-			Spec struct {
-				Defaults struct {
-					Cluster struct {
-						Bootstrap struct {
-							ManageAplVersion bool `yaml:"manageAplVersion"`
-						} `yaml:"bootstrap"`
-					} `yaml:"cluster"`
-				} `yaml:"defaults"`
-				Environments map[string]struct {
-					Cluster struct {
-						Bootstrap struct {
-							ManageAplVersion bool `yaml:"manageAplVersion"`
-						} `yaml:"bootstrap"`
-					} `yaml:"cluster"`
-				} `yaml:"environments"`
-				Cluster struct {
-					Bootstrap struct {
-						ManageAplVersion bool `yaml:"manageAplVersion"`
-					} `yaml:"bootstrap"`
-				} `yaml:"cluster"`
-			} `yaml:"spec"`
-		}
+		var doc bootstrapDoc
 		// A FILE THAT DOES NOT PARSE IS LEFT TO THE SWEEP'S OWN HANDLING rather than
 		// forced to "owned" here. An unparseable ROOT already defers every env pin
 		// (rootUnreadable below), and dropTrackingPin refuses a file it cannot read —
@@ -273,13 +283,42 @@ func manageAplVersionSet(files []string) (bool, error) {
 		if err := yaml.Unmarshal(b, &doc); err != nil {
 			continue
 		}
-		if doc.Spec.Defaults.Cluster.Bootstrap.ManageAplVersion || doc.Spec.Cluster.Bootstrap.ManageAplVersion {
-			return true, nil
-		}
-		for _, e := range doc.Spec.Environments {
-			if e.Cluster.Bootstrap.ManageAplVersion {
-				return true, nil
+		parsedAny = true
+		if filepath.Base(f) == clusterspec.LandingZoneFile {
+			rootDefault = doc.Spec.Defaults.Cluster.Bootstrap.ManageAplVersion
+			if v := doc.Spec.Cluster.Bootstrap.ManageAplVersion; v != nil {
+				envs = append(envs, v)
 			}
+			for _, e := range doc.Spec.Environments {
+				envs = append(envs, e.Cluster.Bootstrap.ManageAplVersion)
+			}
+			continue
+		}
+		envs = append(envs, doc.Spec.Cluster.Bootstrap.ManageAplVersion)
+	}
+
+	// NOTHING PARSED IS NOT "OWNED BY DEFAULT". The default applies to a spec that
+	// was READ and said nothing; a spec that could not be read said nothing about
+	// anything. Answering "owned" there would suppress the sweep's own deferral —
+	// which names the syntax error as the thing to fix — and replace a precise
+	// diagnosis with a blanket refusal, exactly what the comment above promises not
+	// to do. dropTrackingPin refuses a file it cannot read on its own account, so
+	// nothing is dropped on the strength of an unreadable spec either way.
+	if !parsedAny {
+		return false, nil
+	}
+	// Read, but naming no deployment: answer from the instance-wide value, which
+	// unstated is the default.
+	if len(envs) == 0 {
+		return rootDefault == nil || *rootDefault, nil
+	}
+	for _, v := range envs {
+		eff := v
+		if eff == nil {
+			eff = rootDefault
+		}
+		if eff == nil || *eff {
+			return true, nil
 		}
 	}
 	return false, nil

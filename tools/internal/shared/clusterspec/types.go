@@ -368,13 +368,34 @@ type Bootstrap struct {
 	// then records its own version as `deployingVersion`, compares it to the last
 	// deployed one and runs the intervening migrations (src/common/runtime-upgrade.ts).
 	//
-	// DEFAULT FALSE, and deliberately: Linode installs and versions apl-core on
-	// managed, so driving it from here is a change of ownership, not a setting. Left
-	// off, llz renders no otomi.yaml and Linode's version stands. Turned on, the
-	// deployment tracks EffectiveAplChartVersion — the env pin, else this release's
-	// baseline — and `llz ci assert-apl-deployed-version` is what tells you whether it
-	// actually took.
-	ManageAplVersion bool `json:"manageAplVersion,omitempty"`
+	// DEFAULT ON, and the pointer is what makes that expressible: nil means "not
+	// stated", which now resolves to TRUE. A bare bool cannot carry a true default —
+	// unset would read as a deliberate disable — which is the same reason
+	// ComponentToggle.Enabled is tri-state.
+	//
+	// WHY THE DEFAULT MOVED. It shipped false because the mechanism was unproven
+	// against a live managed cluster. It is no longer unproven: the channel is
+	// confirmed end to end — the apl-overlay reconciler writes
+	// env/settings/otomi.yaml onto the machine branch apl-core's BYO-Git reads, the
+	// same path that already delivers obj.yaml with live credentials, and apl-core's
+	// own otomi-api maintains that exact file. Tracking the release baseline by
+	// default is what the rest of this repo already does for every other version it
+	// pins.
+	//
+	// WHAT TURNING IT OFF MEANS. `manageAplVersion: false` leaves the version with
+	// Linode: llz writes no otomi.yaml and whatever the platform installed stands.
+	// That is a supported position, not a fallback — an instance whose operator
+	// answers to Linode's schedule should say so explicitly rather than by omission.
+	//
+	// THE RISK THIS DEFAULT TAKES ON, stated because a default is where nobody looks.
+	// The chart-written apl-values Secret can also carry otomi.version, so on a
+	// cluster where the platform re-asserts it the two sources contend on operator
+	// restart. Whether Linode's control plane re-reconciles the apl release and
+	// reverts the operator image is not answerable from this repo. What makes the
+	// default defensible is that the failure is now LOUD rather than silent:
+	// `llz ci assert-apl-deployed-version` FAILS instead of warning once llz owns the
+	// version, because drift then means the mechanism did not take.
+	ManageAplVersion *bool `json:"manageAplVersion,omitempty"`
 	// ManagedApps lists the OPTIONAL apl-core apps the operator enabled via the
 	// managed App Platform Console (e.g. harbor, loki, grafana). Managed apl-core
 	// installs only a MINIMAL core, so on a managed cluster `llz render` layers
@@ -385,6 +406,16 @@ type Bootstrap struct {
 	// Ignored on self-install clusters (component toggles drive those). See
 	// docs/adr/0005-managed-app-platform.md.
 	ManagedApps []string `json:"managedApps,omitempty"`
+}
+
+// AplVersionManaged reports whether llz drives apl-core's version on this
+// deployment. nil (the field unstated) means YES — see ManageAplVersion.
+//
+// A METHOD, NOT A FIELD READ, so the default lives in exactly one place. The
+// previous bool was read directly at three call sites; a tri-state read three
+// different ways is how a default silently disagrees with itself.
+func (b Bootstrap) AplVersionManaged() bool {
+	return b.ManageAplVersion == nil || *b.ManageAplVersion
 }
 
 // ManagedAppEnabled reports whether the given optional apl-core app is declared

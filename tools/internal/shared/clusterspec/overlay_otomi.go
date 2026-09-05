@@ -50,11 +50,12 @@ type otomiSpec struct {
 	Version string `yaml:"version,omitempty"`
 }
 
-// RenderOtomiOverlayEnv returns the per-env otomi.yaml, or "" when llz is not
-// managing the version — in which case no file is written and Linode's version
-// stands, which is the default.
+// RenderOtomiOverlayEnv returns the per-env otomi.yaml, or "" when the deployment
+// has explicitly left the version with Linode (`manageAplVersion: false`), in
+// which case no file is written and whatever the platform installed stands.
+// Managing it is the default — see Bootstrap.ManageAplVersion.
 func RenderOtomiOverlayEnv(b Bootstrap) string {
-	if !b.ManageAplVersion {
+	if !b.AplVersionManaged() {
 		return ""
 	}
 	v := aplCoreVersionValue(EffectiveAplChartVersion(b.AplChartVersion))

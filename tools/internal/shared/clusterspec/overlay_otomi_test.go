@@ -7,12 +7,22 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// OFF BY DEFAULT MEANS NO FILE AT ALL. Linode installs and versions apl-core on
-// managed; an instance that has not asked llz to own that must be left exactly as it
-// is, and an empty render is what stops the file being written.
-func TestOtomiOverlayIsOffUnlessAskedFor(t *testing.T) {
-	if got := RenderOtomiOverlayEnv(Bootstrap{AplChartVersion: "v6.2.1"}); got != "" {
-		t.Errorf("no manageAplVersion means no otomi.yaml, got:\n%s", got)
+// ON BY DEFAULT, AND OFF ONLY WHEN SAID SO. The default moved, so the property
+// worth pinning inverted with it: an unstated field must render (llz tracks the
+// release baseline like every other version it pins), and ONLY an explicit
+// `manageAplVersion: false` leaves the version with Linode.
+//
+// BOTH HALVES, because a tri-state read as a plain bool would still pass the first
+// half by accident — nil and false both being "not true" is exactly the confusion
+// the pointer exists to prevent.
+func TestOtomiOverlayIsOnUnlessTurnedOff(t *testing.T) {
+	if got := RenderOtomiOverlayEnv(Bootstrap{AplChartVersion: "v6.2.1"}); got == "" {
+		t.Error("an unstated manageAplVersion must render otomi.yaml — the default is now ON")
+	}
+	if got := RenderOtomiOverlayEnv(Bootstrap{
+		ManageAplVersion: boolPtr(false), AplChartVersion: "v6.2.1",
+	}); got != "" {
+		t.Errorf("an explicit manageAplVersion: false must render nothing, got:\n%s", got)
 	}
 }
 
@@ -20,7 +30,7 @@ func TestOtomiOverlayIsOffUnlessAskedFor(t *testing.T) {
 // apl-core's BYO-Git wiring; the overlay reconciler deep-merges, so a fragment that
 // emitted `git: {}` would take the platform's own git config out from under it.
 func TestOtomiOverlayWritesOnlyTheVersion(t *testing.T) {
-	out := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: true, AplChartVersion: "v6.2.0"})
+	out := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: boolPtr(true), AplChartVersion: "v6.2.0"})
 	if out == "" {
 		t.Fatal("manageAplVersion must render the file")
 	}
@@ -56,17 +66,17 @@ func TestOtomiOverlayWritesOnlyTheVersion(t *testing.T) {
 func TestOtomiOverlayRendersTheEffectiveVersion(t *testing.T) {
 	// The bare form an operator may legitimately write here is normalised to the one
 	// apl-core's schema accepts — same version, spelling it will not reject.
-	pinned := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: true, AplChartVersion: "6.1.0"})
+	pinned := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: boolPtr(true), AplChartVersion: "6.1.0"})
 	if !strings.Contains(pinned, "version: v6.1.0") {
 		t.Errorf("an explicit pin is what deploys, in apl-core's spelling:\n%s", pinned)
 	}
 	// A letter-leading name is already what the pattern permits and is not ours to
 	// reinterpret.
-	named := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: true, AplChartVersion: "main"})
+	named := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: boolPtr(true), AplChartVersion: "main"})
 	if !strings.Contains(named, "version: main") {
 		t.Errorf("a branch-style version passes through untouched:\n%s", named)
 	}
-	unpinned := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: true})
+	unpinned := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: boolPtr(true)})
 	if !strings.Contains(unpinned, "version: "+BaselineAplChartVersion) {
 		t.Errorf("an omitted pin deploys this release's baseline (%s):\n%s", BaselineAplChartVersion, unpinned)
 	}
@@ -78,7 +88,7 @@ func TestOtomiOverlayRendersTheEffectiveVersion(t *testing.T) {
 //	pattern: '(v[0-9]+.[0-9]+.[0-9]+|[a-zA-Z]+[a-zA-Z0-9-])'
 func TestOtomiOverlayVersionMatchesAplCoreSchema(t *testing.T) {
 	for _, pin := range []string{"", "v6.2.1", "6.1.0", "v6.3.0-rc.1"} {
-		out := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: true, AplChartVersion: pin})
+		out := RenderOtomiOverlayEnv(Bootstrap{ManageAplVersion: boolPtr(true), AplChartVersion: pin})
 		var doc struct {
 			Spec struct {
 				Version string `yaml:"version"`
@@ -167,7 +177,7 @@ func TestSetOtomiVersionIsANoOpWhenAlreadyCorrect(t *testing.T) {
 // The reader must find the version the renderer writes — the two halves of this
 // channel, checked against each other rather than each against its own copy.
 func TestOtomiOverlayVersionReadsWhatRenderWrote(t *testing.T) {
-	b := Bootstrap{ManageAplVersion: true, AplChartVersion: "6.2.0"}
+	b := Bootstrap{ManageAplVersion: boolPtr(true), AplChartVersion: "6.2.0"}
 	src := RenderOtomiOverlayEnv(b)
 	if src == "" {
 		t.Fatal("premise: an opted-in bootstrap must render an overlay")
@@ -179,8 +189,11 @@ func TestOtomiOverlayVersionReadsWhatRenderWrote(t *testing.T) {
 	if got != "v6.2.0" {
 		t.Errorf("version = %q, want %q", got, "v6.2.0")
 	}
-	// And a not-opted-in instance renders nothing, which reads as no opinion.
-	if s := RenderOtomiOverlayEnv(Bootstrap{AplChartVersion: "6.2.0"}); s != "" {
-		t.Errorf("manageAplVersion is false — nothing must be rendered, got %q", s)
+	// And an instance that has explicitly handed the version back renders nothing,
+	// which reads as no opinion. Stated, not omitted: omission is now the opposite.
+	if s := RenderOtomiOverlayEnv(Bootstrap{
+		ManageAplVersion: boolPtr(false), AplChartVersion: "6.2.0",
+	}); s != "" {
+		t.Errorf("manageAplVersion: false — nothing must be rendered, got %q", s)
 	}
 }
