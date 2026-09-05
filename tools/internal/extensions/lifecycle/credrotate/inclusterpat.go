@@ -59,8 +59,8 @@ import (
 
 const (
 	// InClusterPATScopes is the union of what in-cluster workloads need, and
-	// nothing else — no lke/vpc:rw/nodebalancers (Terraform's concerns), no
-	// account:read_write (token minting stays with the broad CI PAT):
+	// nothing else — no lke, no vpc:read_write, no account:read_write (token
+	// minting stays with the broad CI PAT):
 	//   domains:read_write       — DNS-01 solver webhook + ExternalDNS (the
 	//                              kyverno-dns-rotating-token mutation points
 	//                              apl-core's two DNS ExternalSecrets here)
@@ -70,7 +70,31 @@ const (
 	//   linodes:read_only        — cidr-firewall discover (instance lookup)
 	//   vpc:read_only           — cidr-firewall discover (subnet CIDR)
 	//   firewall:read_write      — cidr-firewall controller reconciles rules
-	InClusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpc:read_only firewall:read_write"
+	//   nodebalancers:read_only  — a firewall may be attached to a NODEBALANCER,
+	//                              not just to instances, and the device-attach
+	//                              call resolves the entity it is binding. This
+	//                              is the read counterpart of firewall:rw, in the
+	//                              same shape as linodes:read_only above.
+	//
+	// nodebalancers WAS excluded, as "Terraform's concern". That held only while
+	// the sole in-cluster firewall consumer was cidr-firewall, which attaches to
+	// instances. It stopped holding as soon as an instance wanted to put a Cloud
+	// Firewall in front of its PUBLIC INGRESS NodeBalancer — the CCM-created
+	// NodeBalancer fronting the Istio gateway, which is the one Linode object in
+	// a cluster that is unauthenticated and internet-facing by construction.
+	//
+	// Without this scope that is unbuildable in-cluster: firewall:read_write can
+	// create the firewall but the device-attach 403s, so an adopter must mint and
+	// hand-rotate a bespoke PAT forever, outside every rotation guarantee this
+	// package provides. gsap-apl did exactly that, missed the manual seed, and
+	// ran a public NodeBalancer with NO firewall for a month while Argo reported
+	// the Application Synced (akamai/gsap-apl#50, #57).
+	//
+	// read_only is the whole grant: attaching a firewall needs to RESOLVE the
+	// NodeBalancer, never to modify one. Creating, deleting and reconfiguring
+	// NodeBalancers stays with Terraform and the CCM, and nodebalancers:read_write
+	// remains banned from this set — see TestMintBootstrapPATHappyPath.
+	InClusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpc:read_only firewall:read_write nodebalancers:read_only"
 	inclusterPATValidityDays = 90 // same ceiling the broad PAT's 90-day policy enforces
 	inclusterPATGraceDays    = 7  // ESO refresh is 1-5m; a week covers any straggling consumer
 )

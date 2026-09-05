@@ -142,12 +142,15 @@ func TestMintBootstrapPATHappyPath(t *testing.T) {
 	}
 	// The narrow scope set: in-cluster consumers only — and none of the
 	// broad provisioning scopes.
-	for _, want := range []string{"domains:read_write", "object_storage:read_write", "volumes:read_write", "linodes:read_only", "vpc:read_only", "firewall:read_write"} {
+	for _, want := range []string{"domains:read_write", "object_storage:read_write", "volumes:read_write", "linodes:read_only", "vpc:read_only", "firewall:read_write", "nodebalancers:read_only"} {
 		if !strings.Contains(s.scopes, want) {
 			t.Errorf("scopes missing %s: %q", want, s.scopes)
 		}
 	}
-	for _, banned := range []string{"account:", "lke:", "nodebalancers:", "vpc:read_write"} {
+	// nodebalancers:read_only is granted (a firewall can attach to a NodeBalancer
+	// and the attach call resolves the entity); nodebalancers:read_write is NOT —
+	// creating and reconfiguring NodeBalancers stays with Terraform and the CCM.
+	for _, banned := range []string{"account:", "lke:", "nodebalancers:read_write", "vpc:read_write"} {
 		if strings.Contains(s.scopes, banned) {
 			t.Errorf("scopes must not include %s: %q", banned, s.scopes)
 		}

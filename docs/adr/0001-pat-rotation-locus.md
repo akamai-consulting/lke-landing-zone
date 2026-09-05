@@ -22,7 +22,8 @@ Two Linode Personal Access Tokens back the platform:
    single token family serves all deployments.
 2. **Narrow in-cluster PAT** — the scoped token (`domains:read_write`,
    `object_storage:read_write`, `volumes:read_write`, `linodes:read_only`,
-   `vpc:read_only`, `firewall:read_write`; label `llz-incluster-<region>`, at
+   `vpc:read_only`, `firewall:read_write`, `nodebalancers:read_only`; label
+   `llz-incluster-<region>`, at
    `secret/linode/api-token`) that in-cluster consumers read. Deliberately withholds
    `account:read_write`, so it **cannot self-mint** a replacement.
 
