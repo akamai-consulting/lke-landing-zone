@@ -33,7 +33,9 @@ func writeOwnedSpec(t *testing.T, root, rel, body string) {
 func ownedSpecs(t *testing.T, manage bool) string {
 	t.Helper()
 	root := t.TempDir()
-	flag := ""
+	// STATED EITHER WAY. The field defaults ON, so "" would make the negative
+	// control an OWNED instance and the positive control indistinguishable from it.
+	flag := "\n        manageAplVersion: false"
 	if manage {
 		flag = "\n        manageAplVersion: true"
 	}

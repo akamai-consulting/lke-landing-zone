@@ -55,6 +55,21 @@ spec:
       bootstrap:
         managedAppPlatform: true
         # managedApps: [harbor, loki, grafana, kyverno]   # the default; override to narrow/extend
+        # WHO OWNS apl-core's VERSION. Default ON: llz writes the version it targets
+        # into the apl-overlay (env/settings/otomi.yaml), the reconciler merges it onto
+        # the apl-<env> branch apl-core reads, and apl-core reconciles its own operator
+        # to it — so the deployment tracks each llz release the way every other pinned
+        # version here does.
+        #
+        # Set it to false to leave the version with Linode: llz then writes no
+        # otomi.yaml and whatever the platform installed stands. That is a supported
+        # position, not a fallback — an instance on Linode's rollout schedule should say
+        # so explicitly rather than by omission.
+        #
+        # Either way `llz ci assert-apl-deployed-version` reads the RUNNING operator's
+        # image tag. Owned, a gap FAILS (the version was asserted and did not land);
+        # handed to Linode, it warns (their schedule, not yours).
+        # manageAplVersion: false
     # apl-core global feature flags (otomi.*), rendered into every env's
     # values.yaml. Both optional — shown here with their defaults.
     platform:

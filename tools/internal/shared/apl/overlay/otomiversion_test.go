@@ -72,7 +72,7 @@ func otomiRepo(sourceVersion string) *branchRepo {
 	if sourceVersion != "" {
 		src[envOverlayPath("primary", clusterspec.OverlayOtomiFile)] =
 			clusterspec.RenderOtomiOverlayEnv(clusterspec.Bootstrap{
-				ManageAplVersion: true, AplChartVersion: sourceVersion,
+				ManageAplVersion: boolPtr(true), AplChartVersion: sourceVersion,
 			})
 	}
 	return &branchRepo{src: src, tgt: map[string]string{aplOtomiTarget: liveOtomiTarget}}
@@ -216,3 +216,8 @@ func TestAMalformedTargetDoesNotWedgeTheReconciler(t *testing.T) {
 		t.Error("the unreadable target must not be written")
 	}
 }
+
+// boolPtr builds a tri-state ManageAplVersion value. Local to the test because the
+// clusterspec helper is unexported, and exporting one just for tests would widen a
+// package surface the core-surface budget watches.
+func boolPtr(b bool) *bool { return &b }

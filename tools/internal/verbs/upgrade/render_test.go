@@ -38,7 +38,40 @@ func newRenderableInstance(t *testing.T, pin string) string {
 		envdef.Opts{Region: "us-sea", ObjCluster: "us-sea-1", NodeCount: "3"}, "platform-support"); err != nil {
 		t.Fatalf("envdef.WriteEnvDefinition: %v", err)
 	}
+	handVersionToLinode(t, filepath.Join(dir, "landingzone.yaml"))
 	return dir
+}
+
+// handVersionToLinode writes `manageAplVersion: false` into a scaffolded root.
+//
+// WHY THE UPGRADE FIXTURES NEED A STANCE AT ALL. The field defaults ON, and an
+// owned deployment's aplChartVersion is what DEPLOYS — so sweepAplPins refuses to
+// touch it, by design. A fixture that said nothing would therefore exercise the
+// ownership guard on every assertion instead of the pin sweep those tests are
+// about. Ownership itself is covered in aplpin_owned_test.go.
+//
+// Spliced into the scaffold's FLOW mapping (`bootstrap: { managedAppPlatform:
+// true }`) rather than appended as a block key, because a second `bootstrap:` at
+// the same level is a duplicate key and yaml.v3 rejects the document — which
+// would fail these tests for a reason that has nothing to do with what they test.
+func handVersionToLinode(t *testing.T, path string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read scaffolded root: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, "manageAplVersion") {
+		return
+	}
+	const flow = "bootstrap: { managedAppPlatform: true }"
+	if !strings.Contains(s, flow) {
+		t.Fatalf("scaffolded root no longer carries %q — this helper needs updating:\n%s", flow, s)
+	}
+	s = strings.Replace(s, flow, "bootstrap: { managedAppPlatform: true, manageAplVersion: false }", 1)
+	if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
+		t.Fatalf("write scaffolded root: %v", err)
+	}
 }
 
 // The whole reason the render moved into `llz upgrade`: the pin copier rewrites is

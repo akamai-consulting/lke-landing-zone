@@ -46,6 +46,7 @@ package assertplatform
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -304,7 +305,13 @@ func operatorImage(deploy string, cs []deployContainer) (string, *AplDeployedVer
 //
 // FAILS CLOSED ON EVERY FORM OF "COULD NOT TELL": a lane that reports success
 // having read nothing looks exactly like the drift it exists to catch.
-func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
+// owned says whether llz drives apl-core's version on this deployment
+// (spec.cluster.bootstrap.manageAplVersion, which defaults ON). It changes what a
+// minor/patch gap MEANS, which is why it is a parameter rather than something the
+// grading infers: with Linode driving, a gap is the routine mid-rollout state and
+// waiting is correct; with llz driving, the version was asserted into the values
+// and a gap means the assertion did not take.
+func evaluateAplDeployed(raw []byte, readErr error, owned bool) AplDeployedVerdict {
 	if readErr != nil {
 		return AplDeployedVerdict{Source: imageTagSource, Err: fmt.Errorf(
 			"could not read the apl-operator Deployment in namespace %s, so the deployed apl-core version is UNKNOWN — "+
@@ -399,7 +406,7 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 				aplOperatorNamespace, it.Metadata.Name, image, tag, aplCoreLowestPublishedMajor, unreadableRemedy())})
 			continue
 		}
-		return classifyAplDeployed(tag)
+		return classifyAplDeployed(tag, owned)
 	}
 	if held != nil {
 		return *held
@@ -425,7 +432,7 @@ func evaluateAplDeployed(raw []byte, readErr error) AplDeployedVerdict {
 // Platform losing it is worst of all, because LINODE moves the version — a lane
 // that consulted only the distance reddens `assert-suite` and the scheduled health
 // check on a condition the operator can neither fix nor opt out of.
-func classifyAplDeployed(live string) AplDeployedVerdict {
+func classifyAplDeployed(live string, owned bool) AplDeployedVerdict {
 	v := AplDeployedVerdict{Live: live, Source: imageTagSource}
 
 	// THE SAFETY IS LOCAL, not left to the caller's guards. AplChartDriftOf answers
@@ -480,10 +487,32 @@ func classifyAplDeployed(live string) AplDeployedVerdict {
 			live, clusterspec.BaselineAplChartVersion, clusterspec.AllowMajorDriftEnv)
 		return v
 	}
+	// THE SAME DISTANCE, TWO DIFFERENT FACTS, and which one it is depends on who
+	// drives. Under Linode's rollout a gap is a schedule nobody here controls, so
+	// warning and waiting is the honest answer. Once llz owns the version, that gap
+	// is the mechanism reporting on itself: `llz render` wrote the version into
+	// env/settings/otomi.yaml, the reconciler merged it onto the machine branch, and
+	// apl-core was supposed to reconcile its operator to it. Still short means one of
+	// those links did not hold — the chart-written apl-values Secret re-asserting its
+	// own otomi.version, or the platform reverting the operator image — and a warning
+	// on the very signal that proves the feature works is how a broken mechanism
+	// stays green for a release cycle.
+	if owned {
+		v.Err = fmt.Errorf(
+			"this cluster runs apl-core %s but this instance ASSERTS %s (spec.cluster.bootstrap.manageAplVersion "+
+				"is on, so llz owns the version and wrote it to env/settings/otomi.yaml). The gap means the "+
+				"assertion did not reach the operator: check that the apl-<env> branch carries the version "+
+				"llz rendered, and that the chart-written apl-values Secret in %s is not re-asserting a "+
+				"different otomi.version. Set manageAplVersion: false to hand the version back to Linode, "+
+				"which makes this a warning again",
+			live, clusterspec.BaselineAplChartVersion, aplOperatorNamespace)
+		return v
+	}
 	v.Warn = fmt.Sprintf(
-		"this cluster runs apl-core %s and this llz release targets %s. Linode owns the rollout on managed App Platform "+
-			"(the API has no version field), so this is the routine mid-rollout state and does not fail — "+
-			"but it is the version llz was NOT tested against, and it is what to check first if something behaves oddly",
+		"this cluster runs apl-core %s and this llz release targets %s. This deployment sets "+
+			"manageAplVersion: false, so Linode owns the rollout (the API has no version field) and this is "+
+			"the routine mid-rollout state — but it is the version llz was NOT tested against, and it is "+
+			"what to check first if something behaves oddly",
 		live, clusterspec.BaselineAplChartVersion)
 	return v
 }
@@ -491,7 +520,7 @@ func classifyAplDeployed(live string) AplDeployedVerdict {
 // assertAplDeployedVersion is the lane.
 func assertAplDeployedVersion() error {
 	raw, err := deps.Exec("kubectl", "-n", aplOperatorNamespace, "get", "deploy", "-o", "json")
-	v := evaluateAplDeployed(raw, err)
+	v := evaluateAplDeployed(raw, err, aplVersionOwnedHere())
 	if v.Err != nil {
 		return v.Err
 	}
@@ -502,4 +531,28 @@ func assertAplDeployedVersion() error {
 	fmt.Printf("deployed apl-core %s matches the version this llz release targets (%s), read from %s in namespace %s.\n",
 		v.Live, clusterspec.BaselineAplChartVersion, v.Source, aplOperatorNamespace)
 	return nil
+}
+
+// aplVersionOwnedHere resolves whether llz drives the version for the deployment
+// this lane is running against.
+//
+// FAIL-OPEN TO "OWNED", which is the direction that keeps the gate honest: the
+// field defaults on, so an unreadable spec must not quietly downgrade a failure
+// into a warning. The cost of being wrong here is a red lane on a cluster Linode
+// actually drives, which an operator resolves by writing the field explicitly —
+// far cheaper than a silent green on a mechanism that stopped working.
+func aplVersionOwnedHere() bool {
+	env := strings.TrimSpace(os.Getenv("REGION"))
+	if env == "" {
+		return true
+	}
+	lz, err := clusterspec.LoadSplit(".")
+	if err != nil {
+		return true
+	}
+	e, ok := lz.Env(env)
+	if !ok {
+		return true
+	}
+	return e.Cluster.Bootstrap.AplVersionManaged()
 }
