@@ -126,7 +126,7 @@ posture the retired `CLOUD_FIREWALL_TOKEN` had, now delivered natively through
 OpenBao/ESO rather than a GitHub Actions secret):
 
 1. Mint a Linode PAT scoped to exactly what the subsystem needs:
-   - `linodes:read_only` + `vpcs:read_only` — the discover CronJob's walk
+   - `linodes:read_only` + `vpc:read_only` — the discover CronJob's walk
      (instance → attached firewall / lke_cluster_id / VPC subnet);
    - `firewall:read_write` — the controller editing the firewall's ruleset;
    - `nodebalancers:read_only` — **only if** a firewall it manages attaches to a

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
@@ -28,35 +29,64 @@ import (
 // with the Go constants.
 const workflowPath = "instance-template/.github/workflows/llz-secret-rotation.yml"
 
-// scopesLiteral pulls the `scopes:` value out of the create-linode-pat step —
-// anchored on `operation: create` so it cannot silently retarget. Today that step
-// holds the file's only `scopes:` key, so an unanchored match would work and
-// would keep working right up until someone adds a second create step or
-// reorders this one, at which point both gates would pass against the wrong
-// literal. findScopes below also rejects a second match for the same reason.
-var scopesLiteral = regexp.MustCompile(`(?s)operation:\s*create.*?\n\s*scopes:\s*"([^"]+)"`)
+// The gate must read the scope literal of the `create-linode-pat` step and no
+// other. Two things make that harder than a regex:
+//
+//   - the workflow has TWO `operation: create` steps (the broad PAT and the
+//     object-storage key), so anchoring on that string alone is not enough; and
+//   - Go's RE2 has no lookahead, so a pattern cannot say "this `scopes:` with no
+//     intervening `operation:`". A `(?s).*?` anchor spans the whole file and
+//     only looks precise.
+//
+// So this scans instead: find each `scopes:` literal, walk BACK to the nearest
+// `operation:` line, and keep the ones whose operation is `create`. That is
+// exactly the association the gate claims to be testing, and it fails loudly if
+// the file ever grows a second one rather than silently checking the wrong step.
 
-// anyScopes counts `scopes:` keys in the file, so a new one cannot appear
-// outside the anchored match without failing here first.
-var anyScopes = regexp.MustCompile(`(?m)^\s*scopes:\s*"`)
+// scopesLine matches a `scopes: "..."` key and captures its value.
+var scopesLine = regexp.MustCompile(`^\s*scopes:\s*"([^"]+)"`)
 
-// findScopes returns the create-linode-pat step's scope literal, failing rather
-// than guessing if the file's shape has moved out from under the anchor.
+// operationLine matches an `operation:` key and captures its value.
+var operationLine = regexp.MustCompile(`^\s*operation:\s*(\S+)`)
+
+// findScopes returns the scope literal belonging to the create step, failing
+// rather than guessing if the file's shape has moved out from under it.
 func findScopes(t *testing.T, b []byte) string {
 	t.Helper()
-	if n := len(anyScopes.FindAll(b, -1)); n != 1 {
-		t.Fatalf("%s has %d `scopes:` literals, expected exactly 1 — these gates assume the "+
-			"create-linode-pat step is the only place the broad PAT's grant is declared. "+
-			"Point them at each literal explicitly rather than letting one go unchecked",
-			workflowPath, n)
+	lines := strings.Split(string(b), "\n")
+
+	var found []string
+	var total int
+	for i, ln := range lines {
+		m := scopesLine.FindStringSubmatch(ln)
+		if m == nil {
+			continue
+		}
+		total++
+		// Walk back to the operation this literal belongs to.
+		op := ""
+		for j := i - 1; j >= 0; j-- {
+			if o := operationLine.FindStringSubmatch(lines[j]); o != nil {
+				op = o[1]
+				break
+			}
+		}
+		if op == "create" {
+			found = append(found, m[1])
+		}
 	}
-	m := scopesLiteral.FindSubmatch(b)
-	if m == nil {
-		t.Fatalf("no `scopes: \"...\"` literal following `operation: create` in %s — the "+
-			"create-linode-pat step is where the broad PAT's grant is declared; if it moved, "+
-			"point this gate at the new one", workflowPath)
+
+	if total == 0 {
+		t.Fatalf("no `scopes: \"...\"` literal in %s — the create-linode-pat step is where the "+
+			"broad PAT's grant is declared; if it moved, point this gate at the new one", workflowPath)
 	}
-	return string(m[1])
+	if len(found) != 1 {
+		t.Fatalf("%s has %d `scopes:` literal(s) under an `operation: create` step (%d overall), "+
+			"expected exactly 1 — these gates assume one place declares the broad PAT's grant. "+
+			"Check each literal explicitly rather than letting one go unchecked",
+			workflowPath, len(found), total)
+	}
+	return found[0]
 }
 
 func workflowRepoRoot(t *testing.T) string {

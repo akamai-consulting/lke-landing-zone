@@ -107,33 +107,79 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
    drains any same-labeled sibling **broad** PATs superseded more than 7 days
    ago.
 
+#### ⚠️ One-time migration: the `domains:read_write` literal fix
+
+The `create-linode-pat` scopes literal used to omit `domains:read_write`, which
+`InClusterPATScopes` has required since the DNS consolidation. Any instance
+whose live broad PAT was minted **by the CI path** therefore lacks it, and two
+things follow from adding it back:
+
+- **Before the fix**, the broad PAT rotated fine and `rotate-incluster-pat`
+  failed every month — a partial, easily-missed failure.
+- **After the fix**, `create-linode-pat` itself 400s on those instances (it
+  cannot mint a token carrying a scope its requester lacks), so the broad PAT
+  stops rotating **entirely** until it expires. A louder failure, and a worse
+  one if nobody is watching.
+
+This is **Case B** below, and it needs the one-time hand-mint described there —
+do it at upgrade time, not when the token expires. Instances running
+`broadPatRotator` are unaffected: their broad PAT comes from
+`credrotate.BroadPATScopes`, which has always carried `domains:read_write`.
+
 #### After an upgrade that CHANGES `InClusterPATScopes`
 
 A live token's scopes are fixed at mint — Linode cannot widen one in place, and
 nothing here detects scope drift. `mint-bootstrap-pat` is skip-if-present by
 design, so a re-bootstrap will **not** re-scope it either. An upgrading adopter
-therefore keeps the old token, and the capability the upgrade added, for up to
-~31 days until the next monthly rotation mints a replacement.
+therefore keeps the OLD token — **without** the capability the upgrade added —
+for up to ~31 days, until the next monthly rotation mints a replacement.
 
-Force it instead. **Which scope you pick depends on whether the broad PAT can
-still mint the new scope set:**
+**First, check whether the broad PAT can mint the new set at all.** Linode
+refuses to create a token with scopes greater than the requesting token's, and
+*every* path here mints with whatever is currently in
+`secrets.LINODE_API_TOKEN`. That single fact decides which of the two cases you
+are in, and one of them cannot be escaped from inside CI:
+
+```bash
+# scopes of the LIVE broad PAT — needs account:read_only, which it has
+curl -s -H "Authorization: Bearer $LINODE_API_TOKEN" \
+  https://api.linode.com/v4/profile/tokens | jq -r '.data[] | select(.token != null) | .scopes'
+```
+
+**Case A — the broad PAT already covers the new resource.** The usual case: the
+broad set is far wider than the narrow one, so most additions are already
+inside it. (`nodebalancers` is an example — the broad PAT has carried
+`nodebalancers:read_write` throughout.) One dispatch:
 
 ```
-secret-rotation.yml  →  scope=linode-pat                  (create + propagate)
-                        confirm=rotate:linode-pat
-                        pat-apply=true
+secret-rotation.yml  →  scope=linode-pat-propagate-only
+                        confirm=rotate:linode-pat-propagate-only
 ```
 
-Use the full `linode-pat` scope when the upgrade ADDED a resource to
-`InClusterPATScopes`. Linode refuses to mint a token with scopes greater than
-the requester's, so a broad PAT minted before the upgrade may not be able to
-mint the new narrow one at all — and `linode-pat-propagate-only` reuses whatever
-is already in `secrets.LINODE_API_TOKEN`, so it would 400 on exactly the
-instances that most need the re-mint. `linode-pat` re-mints the broad PAT from
-the current scope literal first, then propagates.
+That skips the broad create and re-runs the per-region matrix, minting a fresh
+narrow PAT at the *current* `InClusterPATScopes`.
 
-`scope=linode-pat-propagate-only` is the right choice only when the broad PAT is
-already known to cover the new set — e.g. re-running after a partial failure.
+**Case B — the broad PAT does NOT cover it. No dispatch can fix this.**
+`scope=linode-pat` looks like the answer and is not: its `create-linode-pat` job
+mints the new broad PAT *using the old broad PAT as the requester*
+(`linode-token: ${{ secrets.LINODE_API_TOKEN }}`), so it 400s under the same
+subset rule — and `propagate-linode-pat` is gated on
+`needs.create-linode-pat.result == 'success'`, so it never runs. You must break
+the cycle by hand:
+
+1. Cloud Manager → **API Tokens** → create a PAT carrying the **full** scope set
+   from the `create-linode-pat` step's `scopes:` literal in
+   `.github/workflows/llz-secret-rotation.yml`, 90-day expiry.
+2. Update `LINODE_API_TOKEN` in each `infra-<env>` GitHub environment.
+3. Then run `scope=linode-pat-propagate-only` as in Case A.
+4. Revoke the old broad PAT once a rotation has succeeded.
+
+> **`scope=linode-pat` is not the Case B remedy on any instance.** Beyond the
+> subset problem, on a `broadPatRotator`-enabled instance the create step
+> *stands down* — `llz` emits a `skipped` record and the action exits 0 without
+> minting, because the in-cluster rotator owns that credential (ADR 0001). The
+> job goes green having done nothing, and the run degenerates into the
+> propagate-only path anyway.
 
 Then confirm the new grant is actually live. A token minted before the upgrade
 looks identical from the outside:

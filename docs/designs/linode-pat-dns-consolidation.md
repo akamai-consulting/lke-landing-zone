@@ -28,7 +28,7 @@ per §7 before promotion past lab.
 >   rotator's minting cred, #137's cidr-firewall ES) and the
 >   `secret-propagator`/`platform-ci` policies keep working unchanged.
 > - **Scopes grew for #137** (cidr-firewall self-discovery): the narrow PAT is
->   `domains:rw object_storage:rw volumes:rw` **+ `linodes:ro vpcs:ro
+>   `domains:rw object_storage:rw volumes:rw` **+ `linodes:ro vpc:ro
 >   firewall:rw`** — still nothing Terraform-shaped (no lke/vpc:rw/
 >   nodebalancers/account).
 > - **Scopes grew again for the ingress firewall** (#559): **+
