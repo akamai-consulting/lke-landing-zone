@@ -152,6 +152,12 @@ curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $LINODE_API_TOK
 
 Substitute the endpoint for whichever resource the upgrade added.
 
+> A 200 means the broad PAT holds that resource at **some** access level. That
+> settles it for an added `:read_only` scope, which is this PR's case and the
+> `domains` migration's. If a future upgrade adds a `:read_write` scope, a broad
+> PAT holding it only at `read_only` still answers 200 and you are in Case B
+> anyway — for that, compare the literal scope strings instead.
+
 **Case A — the broad PAT already covers the new resource.** The usual case: the
 broad set is far wider than the narrow one, so most additions are already
 inside it. (`nodebalancers` is an example — the broad PAT has carried
@@ -182,7 +188,8 @@ the cycle by hand:
 3. **On a `broadPatRotator` instance, also write the new token to OpenBao:**
 
    ```bash
-   llz openbao set secret/linode/broad-pat token=<new PAT> --yes
+   llz openbao set secret/linode/broad-pat \
+     token=<new PAT> rotated_at="$(date +%s)" --yes
    ```
 
    The GitHub secret is only CI's copy. The in-cluster rotator reads its own
@@ -191,6 +198,13 @@ the cycle by hand:
    updating that path the CronJob 401s on every run from then on. It does not
    self-heal: `seed-broad-pat` is skip-if-present, so a re-bootstrap will not
    repair it either.
+
+   > **`rotated_at` is not optional here.** `llz openbao set` replaces the
+   > secret rather than merging into it, so writing `token=` alone drops
+   > `rotated_at` — and `IsDue` treats an unparseable timestamp as *due*
+   > (`credrotate/table.go`). The rotator would then mint a replacement on its
+   > very next tick, overwrite the `LINODE_API_TOKEN` you just placed, and leave
+   > your Cloud-Manager PAT orphaned under its operator-chosen label.
 4. Then run `scope=linode-pat-propagate-only` as in Case A.
 5. Revoke the old broad PAT **only after** a rotation has succeeded and, on a
    `broadPatRotator` instance, after step 3.

@@ -96,8 +96,9 @@ Path B.
 
 The [rotator design](linode-credential-rotator.md) left `LINODE_API_TOKEN` as
 tier-2: a **broad** provisioning PAT (`llz-secret-rotation.yml` mints it with
-`linodes:rw object_storage:rw lke:rw firewall:rw vpc:rw volumes:rw
-nodebalancers:rw events:read account:read_write`) that is **dual-domain**:
+`domains:rw linodes:rw object_storage:rw lke:rw firewall:rw vpc:rw volumes:rw
+nodebalancers:rw events:read account:read_write` — `domains:rw` was missing from
+the workflow literal until #559 restored it) that is **dual-domain**:
 
 - **Out-of-cluster:** Terraform/CI use it for everything (cluster, VPC,
   firewall, object-storage buckets, …). It is rotated by CI
