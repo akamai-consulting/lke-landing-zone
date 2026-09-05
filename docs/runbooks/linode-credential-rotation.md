@@ -152,11 +152,13 @@ curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $LINODE_API_TOK
 
 Substitute the endpoint for whichever resource the upgrade added.
 
-> A 200 means the broad PAT holds that resource at **some** access level. That
-> settles it for an added `:read_only` scope, which is this PR's case and the
-> `domains` migration's. If a future upgrade adds a `:read_write` scope, a broad
-> PAT holding it only at `read_only` still answers 200 and you are in Case B
-> anyway — for that, compare the literal scope strings instead.
+> A 200 means the broad PAT holds that resource at **some** access level, so it
+> settles the case only for an added `:read_only` scope — which is what
+> `nodebalancers:read_only` is. It does **not** settle an added `:read_write`
+> scope, including the `domains:read_write` migration above: a broad PAT holding
+> `domains:read_only` answers 200, reads as Case A, and then 400s on the mint.
+> For any `:read_write` addition, compare the literal scope strings instead —
+> find the broad PAT by its label in Cloud Manager and read its scopes there.
 
 **Case A — the broad PAT already covers the new resource.** The usual case: the
 broad set is far wider than the narrow one, so most additions are already
@@ -184,6 +186,14 @@ the cycle by hand:
 1. Cloud Manager → **API Tokens** → create a PAT carrying the **full** scope set
    from the `create-linode-pat` step's `scopes:` literal in
    `.github/workflows/llz-secret-rotation.yml`, 90-day expiry.
+
+   **Give it the same label the current broad PAT carries.** Do not invent one.
+   `revoke-old` drains only exact-label siblings, so a PAT minted under an
+   operator-chosen label is never reclaimed — it stays live until its own
+   expiry, roughly a month past the point it was superseded. The label is
+   `spec.components.broadPatRotator.broadPATLabel` where that component is
+   enabled, and derived from the spec's label prefix otherwise, so read it off
+   the existing token rather than reconstructing it.
 2. Update `LINODE_API_TOKEN` in each `infra-<env>` GitHub environment.
 3. **On a `broadPatRotator` instance, also write the new token to OpenBao:**
 
