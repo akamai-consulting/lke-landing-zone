@@ -494,8 +494,8 @@ from the env name). The downstream ESO wiring (`harbor-registry-s3` /
 ### Step: Mint + seed the in-cluster Linode PAT
 
 Same one-owner shape as the object-storage keys: `llz ci mint-bootstrap-pat` mints the
-NARROW in-cluster PAT (domains/object_storage/volumes rw + linodes/vpcs ro + firewall
-rw — label `llz-incluster-<region>`) with the broad provisioning PAT and seeds
+NARROW in-cluster PAT (domains/object_storage/volumes rw + linodes/vpcs/nodebalancers
+ro + firewall rw — label `llz-incluster-<region>`) with the broad provisioning PAT and seeds
 `secret/linode/api-token` directly, `rotated_at`-stamped.
 
 Every in-cluster Linode consumer (volume-labeler, the cred-rotator's minting credential,

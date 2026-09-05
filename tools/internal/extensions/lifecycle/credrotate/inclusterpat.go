@@ -90,10 +90,23 @@ const (
 	// ran a public NodeBalancer with NO firewall for a month while Argo reported
 	// the Application Synced (akamai/gsap-apl#50, #57).
 	//
-	// read_only is the whole grant: attaching a firewall needs to RESOLVE the
-	// NodeBalancer, never to modify one. Creating, deleting and reconfiguring
-	// NodeBalancers stays with Terraform and the CCM, and nodebalancers:read_write
-	// remains banned from this set — see TestMintBootstrapPATHappyPath.
+	// WHY read_only, AND WHAT IS ASSUMED. Attaching a firewall needs to RESOLVE
+	// the entity, never to modify it — creating, deleting and reconfiguring
+	// NodeBalancers stays with Terraform and the CCM. read_only is chosen by
+	// symmetry with linodes:read_only above, which is the grant that lets
+	// cidr-firewall attach a firewall to an INSTANCE: the same operation on a
+	// different entity class, so the same access level should carry it.
+	//
+	// That is an inference, not a verified result. Nothing in this repo exercises
+	// a nodebalancer device-attach (cidr-firewall only PUTs /rules), and
+	// mintVerifiedInclusterPAT proves the minted token authenticates, not what it
+	// can reach. If Linode turns out to require read_write on the attached
+	// entity, the fix is to widen this ONE scope — still far short of the broad
+	// PAT — and the symptom will be unmissable: a 403 on attach, with the
+	// firewall created and bound to nothing.
+	//
+	// nodebalancers:read_write stays banned from this set either way until that
+	// evidence exists — see TestMintBootstrapPATHappyPath.
 	InClusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpc:read_only firewall:read_write nodebalancers:read_only"
 	inclusterPATValidityDays = 90 // same ceiling the broad PAT's 90-day policy enforces
 	inclusterPATGraceDays    = 7  // ESO refresh is 1-5m; a week covers any straggling consumer

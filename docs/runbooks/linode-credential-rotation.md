@@ -107,6 +107,32 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
    drains any same-labeled sibling **broad** PATs superseded more than 7 days
    ago.
 
+#### After an upgrade that CHANGES `InClusterPATScopes`
+
+A live token's scopes are fixed at mint — Linode cannot widen one in place, and
+nothing here detects scope drift. `mint-bootstrap-pat` is skip-if-present by
+design, so a re-bootstrap will **not** re-scope it either. An upgrading adopter
+therefore keeps the old token, and the capability the upgrade added, for up to
+~31 days until the next monthly rotation mints a replacement.
+
+Force it instead:
+
+```
+secret-rotation.yml  →  scope=linode-pat-propagate-only
+                        confirm=rotate:linode-pat-propagate-only
+```
+
+That skips the broad-PAT create and re-runs the per-region matrix, minting a
+fresh narrow PAT at the *current* `InClusterPATScopes` with whatever broad token
+is in `secrets.LINODE_API_TOKEN`. Confirm the new grant is actually live before
+relying on it — a token minted before the upgrade looks identical from the
+outside:
+
+```bash
+curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <the PAT>" \
+  https://api.linode.com/v4/nodebalancers      # 200 once nodebalancers:ro is granted
+```
+
 #### Why GitHub-OIDC, not root
 
 `bootstrap-openbao.yml` revokes the OpenBao root token at the end of every run

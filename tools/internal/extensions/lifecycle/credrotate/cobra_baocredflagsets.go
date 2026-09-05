@@ -35,10 +35,11 @@ func MintBootstrapPATCmd() *cobra.Command {
 		Use:   "mint-bootstrap-pat",
 		Short: "mint the first narrow in-cluster Linode PAT and seed secret/linode/api-token",
 		Long: "Bootstrap-time twin of rotate-incluster-pat: mints the narrow in-cluster PAT\n" +
-			"(domains/object_storage/volumes rw + linodes/vpc ro + firewall rw) with the\n" +
-			"broad provisioning PAT and seeds secret/linode/api-token — the single rotating\n" +
-			"token every in-cluster Linode consumer reads. Idempotent: an already-seeded\n" +
-			"path is skipped, so a re-bootstrap never clobbers a rotation-minted token.\n" +
+			"(domains/object_storage/volumes rw + linodes/vpc/nodebalancers ro + firewall rw)\n" +
+			"with the broad provisioning PAT and seeds secret/linode/api-token — the single\n" +
+			"rotating token every in-cluster Linode consumer reads. Idempotent: an already-\n" +
+			"seeded path is skipped, so a re-bootstrap never clobbers a rotation-minted\n" +
+			"token.\n" +
 			"Reads LINODE_API_TOKEN (mint), OPENBAO_ROOT_TOKEN (seed).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return RunMintBootstrapPAT(region) },

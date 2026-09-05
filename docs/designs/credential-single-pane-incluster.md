@@ -89,7 +89,8 @@ expiry breaks Argo/apl-core git sync — a real coverage regression.
 
 `token-inventory` enumerates account PATs via `GET /v4/profile/tokens`. The narrow
 in-cluster reconciler token (`secret/linode/api-token`) is minted with
-`domains/object_storage/volumes/linodes/vpc/firewall` scopes and **no `account` scope**
+`domains/object_storage/volumes/linodes/vpc/firewall/nodebalancers` scopes and **no
+`account` scope**
 (`ci_incluster_pat.go`); it is unproven against that endpoint, and every existing caller
 (`cred-audit`, `rotate-broad-pat`, the out-of-cluster job) uses the **broad** token
 (`secret/linode/broad-pat`, `account:read_write`). So a faithful port mounts the broad
