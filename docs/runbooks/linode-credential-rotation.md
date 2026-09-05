@@ -115,23 +115,41 @@ design, so a re-bootstrap will **not** re-scope it either. An upgrading adopter
 therefore keeps the old token, and the capability the upgrade added, for up to
 ~31 days until the next monthly rotation mints a replacement.
 
-Force it instead:
+Force it instead. **Which scope you pick depends on whether the broad PAT can
+still mint the new scope set:**
 
 ```
-secret-rotation.yml  →  scope=linode-pat-propagate-only
-                        confirm=rotate:linode-pat-propagate-only
+secret-rotation.yml  →  scope=linode-pat                  (create + propagate)
+                        confirm=rotate:linode-pat
+                        pat-apply=true
 ```
 
-That skips the broad-PAT create and re-runs the per-region matrix, minting a
-fresh narrow PAT at the *current* `InClusterPATScopes` with whatever broad token
-is in `secrets.LINODE_API_TOKEN`. Confirm the new grant is actually live before
-relying on it — a token minted before the upgrade looks identical from the
-outside:
+Use the full `linode-pat` scope when the upgrade ADDED a resource to
+`InClusterPATScopes`. Linode refuses to mint a token with scopes greater than
+the requester's, so a broad PAT minted before the upgrade may not be able to
+mint the new narrow one at all — and `linode-pat-propagate-only` reuses whatever
+is already in `secrets.LINODE_API_TOKEN`, so it would 400 on exactly the
+instances that most need the re-mint. `linode-pat` re-mints the broad PAT from
+the current scope literal first, then propagates.
+
+`scope=linode-pat-propagate-only` is the right choice only when the broad PAT is
+already known to cover the new set — e.g. re-running after a partial failure.
+
+Then confirm the new grant is actually live. A token minted before the upgrade
+looks identical from the outside:
 
 ```bash
 curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <the PAT>" \
   https://api.linode.com/v4/nodebalancers      # 200 once nodebalancers:ro is granted
 ```
+
+> **What that check does and does not prove.** A 200 confirms the *scope was
+> granted* — which is the thing the re-mint was for, and a 401 means the re-mint
+> did not take. It does **not** prove a firewall device-attach will succeed:
+> whether that call is satisfied by `read_only` on the attached entity is an
+> inference from the `linodes:read_only` precedent, not a verified result (see
+> the comment on `InClusterPATScopes`). If the attach 403s with this returning
+> 200, the scope needs widening to `read_write`, not re-minting.
 
 #### Why GitHub-OIDC, not root
 

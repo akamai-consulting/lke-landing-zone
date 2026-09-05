@@ -31,6 +31,15 @@ per §7 before promotion past lab.
 >   `domains:rw object_storage:rw volumes:rw` **+ `linodes:ro vpcs:ro
 >   firewall:rw`** — still nothing Terraform-shaped (no lke/vpc:rw/
 >   nodebalancers/account).
+> - **Scopes grew again for the ingress firewall** (#559): **+
+>   `nodebalancers:read_only`**. `firewall:read_write` can create a Cloud
+>   Firewall but not attach it to a NodeBalancer — device-attach resolves the
+>   entity — so the one Linode object in a cluster that is unauthenticated and
+>   internet-facing by construction was the one an in-cluster credential could
+>   not protect. Read-only, and the exclusion of `nodebalancers:read_write`
+>   still stands: creating and reconfiguring NodeBalancers remains Terraform's
+>   and the CCM's. §3.1's original scope list below is the proposal as written
+>   and is left as the historical record; this bullet list is the live one.
 > - `llz ci mint-bootstrap-pat` seeds the first token at bootstrap
 >   (skip-if-present, rotated_at-stamped); `llz ci bao-seed-all` no longer
 >   seeds the path; `propagate-pat` is retired.

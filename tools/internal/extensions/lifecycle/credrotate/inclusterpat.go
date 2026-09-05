@@ -107,6 +107,17 @@ const (
 	//
 	// nodebalancers:read_write stays banned from this set either way until that
 	// evidence exists — see TestMintBootstrapPATHappyPath.
+	//
+	// WHO ELSE GETS THIS. Every scope here is granted to EVERY in-cluster
+	// consumer, because they all read the one token at secret/linode/api-token:
+	// volume-labeler, the cred-rotator, the DNS-01 solver webhook and ExternalDNS,
+	// as well as cidr-firewall. So this widens all of them, not just the firewall
+	// path that needs it — which is the standing cost of a single shared rotating
+	// credential, and the reason to keep each addition at the lowest access that
+	// works. An adopter who wants the firewall controller scoped tighter than the
+	// rest can seed secret/linode/cloud-firewall instead (see the cidrFirewall
+	// component's ExternalSecret) — that token is hand-scoped and hand-rotated,
+	// and must carry nodebalancers:read_only too if its firewall attaches to one.
 	InClusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpc:read_only firewall:read_write nodebalancers:read_only"
 	inclusterPATValidityDays = 90 // same ceiling the broad PAT's 90-day policy enforces
 	inclusterPATGraceDays    = 7  // ESO refresh is 1-5m; a week covers any straggling consumer

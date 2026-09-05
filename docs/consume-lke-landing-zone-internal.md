@@ -128,7 +128,13 @@ OpenBao/ESO rather than a GitHub Actions secret):
 1. Mint a Linode PAT scoped to exactly what the subsystem needs:
    - `linodes:read_only` + `vpcs:read_only` — the discover CronJob's walk
      (instance → attached firewall / lke_cluster_id / VPC subnet);
-   - `firewall:read_write` — the controller editing the firewall's ruleset.
+   - `firewall:read_write` — the controller editing the firewall's ruleset;
+   - `nodebalancers:read_only` — **only if** a firewall it manages attaches to a
+     NodeBalancer (e.g. the CCM-created one fronting your ingress gateway)
+     rather than to instances. Device-attach resolves the entity, so
+     `firewall:read_write` on its own creates the firewall and then 403s. The
+     rotating `linode/api-token` carries this scope; a hand-scoped token must
+     add it explicitly.
 
    Both the discover pod and the controller read the same `linode` Secret, so
    the one token must carry the union of those scopes.
