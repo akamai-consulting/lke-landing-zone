@@ -34,6 +34,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
+	"gopkg.in/yaml.v3"
 )
 
 // ── Gate 1: repo-readiness's env: block vs the requirement table ─────────────
@@ -413,5 +414,80 @@ func TestPRGateCheckNamesMatchTheDeliveredJobs(t *testing.T) {
 				"paths: filter. Jobs actually named there: %s",
 				want, deliveredPipeline, strings.Join(have, ", "))
 		}
+	}
+}
+
+// ── Gate 5: the probe's check list vs the jobs that CAN run on a PR ──────────
+
+// TestEveryPullRequestGatedJobIsAsserted is Gate 4 in the other direction, and it
+// is the direction that mattered.
+//
+// Gate 4 fails when DefaultPRGateChecks names a job that does not exist. Nothing
+// failed when a job existed that DefaultPRGateChecks did not name — so
+// `Promotion pipeline up to date` was delivered, ran on the release-e2e's probe
+// PR, FAILED there, and was graded by nothing: the probe waited for three names,
+// and a check it does not name was a check it did not read. Four releases shipped
+// over the top of it (fixture run 33549396273 is the most recent), every one of
+// them reporting "All 3 PR-gated CI check(s) passed".
+//
+// THE LIST IS DERIVED FROM THE `if:` CONDITIONS, not from a second hand-kept copy
+// — a census that has to be remembered is the thing that was not remembered. A job
+// can run on a pull request when its `if:` names that event, or when it has no
+// `if:` at all; either way the probe must wait for it, because either way it will
+// appear on the probe PR and its verdict is about the scaffold llz ships.
+func TestEveryPullRequestGatedJobIsAsserted(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Name string `yaml:"name"`
+			If   string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &wf); err != nil {
+		t.Fatalf("parse %s: %v", deliveredPipeline, err)
+	}
+	// Fail closed on vacuity, like its siblings: a parser that stopped seeing jobs
+	// would report a clean census having compared nothing.
+	if len(wf.Jobs) < 10 {
+		t.Fatalf("parsed only %d job(s) from %s — the extractor is broken, not the tree", len(wf.Jobs), deliveredPipeline)
+	}
+
+	asserted := map[string]bool{}
+	for _, n := range releasepublish.DefaultPRGateChecks {
+		asserted[n] = true
+	}
+	gated := 0
+	for id, j := range wf.Jobs {
+		if j.If != "" && !strings.Contains(j.If, "github.event_name == 'pull_request'") {
+			continue
+		}
+		gated++
+		// A job named by an expression cannot be matched by the probe at all: it
+		// waits for literal check names, and `Apply Databases (${{ inputs.region }})`
+		// is not one. Reaching this means someone gated such a job on pull_request,
+		// which needs a static name before it can be asserted.
+		if strings.Contains(j.Name, "${{") {
+			t.Errorf("job %q runs on pull_request but its name is an expression (%q) — "+
+				"`llz ci assert-instance-pr-gates` matches literal check names, so this gate could never "+
+				"be asserted. Give it a static name.", id, j.Name)
+			continue
+		}
+		if !asserted[j.Name] {
+			t.Errorf("job %q (name %q) in %s runs on pull_request, but releasepublish.DefaultPRGateChecks "+
+				"does not name it.\nThe release-e2e probe PR triggers it and grades it against nothing: "+
+				"if it fails there, the lane still reports every gate green — which is exactly what happened "+
+				"to `Promotion pipeline up to date` for four releases.\nAdd the name to DefaultPRGateChecks.",
+				id, j.Name, deliveredPipeline)
+		}
+	}
+	if gated < 3 {
+		t.Fatalf("found only %d pull_request-gated job(s) in %s — the `if:` classifier is broken, so this "+
+			"gate would pass having examined almost nothing", gated, deliveredPipeline)
+	}
+	if !t.Failed() {
+		t.Logf("%d pull_request-gated delivered job(s); all asserted by the probe", gated)
 	}
 }

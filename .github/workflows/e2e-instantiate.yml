@@ -633,7 +633,7 @@ jobs:
       # the central case is easy to get wrong — `gh pr checks` exits non-zero to
       # report a FAILING check, so a `|| echo '[]'` fallback reports a broken gate as
       # one that never ran. See pr_gates.go.
-      - name: Instance PR gates run and pass (tf-lint + checkov)
+      - name: Instance PR gates run and pass (every pull_request-gated job)
         env:
           GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
         run: bin/llz ci assert-instance-pr-gates --instance "${INSTANCE_REPO}" --sha "${GITHUB_SHA}" --host "${GH_HOST}"
