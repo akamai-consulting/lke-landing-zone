@@ -497,6 +497,57 @@ jobs:
             exit 1
           fi
 
+      # ── the promotion pipeline the scaffold could not generate ──────────────
+      # `llz env add` (the "Scaffold the e2e environment" step above) regenerates
+      # promote.yml itself — but it ran in the TEMPLATE checkout, writing into
+      # instance-template/, and there `promote.PlanWorkflow` deliberately reads
+      # nothing at all ("not an instance checkout"). So the regeneration abstained,
+      # and the instance assembled two steps ago carries the SEEDED placeholder:
+      # the stage-less `Promote (no pipeline configured yet)` that ships with a
+      # fresh scaffold. On an adopter's tree the two happen in the other order —
+      # `llz new` lays the instance down first, `llz env add` runs INSIDE it — so
+      # this step is what puts the e2e instance in the state an adopter's is in,
+      # not a fixture-only workaround.
+      #
+      # IT WAS A SILENT PLACEHOLDER UNTIL ONE DEPLOYMENT BECAME A PIPELINE. Below
+      # two ranked deployments the generator used to render that same placeholder,
+      # so the abstention above cost nothing and nothing went red. Since a single
+      # DECLARED deployment renders a real one-stage pipeline, the seeded file is
+      # stale from birth — and the delivered `Promotion pipeline up to date` job
+      # (llz-terraform.yml, pull_request-gated) has failed on the throwaway probe
+      # PR of every release-e2e since, unseen: `llz ci assert-instance-pr-gates`
+      # grades the check names it was given, and that job was not among them.
+      #
+      # AFTER THE RENDER PASS, NOT BEFORE, and the order is load-bearing. The
+      # generator preserves the caller boilerplate (`uses:` + instance_repo) from
+      # the file on disk, falling back to the sibling terraform.yml stub and then
+      # to .copier-answers.yml — and it REFUSES any of them that still carries a
+      # copier `<@ … @>` token. Run before the render, every source is tokenized,
+      # so it would render a stub with no instance_repo: a promote.yml that cannot
+      # run, written by the step that exists to make it runnable.
+      #
+      # THE --check IS THE GATE, and it belongs here rather than only on the probe
+      # PR. This is the assertion that the instance is pushed in sync; without it
+      # the same drift comes back as a red job in the fixture repo fifteen minutes
+      # later, on a PR whose logs say nothing about which step in THIS job left it
+      # that way. It also fails closed on a regeneration that does not converge —
+      # a generator whose second run disagrees with its first has happened here
+      # before (the `\s*` instance_repo capture that corrupted the file it had
+      # just written).
+      #
+      # TWO SINGLE-LINE STEPS, NOT ONE BLOCK. `llz ci untestable-loc` sits exactly
+      # at its workflow-inline-bash budget, and it counts block scalars while
+      # exempting a one-line `run:` as tool-invocation glue — which is precisely
+      # what these are. Splitting also puts the assertion in its own named step, so
+      # a red instantiate says which half failed from the job list alone.
+      - name: Generate the promotion pipeline (what `llz env add` does inside an instance)
+        working-directory: .e2e-instance
+        run: '"$GITHUB_WORKSPACE/bin/llz" env pipeline'
+
+      - name: The instance is pushed with a promotion pipeline in sync with its spec
+        working-directory: .e2e-instance
+        run: '"$GITHUB_WORKSPACE/bin/llz" env pipeline --check'
+
       # Seed the operator escape hatch so the provision can PROVE it works, not just
       # that it renders. kubernetes-custom/ ships empty (README-only) — dropping a
       # trivial manifest under namespaces/<ns>/ makes the instance-custom ApplicationSet's
