@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
@@ -117,6 +118,24 @@ type LiveState struct {
 	repoSecrets map[string]bool
 	envVars     map[string]string
 	envSecrets  map[string]bool
+	// Per-secret updated_at (RFC3339 → time), env and repo scope. Presence maps
+	// answer "is it set?"; these answer "when was it last WRITTEN?", which is the
+	// only comparable fact about a value GitHub will never read back. Populated by
+	// FetchLiveState only — a LiveState built by NewLiveState carries none, and
+	// SecretUpdatedAt then reports "undecidable" rather than guessing. See drift.go.
+	repoSecretTimes map[string]time.Time
+	envSecretTimes  map[string]time.Time
+}
+
+// SecretUpdatedAt reports when a secret was last written, with the same env→repo
+// fallback as Has: an env-scoped copy is what a job with that environment
+// resolves, so it is the one whose age matters.
+func (s LiveState) SecretUpdatedAt(name string) (time.Time, bool) {
+	if t, ok := s.envSecretTimes[name]; ok {
+		return t, true
+	}
+	t, ok := s.repoSecretTimes[name]
+	return t, ok
 }
 
 // has reports whether name is configured at all (env scope falls back to
@@ -165,19 +184,26 @@ func FetchLiveState(repo, env string) LiveState {
 	s := LiveState{
 		repoVars: map[string]string{}, repoSecrets: map[string]bool{},
 		envVars: map[string]string{}, envSecrets: map[string]bool{},
+		repoSecretTimes: map[string]time.Time{}, envSecretTimes: map[string]time.Time{},
 	}
 	for _, v := range ghVars("repos/" + repo + "/actions/variables") {
 		s.repoVars[v.Name] = v.Value
 	}
-	for _, n := range GHSecretNames("repos/" + repo + "/actions/secrets") {
-		s.repoSecrets[n] = true
+	for _, sec := range ghSecrets("repos/" + repo + "/actions/secrets") {
+		s.repoSecrets[sec.Name] = true
+		if t, ok := sec.updatedAt(); ok {
+			s.repoSecretTimes[sec.Name] = t
+		}
 	}
 	if env != "" {
 		for _, v := range ghVars("repos/" + repo + "/environments/infra-" + env + "/variables") {
 			s.envVars[v.Name] = v.Value
 		}
-		for _, n := range GHSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
-			s.envSecrets[n] = true
+		for _, sec := range ghSecrets("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+			s.envSecrets[sec.Name] = true
+			if t, ok := sec.updatedAt(); ok {
+				s.envSecretTimes[sec.Name] = t
+			}
 		}
 	}
 	return s
@@ -197,17 +223,39 @@ func ghVars(path string) []ghVar {
 }
 
 func GHSecretNames(path string) []string {
-	var out struct {
-		Secrets []struct {
-			Name string `json:"name"`
-		} `json:"secrets"`
-	}
-	_ = json.Unmarshal(ghAPI(path), &out)
-	names := make([]string, 0, len(out.Secrets))
-	for _, s := range out.Secrets {
+	secs := ghSecrets(path)
+	names := make([]string, 0, len(secs))
+	for _, s := range secs {
 		names = append(names, s.Name)
 	}
 	return names
+}
+
+// ghSecret is one row of a secrets listing. UpdatedAt is RFC3339 and is what
+// dates a pushed value against the local file that was supposed to have supplied
+// it; it is the ONLY thing GitHub will tell us about a secret besides its name.
+type ghSecret struct {
+	Name      string `json:"name"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// updatedAt parses UpdatedAt, reporting false for the absent/unparseable case so
+// a caller renders "undecidable" instead of the zero time (which would date every
+// secret to year 1 and mark the whole instance stale).
+func (g ghSecret) updatedAt() (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, g.UpdatedAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+func ghSecrets(path string) []ghSecret {
+	var out struct {
+		Secrets []ghSecret `json:"secrets"`
+	}
+	_ = json.Unmarshal(ghAPI(path), &out)
+	return out.Secrets
 }
 
 // ghAPI runs `gh api <path>` and returns stdout (nil on error — callers treat a

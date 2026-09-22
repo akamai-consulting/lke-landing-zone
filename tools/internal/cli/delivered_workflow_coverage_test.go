@@ -290,6 +290,13 @@ var exercisedEntryPoints = map[string]string{
 		"than 2 ranked deployments so it carries the EMPTY pipeline (a preflight, no stages) — there is no " +
 		"chain to walk. Not a no-op gate, though: promote-pipeline-drift runs `llz env pipeline --check` on " +
 		"every PR at any rank count, and the preflight re-runs it with --require-pipeline on dispatch.",
+	"validate-credentials.yml": "NOT DRIVEN: it probes the credentials of the repo it runs in, and the " +
+		"lane's throwaway instance holds throwaway credentials, so a green run there would prove nothing about " +
+		"any real instance. The probe it wraps (`llz ci validate-tokens`) is NOT unexercised, though — it is a " +
+		"pre-flight step inside llz-terraform.yml, which the lane DOES drive on every apply, so the verb and its " +
+		"scope probes run every e2e. What is unproven is this stub's own trigger surface; " +
+		"reusable-workflow-caller-permissions gates the startup_failure class statically.",
+
 	"template-upgrade.yml": "NOT DRIVEN by the release lane, and it cannot be: it upgrades an instance to the " +
 		"LATEST PUBLISHED release, while the lane's instance is scaffolded from the commit under test — so it " +
 		"would either no-op or drag the fixture onto a different version mid-run. The `llz upgrade` it wraps is " +

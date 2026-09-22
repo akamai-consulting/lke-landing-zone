@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/statepassphrase"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/answers"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/envreq"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/templateid"
 )
 
@@ -18,45 +20,105 @@ import (
 // It is a real gate rather than a spelling check because the branch it guards
 // returns before pushToRepo. An operator who rotates a credential by editing
 // .llz/secrets.env lands here with everything envreq.Satisfied (presence, not
-// value) and their edit unpushed — so a message that does not name
-// `llz secrets push` sends them away believing the repo has what they just
-// changed. Each assertion below corresponds to a way the old string actually
-// went wrong: no route out, no statement of what the check does not cover, and
-// an env name hardcoded to the template's own lane.
+// value) and their edit unpushed.
+//
+// WHAT MOVED, AND WHY THE OLD ASSERTIONS ARE NOT SIMPLY DELETED. This message
+// used to name `llz secrets push` unconditionally, because it could not tell the
+// in-sync operator from the about-to-fail one. It now can — envreq.DetectDrift
+// dates each pushed secret against the local file — so the route out moved into
+// envreq.Drift.Note, which prints it WITH the names of the secrets that need it.
+// The guarantee is unchanged and the assertion for it now lives in
+// TestDriftNote_NamesTheRouteOut; what is asserted here is the other half, which
+// the old unconditional text could not deliver: that the in-sync case makes a
+// STRONGER claim rather than repeating a caveat that applies to everyone.
 func TestNothingToProvisionNote(t *testing.T) {
-	got := NothingToProvisionNote("prod", "acme/instance")
-
-	// The route out. This is the whole point of the message: `llz secrets push`
-	// is a sibling verb, and nothing else in a `llz tokens` run mentions it.
-	if !strings.Contains(got, "llz secrets push prod --yes") {
-		t.Errorf("re-run message never names the command that pushes a hand-edited credential:\n%s", got)
-	}
-	// The advice is only safe from a checkout of the repo this run targeted:
-	// PushSecrets goes through ghcli.SecretSetArgv, which passes no --repo, so it
-	// pushes wherever `gh` infers the repo from the working directory. An --admin
-	// or --repo run targets one repo and stands in another, and the difference
-	// between the two is a full set of credentials in the wrong place.
-	if !strings.Contains(got, "acme/instance") {
-		t.Errorf("re-run message recommends a CWD-relative push without naming the repo it must run against:\n%s", got)
-	}
-	// PRESENCE-not-VALUE has to be said, not implied. "Everything is set" is true
-	// and still leaves the operator with the wrong conclusion.
-	if !strings.Contains(got, ".llz/secrets.env") {
-		t.Errorf("re-run message claims everything is set without saying what is NOT checked:\n%s", got)
-	}
-	// vars.env rides the same early return — pushToRepo is skipped for both, so a
-	// hand-edited variable is dropped exactly like a hand-edited secret.
-	if !strings.Contains(got, ".llz/vars.env") {
-		t.Errorf("re-run message covers only secrets, but this branch drops hand-edited variables too:\n%s", got)
-	}
+	// ── In sync: the comparison ran and found nothing behind ──────────────────
+	inSync := NothingToProvisionNote("prod", "acme/instance", envreq.Drift{LocalMod: time.Now()})
 	// The deployment the operator named, not `e2e`. The old constant reported on
 	// the template's throwaway lane for every adopter who has no such env — the
 	// misdirection DefaultDoctorEnv() removes one verb over.
-	if !strings.Contains(got, "infra-prod") {
-		t.Errorf("re-run message does not name the deployment it reported on:\n%s", got)
+	if !strings.Contains(inSync, "infra-prod") {
+		t.Errorf("re-run message does not name the deployment it reported on:\n%s", inSync)
 	}
-	if strings.Contains(got, "e2e") {
-		t.Errorf("re-run message names `e2e` for an --env prod run:\n%s", got)
+	if strings.Contains(inSync, "e2e") {
+		t.Errorf("re-run message names `e2e` for an --env prod run:\n%s", inSync)
+	}
+	// PRESENCE-not-VALUE still has to be said. Being in sync by timestamp is not
+	// the same as being equal by value, and the message must not imply it is.
+	// Whitespace-normalised: the caveat wraps across lines, and a test that
+	// breaks on rewrapping tests the line width, not the claim.
+	if !strings.Contains(strings.Join(strings.Fields(inSync), " "), "never reads a secret back") {
+		t.Errorf("in-sync message overclaims — it must still say values are not compared:\n%s", inSync)
+	}
+	// ...but it must NOT tell someone with nothing to push to go and push. That
+	// is the noise that made the old text unreadable.
+	if strings.Contains(inSync, "llz secrets push") {
+		t.Errorf("in-sync message sends the operator to push anyway — this is the wallpaper the drift check exists to remove:\n%s", inSync)
+	}
+
+	// ── Undecidable: no local file to date anything against ───────────────────
+	// The one case that still needs the old blanket caveat, because nothing was
+	// compared. Here the route out MUST be named: an operator holding credentials
+	// somewhere else has no other prompt to push them.
+	noFile := NothingToProvisionNote("prod", "acme/instance", envreq.Drift{})
+	if !strings.Contains(noFile, "llz secrets push prod --yes") {
+		t.Errorf("with nothing to compare, the message must still name the push command:\n%s", noFile)
+	}
+	if !strings.Contains(noFile, "acme/instance") {
+		t.Errorf("recommends a CWD-relative push without naming the repo it must run against:\n%s", noFile)
+	}
+
+	// ── Drift found: the head line must not bury the warning that follows ─────
+	behind := NothingToProvisionNote("prod", "acme/instance", envreq.Drift{
+		Behind:   []envreq.DriftEntry{{Name: "OPENBAO_SECRETS_WRITE_TOKEN", PushedAt: time.Now()}},
+		LocalMod: time.Now(),
+	})
+	if strings.Contains(behind, "never reads a secret back") {
+		t.Errorf("head line repeats the generic caveat ahead of the specific warning, diluting it:\n%s", behind)
+	}
+}
+
+// TestDriftNote_NamesTheRouteOut is the assertion that moved out of
+// TestNothingToProvisionNote: the operator who edited .llz/secrets.env and did
+// not push must be told the command that pushes it. `llz secrets push` is a
+// sibling verb and nothing else in a `llz tokens` run mentions it.
+func TestDriftNote_NamesTheRouteOut(t *testing.T) {
+	d := envreq.Drift{
+		Behind:   []envreq.DriftEntry{{Name: "OPENBAO_SECRETS_WRITE_TOKEN", PushedAt: time.Unix(0, 0)}},
+		LocalMod: time.Unix(1, 0),
+	}
+	got := d.Note("prod", "acme/instance")
+	for _, want := range []string{"llz secrets push prod --yes", "acme/instance", "OPENBAO_SECRETS_WRITE_TOKEN"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("drift note does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDriftNote_AheadDoesNotSayPush is the direction a naive implementation gets
+// backwards, and the reason `llz tokens` does not simply auto-sync.
+//
+// `llz ci rotate-broad-pat` publishes a fresh LINODE_API_TOKEN to every
+// infra-<deployment> and REVOKES the one it replaced; llz-secret-rotation.yml
+// does the same for the TF_STATE_* pair. For those three, a pushed copy newer
+// than the local file means the LOCAL one is stale and already dead. Telling an
+// operator to push it back is telling them to break the pipeline.
+func TestDriftNote_AheadDoesNotSayPush(t *testing.T) {
+	d := envreq.Drift{
+		Ahead:    []envreq.DriftEntry{{Name: "LINODE_API_TOKEN", PushedAt: time.Unix(2, 0)}},
+		LocalMod: time.Unix(1, 0),
+	}
+	got := d.Note("prod", "acme/instance")
+	if strings.Contains(got, "llz secrets push") {
+		t.Errorf("a CI-rotated secret must never be recommended for re-push — that overwrites a live credential with a revoked one:\n%s", got)
+	}
+	if !strings.Contains(got, "LINODE_API_TOKEN") {
+		t.Errorf("note does not name the rotated secret:\n%s", got)
+	}
+	// The operator has to learn which copy is the stale one, or they will "fix"
+	// it in the wrong direction by hand.
+	if !strings.Contains(got, "stale") {
+		t.Errorf("note does not tell the operator their own copy is the stale one:\n%s", got)
 	}
 }
 
