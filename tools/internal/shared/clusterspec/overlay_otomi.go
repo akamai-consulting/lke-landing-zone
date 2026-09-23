@@ -25,7 +25,7 @@ var aplCoreVersionPattern = regexp.MustCompile(`(v[0-9]+.[0-9]+.[0-9]+|[a-zA-Z]+
 const OverlayOtomiFile = "otomi.yaml"
 
 // otomiKind is the CR apl-core stores env/settings/otomi.yaml as — confirmed
-// against apl-core v6.2.1's own fixture, tests/fixtures/env/settings/otomi.yaml.
+// against apl-core v6.3.0's own fixture, tests/fixtures/env/settings/otomi.yaml.
 const otomiKind = "AplCapabilitySet"
 
 type otomiOverlayDoc struct {

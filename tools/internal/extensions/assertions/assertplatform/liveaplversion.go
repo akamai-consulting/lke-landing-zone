@@ -14,13 +14,13 @@ package assertplatform
 // ── READ THE IMAGE TAG. NOT THE CHART LABELS. ────────────────────────────────
 //
 // Two charts write the one apl-operator Deployment: the published `apl` chart
-// installs it labelled apl-v6.2.1 / v6.2.1, then apl-core's own charts/apl-operator
+// installs it labelled apl-v6.3.0 / v6.3.0, then apl-core's own charts/apl-operator
 // release REPLACES it (argocd Replace=true) and relabels from ITS Chart.yaml —
 // apl-operator-0.2.0 / 1.16.0.
 //
 // So the labels carry the platform version EXACTLY ONCE, in a window no check runs
 // in, and the operator chart's packaging constants for the rest of the cluster's
-// life; a healthy v6.2.1 cluster reads as 0.2.0. NEITHER MAY BE A FALLBACK — a
+// life; a healthy v6.3.0 cluster reads as 0.2.0. NEITHER MAY BE A FALLBACK — a
 // source correct only before the platform first reconciles is worse than none,
 // because it is right on a fresh cluster and wrong on every real one.
 //

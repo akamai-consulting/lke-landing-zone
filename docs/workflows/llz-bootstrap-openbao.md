@@ -880,7 +880,7 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
 * **apl-deployed-version** — GATING proof that the apl-core RUNNING on this cluster is a
   version this llz release was tested against. Read from the IMAGE TAG of the
   `apl-operator` container, not that Deployment's chart labels — apl-core relabels them
-  with its operator chart's packaging version, so a healthy v6.2.1 cluster reads as
+  with its operator chart's packaging version, so a healthy v6.3.0 cluster reads as
   `0.2.0` (details in `liveaplversion.go`). What stays green
   without it: every other apl-core version signal reads the SPEC, and on Linode's managed
   App Platform the spec cannot know the answer — Linode installs the platform,

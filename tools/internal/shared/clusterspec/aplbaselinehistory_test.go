@@ -34,14 +34,14 @@ func TestAplBaselineHistoryIsOrderedAndParseable(t *testing.T) {
 func TestWasAplBaseline(t *testing.T) {
 	// Every baseline we have ever shipped is ours, prefix or not: an instance that
 	// wrote the bare form is still tracking us and must be recognised as such.
-	for _, pin := range []string{"6.0.0", "v6.1.0", "6.1.0", "v6.2.0", "6.2.0", BaselineAplChartVersion, "6.2.1"} {
+	for _, pin := range []string{"6.0.0", "v6.1.0", "6.1.0", "v6.2.0", "6.2.0", "v6.2.1", "6.2.1", BaselineAplChartVersion, "6.3.0"} {
 		if !WasAplBaseline(pin) {
 			t.Errorf("WasAplBaseline(%q) = false, want true — a version llz targeted must read as ours", pin)
 		}
 	}
 	// Everything else is the operator's. These are the pins an upgrade must not
 	// touch: a deliberate hold, a version we never shipped, and junk.
-	for _, pin := range []string{"6.0.1", "6.3.0", "5.0.0", "7.0.0", "", "latest", "6.2"} {
+	for _, pin := range []string{"6.0.1", "6.4.0", "5.0.0", "7.0.0", "", "latest", "6.2"} {
 		if WasAplBaseline(pin) {
 			t.Errorf("WasAplBaseline(%q) = true, want false — only versions llz itself targeted may be treated as ours", pin)
 		}

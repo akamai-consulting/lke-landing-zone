@@ -14,6 +14,13 @@ package teardown
 // buys headroom on client-side-managed CRDs. Two callers share this: the
 // bootstrap runs it proactively before the apl-core deploy, and the converge
 // gate runs it reactively when a sync fails on the annotation limit.
+//
+// As of apl-core v6.3.0 the operator itself applies server-side (apl-core #3452),
+// so a GREENFIELD v6.3.0 cluster no longer accretes the annotation and should
+// never reach this unwedge. It STAYS anyway: a reused/brownfield cluster still
+// carries stale client-side copies from before the switch, and a best-effort
+// reactive self-heal costs nothing when it never fires. Do not retire it on the
+// strength of the upstream SSA move alone.
 
 import (
 	"encoding/json"
