@@ -130,7 +130,7 @@ spec:
       name: platform-prod                         # apl-core cluster.name
       # NO domainSuffix — Linode owns lke<id>.akamai-apl.net and LLZ discovers it
       # in-cluster. Setting it is a hard validation error.
-      # aplChartVersion: v6.2.1                   # optional; OMIT IT. An omitted pin tracks the llz
+      # aplChartVersion: v6.3.0                   # optional; OMIT IT. An omitted pin tracks the llz
                                                   # baseline, and `llz upgrade` removes a pin llz
                                                   # itself set so it keeps tracking. Linode owns the
                                                   # deployed version on managed App Platform, so this

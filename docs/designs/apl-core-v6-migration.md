@@ -155,8 +155,12 @@ else is removable** — the remaining workarounds are confirmed load-bearing on 
   (`monitoring`) is still correct (only Grafana moved namespaces on v6).
 - **TF bootstrap timing/pre-creation workarounds: all stay.** v6's `apl` chart
   still ships the annotation-less `00-namespace.yaml` (namespace-adopt collision
-  is real), apl-operator still has no readinessProbe (helm wait covers only the
-  Deployment), oauth2-proxy's redis-ha PVC still hardcodes `linode-block-storage`,
+  is real), apl-operator now carries a readinessProbe as of v6.3.0 (apl-core
+  #3464) but at its default (`operator.readiness.gateOnReadiness=false`) it is
+  process-alive, and even opted-in it only signals the first apply's handover to
+  Argo — not the ~40-component pipeline — so helm wait still covers only the
+  Deployment and the six-stage wait-apl-pipeline gate stays load-bearing (do NOT
+  opt into gateOnReadiness), oauth2-proxy's redis-ha PVC still hardcodes `linode-block-storage`,
   and the sc-default-demote race is LKE-Flux (not apl-core).
 - **apl-core defaults don't obviate LLZ config.** `platformBackups.*` default off
   (CNPG); grafana/harbor `adminPassword` are `x-secret: ''` (supplied, not

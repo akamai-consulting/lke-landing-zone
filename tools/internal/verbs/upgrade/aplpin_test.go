@@ -34,7 +34,7 @@ func TestDropTrackingPin(t *testing.T) {
 		{"the current baseline", clusterspec.BaselineAplChartVersion, true},
 		// Never ours. Dropping these would move an environment its owner is holding.
 		{"a deliberate patch pin", "6.0.1", false},
-		{"a deliberate hold ahead", "6.3.0", false},
+		{"a deliberate hold ahead", "6.4.0", false},
 		// llz has never targeted an rc, so riding one is an operator's choice.
 		{"a release candidate of the baseline", clusterspec.BaselineAplChartVersion + "-rc.1", false},
 		{"an unparseable pin", "latest", false},
