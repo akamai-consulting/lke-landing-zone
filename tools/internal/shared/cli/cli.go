@@ -102,6 +102,18 @@ func InClusterToken(envVar, file string) string {
 // needed to ask a human a question and read a dotenv, so they were written there
 // and `upgrade` then imported the whole wizard to reach them.
 
+// Interactive reports whether stdin is a terminal — i.e. whether Prompt would
+// reach a human rather than block on a pipe or return "" instantly under CI.
+// A prompt that cannot be answered must not be the gate on an action: callers
+// skip the offer and print the manual command instead.
+func Interactive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 func Prompt(in *bufio.Scanner, label string) string {
 	fmt.Printf("  %s: ", label)
 	if !in.Scan() {
