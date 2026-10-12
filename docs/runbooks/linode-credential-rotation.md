@@ -107,6 +107,141 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
    drains any same-labeled sibling **broad** PATs superseded more than 7 days
    ago.
 
+#### ⚠️ One-time migration: the `domains:read_write` literal fix
+
+The `create-linode-pat` scopes literal used to omit `domains:read_write`, which
+`InClusterPATScopes` has required since the DNS consolidation. Any instance
+whose live broad PAT was minted **by the CI path** therefore lacks it, and two
+things follow from adding it back:
+
+- **Before the fix**, the broad PAT rotated fine and `rotate-incluster-pat`
+  failed every month — a partial, easily-missed failure.
+- **After the fix**, `create-linode-pat` itself 400s on those instances (it
+  cannot mint a token carrying a scope its requester lacks), so the broad PAT
+  stops rotating **entirely** until it expires. A louder failure, and a worse
+  one if nobody is watching.
+
+This is **Case B** below, and it needs the one-time hand-mint described there —
+do it at upgrade time, not when the token expires. Instances running
+`broadPatRotator` are unaffected: their broad PAT comes from
+`credrotate.BroadPATScopes`, which has always carried `domains:read_write`.
+
+#### After an upgrade that CHANGES `InClusterPATScopes`
+
+A live token's scopes are fixed at mint — Linode cannot widen one in place, and
+nothing here detects scope drift. `mint-bootstrap-pat` is skip-if-present by
+design, so a re-bootstrap will **not** re-scope it either. An upgrading adopter
+therefore keeps the OLD token — **without** the capability the upgrade added —
+for up to ~31 days, until the next monthly rotation mints a replacement.
+
+**First, check whether the broad PAT can mint the new set at all.** Linode
+refuses to create a token with scopes greater than the requesting token's, and
+*every* path here mints with whatever is currently in
+`secrets.LINODE_API_TOKEN`. That single fact decides which of the two cases you
+are in, and one of them cannot be escaped from inside CI:
+
+```bash
+# Ask the broad PAT directly whether it can already reach the new resource.
+# Do NOT try to find its entry in GET /v4/profile/tokens: every row carries a
+# 16-char `token` prefix, so `select(.token != null)` filters nothing, and
+# without matching on .label you will happily read a NARROW token's scopes —
+# which already list the new grant — and conclude Case A when you are in B.
+curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $LINODE_API_TOKEN" \
+  https://api.linode.com/v4/domains           # 200 -> Case A;  401 -> Case B
+```
+
+Substitute the endpoint for whichever resource the upgrade added.
+
+> A 200 means the broad PAT holds that resource at **some** access level, so it
+> settles the case only for an added `:read_only` scope. It does **not** settle
+> an added `:read_write` scope, including the `domains:read_write` migration
+> above: a broad PAT holding `domains:read_only` answers 200, reads as Case A,
+> and then 400s on the mint. For any `:read_write` addition, compare the literal
+> scope strings instead — find the broad PAT by its label in Cloud Manager and
+> read its scopes there.
+
+**Case A — the broad PAT already covers the new resource.** The usual case: the
+broad set is far wider than the narrow one, so most additions are already inside
+it. One dispatch:
+
+```
+secret-rotation.yml  →  scope=linode-pat-propagate-only
+                        confirm=rotate:linode-pat-propagate-only
+                        reason=<why>            # non-blank; the plan refuses without it
+```
+
+That skips the broad create and re-runs the per-region matrix, minting a fresh
+narrow PAT at the *current* `InClusterPATScopes`.
+
+**Case B — the broad PAT does NOT cover it. No dispatch can fix this.**
+`scope=linode-pat` looks like the answer and is not: its `create-linode-pat` job
+mints the new broad PAT *using the old broad PAT as the requester*
+(`linode-token: ${{ secrets.LINODE_API_TOKEN }}`), so it 400s under the same
+subset rule — and `propagate-linode-pat` is gated on
+`needs.create-linode-pat.result == 'success'`, so it never runs. You must break
+the cycle by hand:
+
+1. Cloud Manager → **API Tokens** → create a PAT carrying the **full** scope set
+   from the `create-linode-pat` step's `scopes:` literal in
+   `.github/workflows/llz-secret-rotation.yml`, 90-day expiry.
+
+   **Give it the same label the current broad PAT carries.** Do not invent one.
+   `revoke-old` drains only exact-label siblings, so a PAT minted under an
+   operator-chosen label is never reclaimed — it stays live until its own
+   expiry, roughly a month past the point it was superseded. The label is
+   `spec.components.broadPatRotator.broadPATLabel` where that component is
+   enabled, and derived from the spec's label prefix otherwise, so read it off
+   the existing token rather than reconstructing it.
+2. Update `LINODE_API_TOKEN` in each `infra-<env>` GitHub environment.
+3. **On a `broadPatRotator` instance, also write the new token to OpenBao:**
+
+   ```bash
+   llz openbao set secret/linode/broad-pat \
+     token=<new PAT> rotated_at="$(date +%s)" --yes
+   ```
+
+   The GitHub secret is only CI's copy. The in-cluster rotator reads its own
+   from `secret/linode/broad-pat` via ESO
+   (`broad-pat-rotator-linode-token`), and if you revoke the old token without
+   updating that path the CronJob 401s on every run from then on. It does not
+   self-heal: `seed-broad-pat` is skip-if-present, so a re-bootstrap will not
+   repair it either.
+
+   > **`rotated_at` is not optional here.** `llz openbao set` replaces the
+   > secret rather than merging into it, so writing `token=` alone drops
+   > `rotated_at` — and `IsDue` treats an unparseable timestamp as *due*
+   > (`credrotate/table.go`). The rotator would then mint a replacement on its
+   > very next tick, overwrite the `LINODE_API_TOKEN` you just placed, and leave
+   > your Cloud-Manager PAT orphaned under its operator-chosen label.
+4. Then run `scope=linode-pat-propagate-only` as in Case A.
+5. Revoke the old broad PAT **only after** a rotation has succeeded and, on a
+   `broadPatRotator` instance, after step 3.
+
+> **`scope=linode-pat` is not the Case B remedy on any instance.** Beyond the
+> subset problem, on a `broadPatRotator`-enabled instance the create step
+> *stands down* — `llz` emits a `skipped` record and the action exits 0 without
+> minting, because the in-cluster rotator owns that credential (ADR 0001). The
+> job then reports success having done nothing. Whether anything else happens
+> depends on `pat-apply`: at its dispatch default of `false` the propagate job's
+> gate (`pat-apply == 'true'`) is not met either, so the whole run is a green
+> no-op. Set `pat-apply=true` and you get the propagate-only path — reached the
+> long way round, and still not a fix for Case B.
+
+Then confirm the new grant is actually live. A token minted before the upgrade
+looks identical from the outside:
+
+```bash
+curl -so /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <the PAT>" \
+  https://api.linode.com/v4/domains            # 200 once the new scope is granted
+```
+
+> **What that check does and does not prove.** A 200 confirms the *scope was
+> granted* — which is the thing the re-mint was for, and a 401 means the re-mint
+> did not take. It does not prove the consumer's own API call will succeed; that
+> depends on what that call actually gates on, which is worth measuring rather
+> than assuming.
+> 200, the scope needs widening to `read_write`, not re-minting.
+
 #### Why GitHub-OIDC, not root
 
 `bootstrap-openbao.yml` revokes the OpenBao root token at the end of every run
