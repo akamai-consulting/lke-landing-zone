@@ -264,8 +264,9 @@ lives in the command rather than in workflow YAML.
 ## Job: `credential-single-pane`
 
 Runs daily. It replaces the former per-provider probe jobs (the Linode
-`cred-audit` and `gh-pat-expiry-health`) with a cluster-as-source-of-truth flow:
-two steps sharing one kubeconfig.
+`cred-audit` and `gh-pat-expiry-health`) with a cluster-as-source-of-truth flow
+sharing one kubeconfig, and then builds the auditor evidence pack from what that
+flow — and the Wiz enrollment gate — just proved.
 
 It runs per-region because Linode PATs are per-env while GitHub PATs are
 instance-wide, so each cluster's reconciler exposes that region's view. It
@@ -295,6 +296,36 @@ metric, e.g. because the funnel is down. This catches a broken pipeline that the
 per-provider probes used to mask: they would happily report "no findings" while
 the thing that produces findings was dead. `--summary` writes the verdict table
 to the job summary (see `llz ci alert-eval`).
+
+### Step: Assert Wiz enrollment
+
+`llz ci assert-wiz-enrollment --region <env>` — the scheduled half of the
+assert-suite `wiz-enrollment` lane, which release-e2e can only ever report as
+SKIPPED (it has no Wiz tenant). A deployment without `spec.components.wiz` skips
+loudly; one with it enabled fails unless the credential reached the cluster, the
+Wiz API registered the connector, and the broker tunnel is Ready. This is the run
+that catches an enrolled cluster dropping off Wiz months later — a rotated or
+revoked service account, blocked egress — which no Argo status shows.
+
+It publishes its verdict as the step output `result` (`pass` / `fail` /
+`skipped`), because a skip exits 0 exactly like a pass.
+
+### Step: Build the compliance evidence pack
+
+`llz ci cis-evidence` assembles the pack for `docs/infosec/control-mapping.md`:
+the trivy `ClusterComplianceReport`s (when the `complianceReports` component is
+emitted), NetworkPolicy / restricted-PSS / StorageClass-encryption signals, the
+pre-filled org checklist answers, and the outcomes of this job's gates
+(`--gate <verb>=<outcome>`; a gate whose step did not run is recorded as
+skipped, never pass). The JSON, Markdown and sha256 sidecar upload as the
+`cis-evidence-<env>` artifact (90-day retention).
+
+`continue-on-error: true`, deliberately: the pack is a report. Every gate it
+records already fails the job on its own step, and a failing CIS control is a
+finding for the auditor to read, not a broken pipeline. The sha256 sidecar stands
+in for a cosign attestation, which would need `id-token: write` on the caller
+stub — an instance that wants a signed bundle adds that permission and signs the
+artifact in its own step.
 
 ---
 

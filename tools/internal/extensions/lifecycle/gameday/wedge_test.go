@@ -90,9 +90,11 @@ func TestSiblingsOf(t *testing.T) {
 	// joined with the SSE-C object-storage gateway (spec.components.objProxy) — it is
 	// carved for the same reason the rotator is: it sits on the write path for every
 	// image pull and log write, so a Degraded proxy must fail its own App rather than
-	// platform-bootstrap.
+	// platform-bootstrap. llz-wiz joined with Wiz CSPM enrollment
+	// (spec.components.wiz): observational, so a Degraded connector must never
+	// put platform-bootstrap's health at stake.
 	want := []string{"llz-broad-pat-rotator", "llz-externalsecrets", "llz-harbor",
-		"llz-obj-proxy", "llz-reconciler"}
+		"llz-obj-proxy", "llz-reconciler", "llz-wiz"}
 	if strings.Join(sibs, ",") != strings.Join(want, ",") {
 		t.Errorf("siblingsOf(llz-observability) = %v, want %v", sibs, want)
 	}

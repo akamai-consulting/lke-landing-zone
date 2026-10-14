@@ -4,7 +4,7 @@ package capability
 //
 // The counts here are pinned by TestHandleHeaderCensusesMatchTheRegistry.
 //
-// Eighteen bindings declare `secret-custody` and eleven declare `secret-read`.
+// Eighteen bindings declare `secret-custody` and twelve declare `secret-read`.
 // Without these handles both are review metadata: a binding claiming read-only is
 // handed `baoread.Exec` and can `kv put` with a root token exactly as easily as the
 // seeder next to it.

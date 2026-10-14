@@ -62,6 +62,11 @@ import (
 // spec component, and which an instance therefore cannot turn off. MEASURED, not
 // chosen.
 var componentless = map[string]bool{
+	// No component: the evidence pack is evidence about the WHOLE cluster an
+	// auditor signs off — it must be produced on every instance, and records
+	// whatever optional parts (compliance reports, Wiz) are absent as not
+	// collected / skipped rather than not running at all.
+	"cis-evidence": true,
 	// No component: it judges .template-manifest against the Go sources under
 	// tools/, and every instance carries the whole delivered scaffold regardless
 	// of which spec components it turned on. A component gate here would mean a

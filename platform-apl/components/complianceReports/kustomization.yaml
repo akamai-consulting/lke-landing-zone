@@ -1,0 +1,21 @@
+# spec.components.complianceReports → this kustomize Component: the two trivy-operator
+# ClusterComplianceReports the auditor evidence pack harvests
+# (`llz ci cis-evidence`, docs/infosec/control-mapping.md):
+#
+#   - cis              : the standard CIS Kubernetes Benchmark (in-scope controls)
+#   - llz-org-controls : the trivy-checkable subset of the org checklist (SOG)
+#
+# CONDITIONAL on managed apl-core: trivy-operator owns the
+# clustercompliancereports.aquasecurity.github.io CRD, and the managed minimal core
+# does NOT install it — Trivy is opt-in via the App Platform Console. So `llz
+# render` emits this ONLY when the operator declares `trivy` in
+# cluster.bootstrap.managedApps; a ClusterComplianceReport with no CRD would wedge
+# platform-bootstrap ("no matches for kind ClusterComplianceReport"), the same
+# failure imageSignature guards against for Kyverno. Without it the evidence pack
+# records both reports as NOT COLLECTED rather than passing them.
+# Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - clustercompliancereport-cis.yaml
+  - clustercompliancereport-llz-org.yaml

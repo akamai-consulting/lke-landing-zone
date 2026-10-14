@@ -96,4 +96,7 @@ spec:
       enabled: true
       registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
     imageScanning: { enabled: true }               # Trivy
+    # Wiz CSPM cluster enrollment (default off). secretPath must sit under a
+    # spec.teams[].openbaoSubtree; seed clientId + clientToken there first.
+    # wiz: { enabled: true, secretPath: secret/<team>/wiz/connector }
     policyEngine:   { enabled: true }              # Kyverno + policy-reporter

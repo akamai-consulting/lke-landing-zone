@@ -1,0 +1,80 @@
+# Default-deny for the wiz namespace + the integration's minimal reach.
+#
+# The connector holds a Wiz service-account credential and its ClusterRole reads
+# every object in the cluster (the upstream chart's `wiz-cluster-reader`), so
+# unconstrained egress would let a compromised image ship the whole cluster
+# anywhere. Allow only what enrollment needs: DNS, the kube-apiserver, and
+# outbound HTTPS to the Wiz SaaS endpoints (whose addresses are not stable enough
+# to pin, hence port-scoped 0.0.0.0/0 — the same posture as the rotator's API
+# egress).
+#
+# Wave -10, with every other per-namespace policy in the tree: cilium programs BPF
+# asynchronously, and the connector-registration Job is an Argo PreSync hook that
+# runs the moment the Application syncs — a Job that starts before its egress
+# allow is enforced fails closed against the default-deny and reads as a Wiz
+# credential problem.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wiz-default-deny
+  namespace: wiz
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wiz-egress
+  namespace: wiz
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  # Namespace-wide: the broker Deployment and the create/delete-connector Jobs carry
+  # the upstream chart's labels, which move between chart releases. A selector on
+  # them is the exact shape of the argo-events relabel scar (lessons-learned:
+  # "argo-events v1.9+ relabeled pods") — a policy that silently matches nothing.
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # DNS. kube-system by NAMESPACE only — LKE-E labels CoreDNS `k8s-app: coredns`,
+    # so a `k8s-app: kube-dns` podSelector matches nothing and every lookup hangs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Wiz SaaS (connector registration + the broker's outbound tunnel) AND the
+    # kube-apiserver. 6443 alongside 443 because Cilium evaluates policy
+    # post-DNAT: the broker dials kubernetes.default.svc:443, which the datapath
+    # rewrites to the apiserver's 6443 before policy is checked.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+---
+# The broker's readiness/liveness probes. kubelet probes originate from the node,
+# which no namespaceSelector matches, so the health port takes an
+# unrestricted-source rule. It serves /ready and /live only — no credential, no
+# cluster data. Without it the default-deny above fails every probe, the broker
+# never goes Ready, and `assert-wiz-enrollment` reports a disconnected connector
+# for a tunnel that is in fact up.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wiz-broker-probes
+  namespace: wiz
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        # wiz-broker `healthPort` (upstream default 30000).
+        - { protocol: TCP, port: 30000 }

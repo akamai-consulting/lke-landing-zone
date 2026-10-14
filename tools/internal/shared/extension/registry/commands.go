@@ -38,7 +38,9 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertwiz"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/evidencepack"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
@@ -148,6 +150,8 @@ var commands = []Command{
 	{"assertsecrets", assertsecrets.OpenbaoAuditCmd},
 	{"assertsecrets", assertsecrets.RotationHealthCmd},
 	{"assertsuite", assertsuite.Cmd},
+	{"assertwiz", assertwiz.EnrollmentCmd},
+	{"evidencepack", evidencepack.CISEvidenceCmd},
 	{"atrest", atrest.AtRestGuardCmd},
 	{"bootstrapcluster", bootstrapcluster.BootstrapClusterCmd},
 	{"bootstrapcluster", bootstrapcluster.BrownfieldMigrateCmd},

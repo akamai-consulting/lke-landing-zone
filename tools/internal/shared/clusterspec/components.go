@@ -292,6 +292,18 @@ var Components = []Component{
 		ManagedSkip: true,
 	},
 	{
+		// The two trivy-operator ClusterComplianceReports the auditor evidence pack
+		// harvests (`llz ci cis-evidence`): the standard CIS Kubernetes Benchmark and
+		// the trivy-checkable subset of the org checklist. trivy-operator owns the
+		// CRD and is opt-in on managed apl-core (Console), so — like imageSignature
+		// on kyverno — this emits ONLY when `trivy` is a declared managed app; a CR
+		// whose CRD is absent wedges platform-bootstrap. Off that gate the pack still
+		// builds and records both reports as NOT COLLECTED, never as passing.
+		Name:                 "complianceReports",
+		ManifestResources:    []string{"clustercompliancereport-cis.yaml", "clustercompliancereport-llz-org.yaml"},
+		ManagedConditionalOn: "trivy",
+	},
+	{
 		// In-cluster Gitea — apl-core-only. Disabled by default on apl-core v6:
 		// the landing zone runs GitOps against an external HTTPS repo (BYO Git),
 		// v6 ships git-server as the default values-repo backend, and platform-apl/manifest
@@ -409,6 +421,48 @@ var Components = []Component{
 		// own App rather than platform-bootstrap. Wave 5 after the openbao
 		// ClusterSecretStore its ExternalSecret resolves against.
 		CarvedApp: &CarvedApp{AppName: "llz-obj-proxy", AppWave: 5, Namespace: "obj-proxy"},
+	},
+	{
+		// Wiz CSPM cluster enrollment (org checklist SOG #5): the upstream
+		// wiz-kubernetes-integration chart's connector, an ExternalSecret feeding it
+		// the Wiz service-account credential from an OpenBao TEAM subtree, and a
+		// default-deny namespace scoped to DNS + apiserver + outbound HTTPS.
+		//
+		// DEFAULT-DISABLED: it needs a per-org Wiz tenant and a credential nothing
+		// here can mint. Validate requires `secretPath` (under a declared
+		// spec.teams[].openbaoSubtree — the ESO identity reads those already, while a
+		// new platform path would need a platform-ci policy change that only a
+		// bootstrap-time `bao-configure` applies). DependsOn externalSecrets for the
+		// credential.
+		Name:              "wiz",
+		DependsOn:         []string{"externalSecrets"},
+		ManifestResources: []string{"wiz"},
+		DefaultDisabled:   true,
+		// Per-env: the OpenBao path the ExternalSecret reads, and the connector /
+		// cluster display name the cluster enrolls under — rendered by
+		// RenderWizEnvPatch from the env name and the toggle's secretPath.
+		Patches: []Patch{
+			{
+				Path:    "wiz-externalsecret-patch.yaml",
+				Group:   "external-secrets.io",
+				Version: "v1",
+				Kind:    "ExternalSecret",
+				Name:    "wiz-api-token",
+			},
+			{
+				Path:    "wiz-application-patch.yaml",
+				Group:   "argoproj.io",
+				Version: "v1alpha1",
+				Kind:    "Application",
+				Name:    "llz-wiz-connector",
+			},
+		},
+		// Its own health-inert Application: observational CSPM must never put
+		// platform-bootstrap's health at stake — a Wiz-side outage or an unseeded
+		// credential degrades only llz-wiz. Wave 10: after the openbao
+		// ClusterSecretStore its ExternalSecret resolves against, and after every
+		// serving component.
+		CarvedApp: &CarvedApp{AppName: "llz-wiz", AppWave: 10, Namespace: "wiz"},
 	},
 	{
 		// In-cluster reconciler + convergence metrics surface (Phase 0:

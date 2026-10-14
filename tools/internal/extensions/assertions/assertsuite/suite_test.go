@@ -165,8 +165,11 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	// instead would turn a missing value into a silent skip — the proof would report
 	// "unmeasured" and pass, which is the exact failure mode the proof was added to
 	// remove.
+	// wiz-enrollment takes it for the same reason as obj-encryption: run outside the
+	// battery, it reads spec.components.wiz for that deployment to tell "not
+	// enabled here" (skip) from "enabled but never deployed" (fail).
 	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true,
-		"obj-encryption": true, "loki": true}
+		"obj-encryption": true, "loki": true, "wiz-enrollment": true}
 	for _, l := range lanes {
 		hasRegion := false
 		for _, s := range l.Steps {

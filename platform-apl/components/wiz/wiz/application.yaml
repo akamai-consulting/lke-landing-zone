@@ -1,0 +1,96 @@
+# Wiz Kubernetes integration (upstream `wiz-kubernetes-integration` chart) — the
+# CSPM cluster-enrollment half of the org security requirements (checklist SOG #5;
+# see docs/infosec/control-mapping.md). Only the CONNECTOR is enabled: it registers
+# this cluster with the Wiz tenant (a PreSync Job) and keeps an outbound broker
+# tunnel open so Wiz can read the cluster API. The runtime sensor and the admission
+# controller stay off — each is a separate decision with its own blast radius (a
+# privileged DaemonSet; a cluster-wide validating webhook).
+#
+# Credentials never touch this file: the Wiz service-account clientId/clientToken
+# arrive through the `wiz-api-token` ExternalSecret (externalsecret.yaml) from
+# OpenBao, and the chart is told NOT to create that Secret itself.
+#
+# `llz render` patches the connector name and the cluster display name in per env
+# (wiz-application-patch.yaml), both the environment name, so each cluster enrolls
+# under a name an auditor can match to the inventory. REPLACE_ME below never
+# reaches a cluster: the patch is emitted whenever the component is enabled.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-wiz-connector
+  namespace: argocd
+  annotations:
+    # Last within the llz-wiz bundle (the carved App this file is content of): the
+    # NetworkPolicies (-10) and the ExternalSecret (5) land first, so the
+    # registration Job finds both its egress allow and its credential.
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: llz-wiz
+  source:
+    repoURL: https://wiz-sec.github.io/charts
+    chart: wiz-kubernetes-integration
+    # Immutable pin — the umbrella chart vendors its subcharts into the packaged
+    # tarball, so this one version fixes the connector and broker versions too.
+    targetRevision: 0.3.80
+    helm:
+      # The release name prefixes the objects the gate reads: the broker Deployment
+      # is `<release>-agent` and the registration Secret `<release>-connector`.
+      # `llz ci assert-wiz-enrollment` names both; change them together.
+      releaseName: wiz
+      valuesObject:
+        global:
+          # Use the ExternalSecret-materialised Secret; never let the chart write
+          # credentials of its own (it would render them from empty values).
+          wizApiToken:
+            secret:
+              create: false
+              name: wiz-api-token
+          clusterDisplayName: REPLACE_ME
+          # The chart sets runAsNonRoot/runAsUser but no seccomp profile, which the
+          # namespace's `restricted` Pod Security level requires. Without this every
+          # pod the chart creates — the registration Job first — is rejected at
+          # admission.
+          podSecurityContext:
+            runAsNonRoot: true
+            runAsUser: 10000
+            seccompProfile:
+              type: RuntimeDefault
+        wiz-kubernetes-connector:
+          enabled: true
+          autoCreateConnector:
+            connectorName: REPLACE_ME
+            clusterFlavor: LKE
+          wiz-broker:
+            # The upstream default stamps a RANDOM `rollme` pod annotation on every
+            # render. Under Argo that is a permanent diff: the Application never
+            # settles at Synced, and every manifest-cache refresh rolls the broker
+            # pod and drops the Wiz tunnel.
+            rollmeAnnotation:
+              enabled: false
+        wiz-sensor:
+          enabled: false
+        wiz-admission-controller:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: wiz
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      # The registration Job races the ExternalSecret on first sync (no Secret →
+      # the Job's volume cannot mount) and a failed automated sync pins the
+      # revision. The same ~1h budget the other support-plane Applications ride.
+      limit: 20
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      # The namespace is this component's own namespace.yaml (single owner).
+      - CreateNamespace=false
+      - ServerSideApply=true

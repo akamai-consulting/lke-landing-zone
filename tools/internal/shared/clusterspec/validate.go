@@ -55,6 +55,9 @@ func (lz *LandingZone) Validate() []error {
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
 	errs = append(errs, validateAlerting(lz.Spec.Alerting)...)
 	errs = append(errs, validateTeams(lz.Spec.Teams)...)
+	for _, name := range lz.EnvNames() {
+		errs = append(errs, validateWizSecretPath(name, lz.Spec.Environments[name].Components, lz.Spec.Teams)...)
+	}
 	errs = append(errs, ValidateOpenBao(lz.Spec.OpenBao, lz.Spec.Teams)...)
 	return errs
 }
@@ -659,6 +662,7 @@ var sizingKnobs = map[string][]string{
 	"observability":   {"retention", "storage", "replicas"},
 	"harbor":          {"registryStorage"},
 	"broadPatRotator": {"broadPATLabel", "broadPATDeployments"},
+	"wiz":             {"secretPath"},
 }
 
 // validateComponentSizing rejects sizing knobs set on a component that does not
@@ -684,6 +688,9 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	}
 	if t.BroadPATDeployments != "" {
 		set["broadPATDeployments"] = t.BroadPATDeployments
+	}
+	if t.SecretPath != "" {
+		set["secretPath"] = t.SecretPath
 	}
 	if t.Replicas != nil {
 		set["replicas"] = ""

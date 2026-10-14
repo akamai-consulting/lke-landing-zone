@@ -865,6 +865,14 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `action=rotated` — exercises mint → OpenBao → GitHub publish → revoke against real
   backends. SAFE: e2e-unique label + `broadPATDeployments=e2e` scope the mint/revoke to
   the e2e PAT family only. Self-gates on the component toggle.
+* **wiz-enrollment** — GATING proof that Wiz CSPM enrollment (`spec.components.wiz`)
+  WORKS, judged on what the chain produced: the `wiz-api-token` ExternalSecret is Ready,
+  its Secret carries `clientId` + `clientToken`, the registration Secret holds the record
+  the upstream Job writes only after the Wiz API accepted the cluster, and the broker's
+  tunnel is Ready. Stays green without it: the `llz-wiz` Application reads Synced through
+  an unseeded path, a 401 from Wiz and a broker that never connects. The lane follows the
+  component, so release-e2e (no Wiz tenant) shows it **SKIPPED** — not passed; the daily
+  `credential-single-pane` job is where it gates a real instance.
 * **wave-vap** — GATING proof that the `llz-wave-health-guard` VAP is BOUND and
   ENFORCING: server-dry-runs a Deployment at sync-wave -5 and requires the guard's own
   denial. This is what makes the static guard's PR-time verdict hold at runtime. It
