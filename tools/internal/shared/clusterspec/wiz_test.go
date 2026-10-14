@@ -32,7 +32,10 @@ func TestWizIsOptInAndCarved(t *testing.T) {
 	if c.CarvedApp == nil || c.CarvedApp.Namespace != WizNamespace {
 		t.Fatalf("wiz must be carved into its own health-inert App in %q, got %+v", WizNamespace, c.CarvedApp)
 	}
-	es, _ := LookupComponent("externalSecrets")
+	es, ok := LookupComponent("externalSecrets")
+	if !ok || es.CarvedApp == nil {
+		t.Fatal("externalSecrets must be a carved component — it is the wave floor wiz is ordered against")
+	}
 	if es.CarvedApp.AppWave >= c.CarvedApp.AppWave {
 		t.Errorf("externalSecrets wave %d must floor below wiz wave %d", es.CarvedApp.AppWave, c.CarvedApp.AppWave)
 	}
@@ -160,6 +163,9 @@ func TestWizComponentBuildsWithRenderedPatches(t *testing.T) {
 	}
 	_, file, _, _ := runtime.Caller(0)
 	comp, err := filepath.Abs(filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "platform-apl", "components", "wiz"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Both sides symlink-resolved: macOS temp dirs and /tmp are symlinks, and a
 	// relative path computed between unresolved forms walks out of the tree.
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -169,7 +175,10 @@ func TestWizComponentBuildsWithRenderedPatches(t *testing.T) {
 	if comp, err = filepath.EvalSymlinks(comp); err != nil {
 		t.Fatal(err)
 	}
-	c, _ := LookupComponent("wiz")
+	c, ok := LookupComponent("wiz")
+	if !ok {
+		t.Fatal("wiz component missing from the registry")
+	}
 	rel, err := filepath.Rel(dir, comp)
 	if err != nil {
 		t.Fatal(err)
