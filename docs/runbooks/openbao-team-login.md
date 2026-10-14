@@ -227,9 +227,11 @@ to one trust anchor. `llz ci team-login-smoke` warns, per cluster, when an
 operated mount has no issuer.
 
 Like the team's own policies, the operator grant reaches a cluster on the next
-bootstrap or re-configure (`bao-configure` is root-gated and one-shot). Removing
-the team from `operators` removes nothing already written: re-write the team's
-keycloak role without `<mount>-operator`, then `bao policy delete <mount>-operator`.
+bootstrap or re-configure (`bao-configure` is root-gated and one-shot), and so
+does its removal: dropping the team from `operators` rewrites the team's keycloak
+role without `<mount>-operator` on that run, and once a mount has no operators
+left the policy itself is revoked. Until the re-configure runs, the grant stays —
+dispatch it when revoking access is the point.
 
 ## Offboard a team (remove write + ESO read access)
 

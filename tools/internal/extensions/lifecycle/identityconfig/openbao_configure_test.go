@@ -442,12 +442,13 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := RunBaoConfigure(false, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 19 steps (15 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 21 {
-		t.Fatalf("got %d bao calls, want 21: %v", len(calls), calls)
+	// lookup + 19 steps (15 base + 4 GitHub-OIDC) + the spec.openbao manifest
+	// read (a no-op with nothing declared and nothing recorded) + audit list.
+	if len(calls) != 22 {
+		t.Fatalf("got %d bao calls, want 22: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[20] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[20])
+	if calls[0] != "token lookup -format=json" || calls[20] != "policy read "+extManifestPolicy || calls[21] != "audit list" {
+		t.Errorf("unexpected first/manifest/last calls: %q / %q / %q", calls[0], calls[20], calls[21])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).

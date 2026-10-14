@@ -298,11 +298,21 @@ var ReservedOpenBaoMounts = map[string]bool{
 // `<name>-reader` / `<name>-writer` and mount `-operator` names are refused by
 // suffix in ValidateOpenBao.
 var ReservedOpenBaoPolicies = map[string]bool{
-	"root": true, "default": true,
+	"root": true, "default": true, OpenBaoManifestPolicy: true,
 	"platform-ci": true, "secret-propagator": true, "eso-pusher": true,
 	"linode-rotator": true, "harbor-provisioner": true, "reconciler-read": true,
 	"broad-pat-rotator": true,
 }
+
+// OpenBaoManifestPolicy is the deny-only policy whose comment lines record what
+// bao-configure created for spec.openbao, so a removed entry can be revoked
+// (identityconfig/openbao_ext_prune.go). Reserved: a spec policy of this name
+// would overwrite the record of what may be deleted.
+const OpenBaoManifestPolicy = "llz-spec-openbao-manifest"
+
+// ValidExtensionName reports whether n is a well-formed spec.openbao mount,
+// policy or role name.
+func ValidExtensionName(n string) bool { return extNameRe.MatchString(n) }
 
 // ReservedOpenBaoKubernetesRoles are the kubernetes-auth roles bao-configure
 // writes itself. Drift-checked the same way.

@@ -840,6 +840,7 @@ func RunBaoConfigure(dryRun bool, region string) error {
 		for _, s := range baoConfigureSteps(ghRepo, keycloakIssuer, teams, ext) {
 			fmt.Fprintf(os.Stderr, "    bao %s\n", strings.Join(s.args, " "))
 		}
+		fmt.Fprintf(os.Stderr, "    then: revoke spec.openbao policies/roles recorded in %s but no longer declared, and record the current set\n", extManifestPolicy)
 		return nil
 	}
 	pod := baoread.PodNames[0]
@@ -905,6 +906,11 @@ func RunBaoConfigure(dryRun bool, region string) error {
 			return err
 		}
 		fmt.Printf("spec.openbao: %d mount(s) present with the declared engine.\n", len(ext.Mounts))
+	}
+	// Revoke what spec.openbao no longer declares, from the record of what this
+	// run's predecessors created — never anything else (openbao_ext_prune.go).
+	if err := reconcileExtensionManifest(bao, pod, token, ext); err != nil {
+		return err
 	}
 
 	auditOut, _, _ := bao.Run(pod, token, "", "audit", "list")

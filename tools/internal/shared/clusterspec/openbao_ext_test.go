@@ -84,6 +84,7 @@ func TestValidateOpenBaoRefusesEscalations(t *testing.T) {
 		}, "mixes deny"},
 		{"operator not a team", func(e *OpenBaoExtensions) { e.Mounts[0].Operators = []string{"nobody"} }, "not a spec.teams name"},
 		{"platform policy name", func(e *OpenBaoExtensions) { e.Policies[0].Name = "eso-pusher" }, "reserved"},
+		{"manifest policy name", func(e *OpenBaoExtensions) { e.Policies[0].Name = OpenBaoManifestPolicy }, "reserved"},
 		{"team writer name", func(e *OpenBaoExtensions) { e.Policies[0].Name = "ohttp-writer" }, "reserved"},
 		{"operator policy name", func(e *OpenBaoExtensions) { e.Policies[0].Name = "pki-ohttp-relay-operator" }, "reserved"},
 		{"platform KV path", func(e *OpenBaoExtensions) {

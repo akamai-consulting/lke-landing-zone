@@ -459,8 +459,14 @@ application that needs more of OpenBao than KV — the motivating case is a PKI
 issuing tier for a workload's mTLS client certificates — declare the additions
 here and `llz ci bao-configure` applies them in its root-holding run, after its own
 fixed sequence. Nothing is applied by `llz render`; like `spec.teams`, a change
-reaches a cluster on the next bootstrap or a deliberate re-configure dispatch, and
-removing an entry deletes nothing (offboard by hand, as for a team).
+reaches a cluster on the next bootstrap or a deliberate re-configure dispatch —
+and that includes REMOVALS: a policy or `kubernetesRoles` entry removed from the
+spec (or a mount's last operator) is revoked on that run. `bao-configure` records
+what it created in the deny-only policy `llz-spec-openbao-manifest` and deletes
+only names recorded there, so hand-made OpenBao objects are never touched; the
+first run after upgrading records without pruning. A removed **mount** is never
+disabled — that destroys its keys — so the run warns and leaves it to you
+(`bao secrets disable <mount>/`).
 
 | field | meaning |
 |---|---|
