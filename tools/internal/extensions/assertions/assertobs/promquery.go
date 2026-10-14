@@ -20,6 +20,7 @@ package assertobs
 // other in-cluster HTTP API, so it is shared rather than copied.
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,6 +54,22 @@ var WithPrometheus = func(promSpec string, fn func(get func(apiPath string) ([]b
 // withForwardedAPI is WithPrometheus's body, generalized over the service on the
 // other end. See forwardedService.
 func withForwardedAPI(spec string, target forwardedService, fn func(get func(apiPath string) ([]byte, error)) error) error {
+	return withForwardedHTTP(spec, target, func(do httpDo) error {
+		return fn(func(apiPath string) ([]byte, error) { return do(http.MethodGet, apiPath, nil) })
+	})
+}
+
+// httpDo is one request over an open forward: method, path, and an optional JSON
+// body. A non-2xx is returned as an error carrying the (truncated) body.
+type httpDo func(method, apiPath string, body []byte) ([]byte, error)
+
+// withForwardedHTTP is withForwardedAPI with the verb left to the caller. The
+// alert-routing gate needs POST (a silence, then probe alerts) and needs every
+// request on ONE forward: `kubectl port-forward svc/…` pins a single pod, and the
+// silence, the alerts and the read-back must all land on the same Alertmanager
+// replica — a probe alert posted to a replica that has not yet received the
+// silence by gossip is a probe that can page.
+func withForwardedHTTP(spec string, target forwardedService, fn func(do httpDo) error) error {
 	if target.name == "" {
 		target.name = "service"
 	}
@@ -109,10 +126,17 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 	//
 	// The body is carried into the error (truncated) so callers keep Prometheus's
 	// own explanation instead of just a status number.
-	get := func(apiPath string) ([]byte, error) {
-		req, err := http.NewRequest(http.MethodGet, base+apiPath, nil)
+	do := func(method, apiPath string, reqBody []byte) ([]byte, error) {
+		var rd io.Reader
+		if reqBody != nil {
+			rd = bytes.NewReader(reqBody)
+		}
+		req, err := http.NewRequest(method, base+apiPath, rd)
 		if err != nil {
 			return nil, err
+		}
+		if reqBody != nil {
+			req.Header.Set("Content-Type", "application/json")
 		}
 		for k, v := range target.headers {
 			req.Header.Set(k, v)
@@ -124,15 +148,15 @@ func withForwardedAPI(spec string, target forwardedService, fn func(get func(api
 		defer resp.Body.Close()
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return nil, fmt.Errorf("GET %s: reading response: %w", apiPath, readErr)
+			return nil, fmt.Errorf("%s %s: reading response: %w", method, apiPath, readErr)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("GET %s: %s returned HTTP %d: %s",
-				apiPath, target.name, resp.StatusCode, harborauth.TruncateForError(body))
+			return nil, fmt.Errorf("%s %s: %s returned HTTP %d: %s",
+				method, apiPath, target.name, resp.StatusCode, harborauth.TruncateForError(body))
 		}
 		return body, nil
 	}
-	return fn(get)
+	return fn(do)
 }
 
 // warmUpForward retries the target's readiness URL until the tunnel accepts a

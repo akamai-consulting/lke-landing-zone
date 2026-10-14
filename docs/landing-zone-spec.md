@@ -526,13 +526,17 @@ openbao:
 > source of truth the in-cluster reconciler merges onto the `apl-<env>` branch, so
 > the two writers never collide.
 >
-> **Consequence — three spec blocks are currently validated but never rendered:**
-> `spec.dns.*` (including `acmeEmail`), `spec.defaults.platform.*` (`externalDNS`,
-> `externalIDP`), and `spec.alerting.*` (`receivers`, `slack.channel*`). They were
-> written into `values.yaml` before the managed-only collapse and no renderer
-> replaced them, so setting them today changes `landingzone.yaml` and nothing else.
-> `llz import` still reads them back off a live site. Treat them as inert until
-> they are rewired or removed.
+> **Consequence — two spec blocks are currently validated but never rendered:**
+> `spec.dns.*` (including `acmeEmail`) and `spec.defaults.platform.*`
+> (`externalDNS`, `externalIDP`). They were written into `values.yaml` before the
+> managed-only collapse and no renderer replaced them, so setting them today
+> changes `landingzone.yaml` and nothing else. `llz import` still reads them back
+> off a live site. Treat them as inert until they are rewired or removed.
+>
+> `spec.alerting.*` used to be on this list. It now renders — not into apl-core's
+> values, but as an `AlertmanagerConfig` + `ExternalSecret` in each env's
+> observability app (`apps/observability/alerting.yaml`). Receivers `pagerduty`
+> and `slack`; see [alerting.md](alerting.md) § "Wiring a notification receiver".
 
 Cluster identity does still reach the platform, just not through `values.yaml`:
 `cluster.bootstrap.domainSuffix` drives the Harbor host patch

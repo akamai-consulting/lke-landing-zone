@@ -58,11 +58,11 @@ type Spec struct {
 	// overlay (the cert-manager DNS-01 issuer). Optional — unset leaves the
 	// overlay's REPLACE_PER_ENV placeholder for the operator to fill by hand.
 	DNS DNS `json:"dns,omitempty"`
-	// Alerting holds the instance-wide Alertmanager receiver config rendered
-	// into every env's values.yaml `alerts:` block. Optional — unset keeps the
-	// base default (receivers: [none]): Alertmanager runs with a null route and
-	// notifies nobody, and the scheduled CI checks remain the only alerting
-	// that reaches a human.
+	// Alerting holds the instance-wide Alertmanager receiver config, rendered
+	// into every env as an AlertmanagerConfig + ExternalSecret (alerting.go).
+	// Optional — unset keeps apl-core's default: Alertmanager runs with a null
+	// route and notifies nobody, and the scheduled CI checks remain the only
+	// alerting that reaches a human.
 	Alerting Alerting `json:"alerting,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
 	// apl-values/<env> dir == infra-<env> GitHub Environment). It is the ASSEMBLED
@@ -138,23 +138,39 @@ type DNS struct {
 	AcmeEmail string `json:"acmeEmail,omitempty"`
 }
 
-// Alerting is the instance-wide alert-notification config, rendered into every
-// env's values.yaml `alerts:` block (apl-core's Alertmanager route/receiver
-// source). Receivers supports "slack" and "none" (the default). The Slack
-// webhook URL is deliberately NOT spec/values material: apl-core mounts it from
-// the `alertmanager-credentials` Secret, whose ExternalSecret the
-// kyverno-alertmanager-slack-webhook policy repoints at the landing zone's
-// OpenBao (`secret/alerts/webhooks`, property slack_url) — the operator seeds
-// and rotates it with `llz openbao set`, no GitHub secret, no values churn.
-// "msteams" is not surfaced: apl-core renders its webhook URLs inline from
-// values (x-secret), which would put secret material in the committed values
-// flow this spec deliberately avoids.
+// Alerting is the instance-wide alert-notification config. `llz render` turns it
+// into an AlertmanagerConfig CR (plus the ExternalSecret that feeds it) in the
+// observability carved app — see alerting.go for why that reaches apl-core's
+// Alertmanager when apl-core's own `alerts:` values block cannot be reached.
+//
+// Receivers supports "pagerduty", "slack" and "none" (the default). Secret
+// material is deliberately NOT spec material: the PagerDuty routing key
+// (secret/alerts/pagerduty, property routing_key) and the Slack webhook URL
+// (secret/alerts/webhooks, property slack_url) are seeded into OpenBao with
+// `llz openbao set` and reach Alertmanager through ESO — no GitHub secret, no
+// values churn. "msteams" is not surfaced: apl-core renders its webhook URLs
+// inline from values (x-secret), which would put secret material in committed
+// values.
 type Alerting struct {
-	// Receivers selects notification channels: "slack", "none". Unset → [none].
+	// Receivers selects notification channels: "pagerduty", "slack", "none".
+	// Unset → [none].
 	Receivers []string `json:"receivers,omitempty"`
-	// Slack channel overrides; both fall back to the base defaults
-	// (mon-apl / mon-apl-crit) when unset.
+	// PagerDuty is the non-secret half of the PagerDuty receiver.
+	PagerDuty AlertingPagerDuty `json:"pagerduty,omitempty"`
+	// Slack channel overrides; both fall back to mon-apl / mon-apl-crit when
+	// unset.
 	Slack AlertingSlack `json:"slack,omitempty"`
+}
+
+// AlertingPagerDuty is the non-secret half of the PagerDuty receiver config.
+type AlertingPagerDuty struct {
+	// Severities are the `severity` label values that page. Default [critical]:
+	// a pager that also fires on warnings trains on-call to ignore it.
+	Severities []string `json:"severities,omitempty"`
+	// URL overrides the Events API v2 endpoint — e.g.
+	// https://events.eu.pagerduty.com/v2/enqueue for an EU-region account.
+	// Unset uses Alertmanager's default (https://events.pagerduty.com/v2/enqueue).
+	URL string `json:"url,omitempty"`
 }
 
 // AlertingSlack is the non-secret half of the Slack receiver config.

@@ -17,24 +17,21 @@ package assertobs
 // error anywhere, because from Prometheus's point of view firing an alert with no
 // receivers is not a failure condition.
 //
-// SCOPE, stated honestly. This asserts the link LLZ owns: Prometheus →
-// Alertmanager. It does NOT assert that Alertmanager forwards to a human
-// destination (PagerDuty, Slack, email), because apl-core owns the receiver
-// configuration and this repo ships none — a gate on receivers would fail on
-// every cluster that has deliberately not configured one. What it proves is that
-// a firing alert reaches something whose job is to route it, which is exactly the
-// link that silently disappears.
+// SCOPE, stated honestly. This asserts Prometheus → Alertmanager. It does NOT
+// assert that Alertmanager forwards to a human destination — that is the next
+// hop, and its own gate: `llz ci assert-alert-routing` (alertrouting.go) reads
+// the config Alertmanager runs and probes which receiver spec.alerting's
+// AlertmanagerConfig sends an alert to. Kept separate because the two fail for
+// unrelated reasons, and because this one must pass on a cluster that has
+// deliberately configured no receiver, while that one has nothing to check there.
 //
-// "SHIPS NONE" IS STRONGER THAN IT SOUNDS, and it is worth saying plainly rather
-// than leaving as a scope note. `spec.alerting` exists, validates, and renders
-// NOWHERE: apl-core builds its receiver config from a top-level `alerts:` values
-// block, and LLZ's only channel into apl-core's values is per-app
-// (apps.<name>._rawValues on an AplApp CR), which cannot reach a top-level key. So
-// the receiver set is `[none]` on every managed cluster no matter what the spec
-// says, and every alert this repo ships pages nobody by default. That is tracked
-// in docs/upstream-asks.md §4 and reported per-instance by
-// clusterspec.InertSpecFields via `llz doctor` — the gap is named in three places
-// on purpose, because a caveat inside one gate's header is where it hid before.
+// HISTORY WORTH KEEPING. For the whole life of the managed platform this note
+// said "this repo ships no receiver configuration", and that was stronger than it
+// sounded: `spec.alerting` validated and rendered nowhere, because apl-core builds
+// its receivers from a top-level `alerts:` values block LLZ cannot reach. It now
+// renders as an AlertmanagerConfig that the apl-core Alertmanager selects (see
+// clusterspec/alerting.go); docs/upstream-asks.md §4 stays open for a supported
+// upstream path.
 //
 // Two assertions:
 //

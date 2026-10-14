@@ -36,7 +36,8 @@ package clusterspec
 // backed by a gate that reads the CONSUMER, not this source. Loki's is
 // `llz ci assert-loki` (lokiIngesterDurability, which reads the running
 // ingester's limits and WAL volume); argocd's is wave-health-guard plus the
-// bootstrap itself. Do not add an entry here without naming its gate.
+// bootstrap itself; alertmanager's is `llz ci assert-alert-routing`. Do not add
+// an entry here without naming its gate.
 
 import (
 	"bytes"
@@ -151,6 +152,39 @@ func aplAppRawValues() map[string]map[string]any {
 		// the exact silent no-op this file's header warns about.
 		"loki":   {"ingester": lokiIngesterValues(), "loki": lokiRuntimeConfigValues()},
 		"harbor": {"metrics": harborMetricsValues()},
+		// apl-core places apps.alertmanager._rawValues UNDER kube-prometheus-
+		// stack's `alertmanager:` key (helmfile-08.init: `alertmanager: {{ …
+		// alertmanager._rawValues }}`), so this is alertmanager.alertmanagerSpec
+		// in the chart, not a top-level key.
+		"alertmanager": {"alertmanagerSpec": alertmanagerSpecValues()},
+	}
+}
+
+// alertmanagerSpecValues sets the matcher strategy that lets spec.alerting's
+// AlertmanagerConfig route alerts from EVERY namespace.
+//
+// THE FAILURE IT PREVENTS. prometheus-operator's default strategy, OnNamespace,
+// adds `namespace="<CR namespace>"` to every AlertmanagerConfig route. LLZ's CR
+// lives in `monitoring`, so under the default it pages only for alerts labelled
+// namespace=monitoring: OpenBao sealed (llz-openbao), node and apiserver alerts
+// (no namespace at all) and nearly everything else would fall through to
+// apl-core's null route — with the receiver present in Alertmanager's config,
+// the CR accepted, and nothing anywhere reporting an error.
+//
+// OnNamespaceExceptForAlertmanagerNamespace exempts ONLY CRs in Alertmanager's
+// own namespace, which only the platform writes; CRs in any other namespace
+// stay scoped to it exactly as before. Supported since prometheus-operator
+// v0.84; apl-core 6.3 ships v0.93.
+//
+// ITS GATE is `llz ci assert-alert-routing`, which posts silenced probe alerts
+// labelled with a non-monitoring namespace (and with none) and reads back the
+// receivers Alertmanager chose — so if this key names nothing in the chart, the
+// probe does not route and the lane says so.
+func alertmanagerSpecValues() map[string]any {
+	return map[string]any{
+		"alertmanagerConfigMatcherStrategy": map[string]any{
+			"type": AlertmanagerConfigMatcherStrategy,
+		},
 	}
 }
 

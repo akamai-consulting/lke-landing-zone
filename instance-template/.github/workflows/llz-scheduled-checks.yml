@@ -192,6 +192,18 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-openbao-extensions | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # spec.alerting: does a firing alert reach the PagerDuty/Slack receiver the
+      # spec names? Reads the config Alertmanager is RUNNING and posts silenced
+      # probe alerts to see which receiver it picks (they never notify). HERE for
+      # the same reason as the two steps above: the assert-suite lane that also
+      # runs it is release-e2e only, so without this an instance's own pager
+      # route — an unseeded or rotated-away key, a rejected AlertmanagerConfig, a
+      # route scoped to one namespace — was verified by nothing. Reports and
+      # passes when the spec declares no receiver.
+      - name: Assert spec.alerting routes alerts to its receivers
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        run: llz ci assert-alert-routing | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Self-heal the team-OIDC device-flow client. keycloak-configure runs once at
       # bootstrap; if that run raced ahead of apl-core's Keycloak convergence it
       # warns + exits 0, leaving the `llz` client absent or missing the openid

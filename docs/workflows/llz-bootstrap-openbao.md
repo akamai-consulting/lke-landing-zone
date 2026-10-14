@@ -808,8 +808,19 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `assert-scrape-targets` proves rules are loaded, `alert-eval` proves they evaluate —
   but a rule can evaluate to FIRING with no Alertmanager discovered, and Prometheus
   does not consider that an error. Asserts ≥1 *active* Alertmanager plus Alertmanager's
-  own `/api/v2/status`. Scoped to the link this repo owns: apl-core owns receivers, so
-  gating on a human destination would fail every cluster that deliberately has none.
+  own `/api/v2/status`. Stops at Alertmanager; the next hop is `alert-routing`.
+* **alert-routing** — does a firing alert reach the receiver `spec.alerting` names?
+  Reads the config Alertmanager is RUNNING and requires each expected receiver with
+  its key set, then creates a silence, posts silenced probe alerts (non-`monitoring`
+  namespace, no namespace, and one that must NOT page) and reads back the receivers
+  Alertmanager chose. Writes only to Alertmanager's API; never notifies. What stays
+  green without it: an unseeded key (no Secret, so the operator rejects the
+  `AlertmanagerConfig`), a dropped `alerting.yaml` reference, or a route scoped to
+  `namespace="monitoring"` because the matcher strategy never reached the
+  `Alertmanager` CR — every manifest valid, every App Synced, nobody paged. The e2e
+  spec declares a PagerDuty + Slack fixture (`.github/e2e/spec-alerting.yaml`, every
+  endpoint `.invalid`), and the `(e2e) seed placeholder …` steps put placeholder keys
+  in OpenBao before the root token is revoked.
 * **grafana-dash** — the dashboard sidecar is a label selector and nothing else. Drop
   or mistype the label and the ConfigMap sits there forever, valid and invisible, with
   Argo reporting Synced. Worse, the landing zone must render on BOTH stacks

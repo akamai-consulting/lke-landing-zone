@@ -30,7 +30,9 @@ package assertsuite
 // The lanes are collision-free only because the two MUTATING ones
 // (health-workflow, broad-pat) touch disjoint namespaces, and because every lane
 // that port-forwards binds local port :0 so kubectl assigns a free port per lane.
-// Preserve both properties when adding a lane.
+// Preserve both properties when adding a lane. (alert-routing also writes, but
+// only to Alertmanager's own API — a silence and probe alerts scoped by a per-run
+// label — so it shares nothing with another lane.)
 //
 // Each lane is re-exec'd as a subprocess of this same binary rather than called
 // in-process. That keeps a lane's output cleanly capturable (no interleaving of
@@ -164,6 +166,13 @@ func Lanes(region string) []Lane {
 			Why: "Is the thing that is supposed to ACT still live? A firing alert with no Alertmanager goes nowhere and Prometheus does not consider that an error; " +
 				"a dashboard whose sidecar label was dropped is Synced, valid and invisible; a Kyverno policy that stopped enforcing looks identical to one that works, " +
 				"and both ship failurePolicy: Ignore so a downed Kyverno ADMITS everything silently.",
+		},
+		{
+			Name: "alert-routing", Gating: true,
+			Steps: []Step{step("assert-observability", "assert-alert-routing")},
+			Why: "Does a firing alert reach the pager spec.alerting names? assert-alert-delivery stops at Alertmanager; this reads the config Alertmanager RUNS and posts " +
+				"silenced probe alerts to see which receiver it picks. Its own lane because it WRITES to Alertmanager's API (a silence, short-lived probes). " +
+				"Without it, an unseeded routing key (CR rejected), a dropped ExternalSecret, or a namespace-scoped route all leave every manifest valid, every App Synced and nobody paged.",
 		},
 		{
 			Name: "net-enforcement", Gating: true,

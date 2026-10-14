@@ -134,6 +134,30 @@ func TestValidateAlerting(t *testing.T) {
 		{"channels without slack receiver rejected", Alerting{
 			Slack: AlertingSlack{Channel: "a"},
 		}, "does not include slack"},
+		{"pagerduty alone is valid", Alerting{Receivers: []string{"pagerduty"}}, ""},
+		{"pagerduty and slack together are valid", Alerting{
+			Receivers: []string{"pagerduty", "slack"},
+			PagerDuty: AlertingPagerDuty{Severities: []string{"critical", "page_now"}, URL: "https://events.eu.pagerduty.com/v2/enqueue"},
+		}, ""},
+		{"none plus pagerduty rejected", Alerting{Receivers: []string{"none", "pagerduty"}}, "cannot be combined"},
+		{"a receiver listed twice rejected", Alerting{Receivers: []string{"pagerduty", "pagerduty"}}, "listed twice"},
+		{"pagerduty settings without the receiver rejected", Alerting{
+			PagerDuty: AlertingPagerDuty{Severities: []string{"critical"}},
+		}, "does not include pagerduty"},
+		// The severities are joined into a regex matcher: ".*" would page on
+		// every alert the cluster fires, and nothing downstream would object.
+		{"a regex severity rejected", Alerting{
+			Receivers: []string{"pagerduty"},
+			PagerDuty: AlertingPagerDuty{Severities: []string{".*"}},
+		}, "plain severity"},
+		{"a pipe in a severity rejected", Alerting{
+			Receivers: []string{"pagerduty"},
+			PagerDuty: AlertingPagerDuty{Severities: []string{"critical|warning"}},
+		}, "plain severity"},
+		{"a plaintext pagerduty url rejected", Alerting{
+			Receivers: []string{"pagerduty"},
+			PagerDuty: AlertingPagerDuty{URL: "http://events.pagerduty.com/v2/enqueue"},
+		}, "https://"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -128,41 +128,60 @@ cluster or apl-core itself can answer.
 
 ---
 
-## 4. Alertmanager receivers have no channel LLZ can write
+## 4. Alertmanager receivers have no supported channel LLZ can write
 
-**Severity: every alert this repo ships pages nobody by default, including the ones
-that catch a total outage.**
+**Severity: was "every alert this repo ships pages nobody by default". Now worked
+around (below); the ask stays open because the workaround leans on two apl-core
+behaviours nobody has promised to keep.**
 
 apl-core renders the full Alertmanager route/receiver config from a top-level
 `alerts:` values block. That is not a per-app key, so the apl-overlay's per-app
 channel cannot reach it, and the per-env values file that used to carry it is gone.
 
-`spec.alerting` — receivers, Slack channel, critical channel — is therefore
-validated and rendered nowhere. `llz ci assert-alert-delivery` already states the
-consequence plainly: it proves Prometheus reaches Alertmanager and deliberately
-does **not** assert Alertmanager reaches a human, "because apl-core owns the
-receiver configuration and this repo ships none".
+For the whole managed era that left `spec.alerting` validated and rendered nowhere,
+and BOTH halves were dead — the routing, and the secret: `secret/alerts/webhooks`
+was seeded, age-tracked and rotated, but the `kyverno-alertmanager-slack-webhook`
+policy that repointed apl-core's `alertmanager-credentials` ExternalSecret at
+OpenBao had been deleted with the shared Kyverno policy base, so the seed went to a
+path no cluster read.
 
-**BOTH HALVES ARE DEAD, not just the routing.** The secret half looks healthy and is
-not: `secret/alerts/webhooks` is seeded, age-tracked and rotated on schedule, but
-the `kyverno-alertmanager-slack-webhook` policy that repointed apl-core's
-`alertmanager-credentials` ExternalSecret at OpenBao was deleted along with the
-rest of the shared Kyverno policy base when LLZ went managed-only (Kyverno itself
-is the managed App Platform's), and nothing replaced it. Only two Kyverno policies
-ship today
-(`verify-llz-image-signature`, `harbor-obj-proxy-ca`). So an operator who follows
-the documented procedure seeds a secret into a path no cluster reads, and gets a
-green credential-age series for it.
+**What LLZ does meanwhile.** It routes around apl-core's values entirely
+([alerting.md](alerting.md) § "Wiring a notification receiver"):
 
-**What LLZ does today.** `InertSpecFields` plus a `doctor` finding, so an operator
-who configures Slack is told it reaches nothing instead of assuming it works.
+- `spec.alerting` (receivers `pagerduty` and/or `slack`) renders an
+  **`AlertmanagerConfig`** plus an `ExternalSecret` into the observability carved
+  app. apl-core's `Alertmanager` CR leaves `alertmanagerConfigSelector` /
+  `alertmanagerConfigNamespaceSelector` at `{}`, so the operator merges the CR into
+  apl-core's config, ahead of its null routes. The keys come from OpenBao
+  (`alerts/pagerduty` `routing_key`, `alerts/webhooks` `slack_url`) through the
+  `openbao` store; apl-core's `alertmanager-credentials` path is not used.
+- The apl-overlay sets `alertmanagerConfigMatcherStrategy:
+  OnNamespaceExceptForAlertmanagerNamespace` on that CR via
+  `apps.alertmanager._rawValues` (the per-app channel, which does reach
+  kube-prometheus-stack's `alertmanager:` block). Without it the operator scopes
+  the CR's routes to `namespace="monitoring"` and almost nothing pages.
+- `llz ci assert-alert-routing` holds the line at the consumer: it reads the config
+  Alertmanager runs and posts silenced probe alerts to see which receiver it picks
+  — weekly on every instance (`llz-scheduled-checks`) and as the release e2e's
+  `alert-routing` lane.
+
+**Why it stays open.** The workaround depends on (a) apl-core continuing to leave
+the `AlertmanagerConfig` selectors open and (b) the alertmanager app's `_rawValues`
+continuing to land under kube-prometheus-stack's `alertmanager:` key. Either is a
+one-line change upstream, and either would silently stop paging — the gate is what
+would notice, not anything apl-core says. apl-core's own `alerts:` receivers also
+still run beside ours (with `[none]` they route to `null`, so today they do no
+harm).
 
 **The ask.** Either an `AplAlerts`-style settings CR under `env/settings/` that an
 external writer may own (as `AplObjectStorage` already is for object storage), or a
-documented supported path for setting `alerts.receivers` on a managed cluster.
+documented supported path for setting `alerts.receivers` on a managed cluster — or,
+cheapest, a documented commitment that the `AlertmanagerConfig` selectors stay open
+and the matcher strategy is settable.
 
-**Exit condition.** `spec.alerting` renders into the overlay, leaves
-`InertSpecFields`, and `assert-alert-delivery` can drop its stated scope caveat.
+**Exit condition.** Any of the above is documented upstream. If it is the
+settings CR, `spec.alerting` renders into it instead, `alerting.yaml` and the
+matcher-strategy overlay entry are deleted, and `assert-alert-routing` stays.
 
 ---
 

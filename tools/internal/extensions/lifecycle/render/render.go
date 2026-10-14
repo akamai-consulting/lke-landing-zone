@@ -262,7 +262,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		if tfvarsOnly {
 			continue
 		}
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.Spec.Alerting)
 		if err != nil {
 			return nil, fmt.Errorf("render %s manifests: %w", name, err)
 		}
@@ -433,7 +433,7 @@ func repoOwnerName(repoURL string) string {
 	return s
 }
 
-func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string, teams []clusterspec.Team) (map[string]string, error) {
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string, teams []clusterspec.Team, alerting clusterspec.Alerting) (map[string]string, error) {
 	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
 	// carried by LLZ on managed, but that is now proven harmless rather than a
 	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
@@ -481,6 +481,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// This instance's repo slug (harbor GH_REPO) is the other per-instance value a
 	// remote token-free component can't bake — the env patch sets it locally.
 	ghRepo := repoOwnerName(id.RepoURL)
+	alertingRendered := false
 	for _, c := range clusterspec.Components {
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
 			continue
@@ -492,7 +493,18 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
-		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
+		// spec.alerting rides the observability carved app: it is the app that
+		// owns apl-core's monitoring glue, and a bad AlertmanagerConfig then
+		// degrades only llz-observability, never platform-bootstrap.
+		var local []string
+		if c.Name == "observability" {
+			if body := clusterspec.RenderAlertingManifest(alerting); body != "" {
+				targets[filepath.Join(appsDir, clusterspec.AlertingFile)] = body
+				local = append(local, clusterspec.AlertingFile)
+				alertingRendered = true
+			}
+		}
+		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag, local...)
 		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo, id.ObjLabelPrefix) {
 			// Assert the SYNTHESIZED values before they can be committed. A derived
 			// value must be empty (a deliberate "unset" a discovery path handles) or
@@ -508,6 +520,16 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 			}
 			targets[path] = content
 		}
+	}
+	// A paging receiver the spec asks for and this env cannot carry is an error,
+	// not a skip. Skipping is the exact failure spec.alerting spent the managed
+	// platform's whole life in: configured, validated, rendered nowhere, paging
+	// nobody, and nothing saying so.
+	if alerting.Active() && !alertingRendered {
+		return nil, fmt.Errorf("env %s: spec.alerting.receivers %v needs the observability component, which this env "+
+			"does not deploy (disabled, or `loki` not declared in cluster.bootstrap.managedApps) — its AlertmanagerConfig "+
+			"rides that component's Argo CD app. Enable observability for %s, or remove spec.alerting",
+			env, alerting.Receivers, env)
 	}
 	// apl-core values.yaml is NOT rendered: LLZ runs exclusively on Linode's MANAGED
 	// App Platform, where apl-core owns its own values (apl-api + in-cluster gitea).
@@ -628,7 +650,7 @@ func CheckManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.Spec.Alerting)
 		if err != nil {
 			return err
 		}

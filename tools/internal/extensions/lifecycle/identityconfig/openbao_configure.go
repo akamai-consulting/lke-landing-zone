@@ -27,7 +27,8 @@ import (
 
 // platform-ci: read-only KV v2 — used by the ESO ClusterSecretStore. Paths
 // are enumerated explicitly; wildcard read is intentionally avoided.
-const policyPlatformCI = `path "secret/data/alerts/webhooks"              { capabilities = ["read"] }
+const policyPlatformCI = `path "secret/data/alerts/pagerduty"             { capabilities = ["read"] }
+path "secret/data/alerts/webhooks"              { capabilities = ["read"] }
 path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
@@ -42,6 +43,7 @@ path "secret/data/obj/platform"                 { capabilities = ["read"] }
 path "secret/data/obj/ssec"                     { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
+path "secret/metadata/alerts/pagerduty"             { capabilities = ["read", "list"] }
 path "secret/metadata/alerts/webhooks"              { capabilities = ["read", "list"] }
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read", "list"] }
 path "secret/metadata/grafana/admin"                { capabilities = ["read", "list"] }
@@ -145,6 +147,7 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/metadata/alerts/webhooks"   { capabilities = ["read"] }
+path "secret/metadata/alerts/pagerduty"  { capabilities = ["read"] }
 # Managed Postgres admin credentials. The cluster names are declared per
 # deployment, so this is the one place the grant must be a prefix rather than an
 # enumeration: LIST the collection to discover the names, then read each one's

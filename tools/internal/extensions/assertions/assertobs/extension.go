@@ -43,8 +43,10 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // log ingestion, Grafana dashboards and the Loki write proof all read. The Loki
 // flush probe POSTs to an ingester's /flush endpoint, which mutates Loki's
 // internal state but nothing this model has a grant for — it is not the cluster,
-// not the cloud, and not a credential. Recorded here rather than forced into the
-// nearest word.
+// not the cloud, and not a credential. The alert-routing gate is the same shape:
+// it POSTs a silence and short-lived probe alerts to Alertmanager's own API,
+// which changes Alertmanager's state and no Kubernetes object. Recorded here
+// rather than forced into the nearest word.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "assert-observability",

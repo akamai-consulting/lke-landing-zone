@@ -683,6 +683,23 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci assert-database
 
+      # ── (e2e) spec.alerting fixture keys ─────────────────────────────────────
+      # The release-e2e spec declares PagerDuty + Slack receivers
+      # (.github/e2e/spec-alerting.yaml in the template repo). Without a key in
+      # OpenBao the ExternalSecret never produces its Secret, prometheus-operator
+      # rejects the AlertmanagerConfig, and the alert-routing lane fails — which
+      # is the correct verdict for a real instance and the wrong one for a
+      # fixture. So the fixture's PLACEHOLDER keys are seeded here, before the
+      # root token is revoked. They point at nothing: the fixture overrides both
+      # endpoints to `.invalid` names. --skip-if-present means a real key is never
+      # overwritten, even if this input were ever set on a real instance.
+      - name: (e2e) seed placeholder PagerDuty routing key for the spec.alerting fixture
+        if: ${{ inputs.assert_loki }}
+        run: llz ci bao-seed --path secret/alerts/pagerduty --field routing_key=literal:llz-e2e-placeholder-not-a-routing-key --skip-if-present routing_key --on-missing error
+      - name: (e2e) seed placeholder Slack webhook for the spec.alerting fixture
+        if: ${{ inputs.assert_loki }}
+        run: llz ci bao-seed --path secret/alerts/webhooks --field slack_url=literal:https://hooks.slack.invalid/llz-e2e-placeholder --skip-if-present slack_url --on-missing error
+
       # ── Revoke root token ────────────────────────────────────────────────────────
       # Revokes on success AND failure — fail-closed for credential hygiene. The
       # preserve_root_on_failure debug input suppresses it on FAILURE only, so an

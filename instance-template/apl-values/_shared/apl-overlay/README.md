@@ -30,7 +30,10 @@ the landing zone drives into apl-core's *native* values:
   [0005](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0005-managed-app-platform.md)),
   and settings left there reach no cluster. Today it carries Argo CD's
   `resource.customizations.health` overrides (without which a fresh bootstrap can
-  wedge before OpenBao) and Loki's ingester WAL-replay resources + WAL PVC.
+  wedge before OpenBao), Loki's ingester WAL-replay resources + WAL PVC, Harbor's
+  metrics, and Alertmanager's `alertmanagerConfigMatcherStrategy` (without which
+  spec.alerting's AlertmanagerConfig would page only for `monitoring`-namespace
+  alerts; its gate is `llz ci assert-alert-routing`).
 
   **A key that names nothing in the chart is silently ignored** — that is the
   failure this file was created in response to, and living on a real channel does

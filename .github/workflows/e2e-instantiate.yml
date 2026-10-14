@@ -407,6 +407,18 @@ jobs:
           LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
         run: bin/llz spec set openbao=@.github/e2e/spec-openbao.yaml
 
+      # spec.alerting fixture: PagerDuty + Slack receivers, rendered into the
+      # observability app as an AlertmanagerConfig. The alert-routing lane
+      # (assertobs/alertrouting.go) then reads Alertmanager's running config and
+      # posts silenced probes to check which receiver each alert reaches. The
+      # placeholder keys are seeded by llz-bootstrap-openbao.yml's (e2e) steps;
+      # every endpoint in the fixture is a `.invalid` name, so nothing can page.
+      - name: Declare the spec.alerting fixture
+        env:
+          LLZ_TEMPLATE_REF: ${{ github.sha }}
+          LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
+        run: bin/llz spec set alerting=@.github/e2e/spec-alerting.yaml
+
       - name: Lay the template out as an instance
         run: |
           set -euo pipefail

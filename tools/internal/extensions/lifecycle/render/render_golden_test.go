@@ -83,6 +83,10 @@ kind: LandingZone
 metadata: { name: goldeninst }
 spec:
   instance: { upstreamOrg: akamai-consulting, repo: akamai-consulting/goldeninst, forge: github, templateVersion: main }
+  alerting:
+    receivers: [pagerduty, slack]
+    pagerduty: { url: "https://events.eu.pagerduty.com/v2/enqueue" }
+    slack: { channel: platform-alerts }
   environments:
     prod:
       cluster:

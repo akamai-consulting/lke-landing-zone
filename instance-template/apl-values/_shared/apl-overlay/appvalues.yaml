@@ -1,4 +1,9 @@
 apps:
+  alertmanager:
+    _rawValues:
+      alertmanagerSpec:
+        alertmanagerConfigMatcherStrategy:
+          type: OnNamespaceExceptForAlertmanagerNamespace
   argocd:
     _rawValues:
       configs:

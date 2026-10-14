@@ -235,29 +235,52 @@ func validateTeamResourceQuota(i int, t Team) []error {
 	return errs
 }
 
+// alertSeverityRe bounds a spec.alerting.pagerduty.severities entry. The values
+// are joined into an Alertmanager regex matcher, so a metacharacter here would
+// widen what pages (".*" pages on everything) rather than fail anywhere.
+var alertSeverityRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
 // validateAlerting checks spec.alerting: receivers may only name channels the
-// landing zone wires ("slack", "none" — msteams et al. put secret webhook URLs
-// in committed values, which the OpenBao-backed slack path deliberately
-// avoids), "none" cannot be combined with a real channel, and slack channel
-// overrides only make sense when the slack receiver is selected.
+// landing zone wires ("pagerduty", "slack", "none" — msteams et al. put secret
+// webhook URLs in committed values, which the OpenBao-backed path deliberately
+// avoids), "none" cannot be combined with a real channel, and a receiver's
+// settings only make sense when that receiver is selected.
 func validateAlerting(a Alerting) []error {
 	var errs []error
-	hasSlack, hasNone := false, false
+	hasSlack, hasPagerDuty, hasNone := false, false, false
+	seen := map[string]bool{}
 	for _, r := range a.Receivers {
+		if seen[r] {
+			errs = append(errs, fmt.Errorf("alerting.receivers: %q is listed twice", r))
+		}
+		seen[r] = true
 		switch r {
 		case "slack":
 			hasSlack = true
+		case "pagerduty":
+			hasPagerDuty = true
 		case "none":
 			hasNone = true
 		default:
-			errs = append(errs, fmt.Errorf("alerting.receivers: %q is not supported (use slack or none; msteams would put its secret webhook URLs in committed values)", r))
+			errs = append(errs, fmt.Errorf("alerting.receivers: %q is not supported (use pagerduty, slack or none; msteams would put its secret webhook URLs in committed values)", r))
 		}
 	}
-	if hasNone && hasSlack {
-		errs = append(errs, fmt.Errorf("alerting.receivers: none cannot be combined with slack"))
+	if hasNone && (hasSlack || hasPagerDuty) {
+		errs = append(errs, fmt.Errorf("alerting.receivers: none cannot be combined with another receiver"))
 	}
 	if (a.Slack.Channel != "" || a.Slack.ChannelCrit != "") && !hasSlack {
 		errs = append(errs, fmt.Errorf("alerting.slack.* is set but receivers does not include slack"))
+	}
+	if (len(a.PagerDuty.Severities) > 0 || a.PagerDuty.URL != "") && !hasPagerDuty {
+		errs = append(errs, fmt.Errorf("alerting.pagerduty.* is set but receivers does not include pagerduty"))
+	}
+	for _, sev := range a.PagerDuty.Severities {
+		if !alertSeverityRe.MatchString(sev) {
+			errs = append(errs, fmt.Errorf("alerting.pagerduty.severities: %q is not a plain severity label value (lowercase letters, digits, - and _; it is matched literally, so a regex would widen what pages)", sev))
+		}
+	}
+	if u := a.PagerDuty.URL; u != "" && !strings.HasPrefix(u, "https://") {
+		errs = append(errs, fmt.Errorf("alerting.pagerduty.url: %q must be an https:// Events API v2 endpoint (e.g. https://events.eu.pagerduty.com/v2/enqueue)", u))
 	}
 	return errs
 }

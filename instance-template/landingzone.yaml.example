@@ -88,11 +88,15 @@ spec:
   # Instance-wide Alertmanager receivers. Left out (the default), Alertmanager
   # runs with a null route — alerts aggregate in its UI but notify nobody, and
   # the scheduled CI checks are the only alerting that reaches a human. To
-  # notify Slack: uncomment, `llz render`, then seed the webhook into each
-  # env's OpenBao (`llz openbao set alerts/webhooks slack_url=…`) — see
-  # docs/alerting.md § "Wiring a notification receiver".
+  # page: uncomment, `llz render`, then seed the key into each env's OpenBao
+  # (`llz openbao set alerts/pagerduty routing_key=…`; for Slack,
+  # `llz openbao set alerts/webhooks slack_url=…`) — see docs/alerting.md
+  # § "Wiring a notification receiver". `llz ci assert-alert-routing` (weekly
+  # in llz-scheduled-checks) verifies Alertmanager routes to them.
   # alerting:
-  #   receivers: [slack]
+  #   receivers: [pagerduty]              # and/or slack
+  #   pagerduty:
+  #     severities: [critical]            # default [critical]
   #   slack:
   #     channel: platform-alerts          # non-critical (default mon-apl)
   #     channelCrit: platform-alerts-crit # critical (default mon-apl-crit)

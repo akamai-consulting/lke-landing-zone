@@ -8,7 +8,7 @@ package clusterspec
 // What lives HERE is the half that is clusterspec's own: each row's Probe (does
 // this instance set the field?) and Marker (write a value the ratchet can hunt
 // for) agreeing with the spec types they read. Those two are what decide whether
-// an operator who configured Slack is TOLD it reaches nothing, and a Probe that
+// an operator who configured an inert field is TOLD it reaches nothing, and a Probe that
 // silently stopped matching its own struct field would restore exactly the
 // silence the list exists to break.
 
@@ -93,13 +93,18 @@ func TestAFindingNamesThePathAndTheReason(t *testing.T) {
 	}
 }
 
-// `receivers: [none]` is the DEFAULT, and must not be read as "the operator
-// configured alerting". Reporting it would put a finding on every stock instance.
-func TestTheDefaultReceiverSetIsNotAFinding(t *testing.T) {
-	lz := inertSpec(t)
-	lz.Spec.Alerting.Receivers = []string{"none"}
-	if got := InertFindings(lz); len(got) != 0 {
-		t.Errorf("the default [none] receiver set produced a finding:\n%s", strings.Join(got, "\n"))
+// spec.alerting LEFT THIS LIST when it was wired (alerting.go). A configured
+// receiver must not be reported as reaching nothing — that would be the
+// inverse lie this list's header warns about, telling an operator a working
+// pager is broken.
+func TestAConfiguredReceiverIsNotAFinding(t *testing.T) {
+	for _, recv := range [][]string{{"none"}, {"slack"}, {"pagerduty"}, {"pagerduty", "slack"}} {
+		lz := inertSpec(t)
+		lz.Spec.Alerting.Receivers = recv
+		lz.Spec.Alerting.Slack.Channel = "platform-alerts"
+		if got := InertFindings(lz); len(got) != 0 {
+			t.Errorf("receivers %v produced an inert finding:\n%s", recv, strings.Join(got, "\n"))
+		}
 	}
 }
 
@@ -134,16 +139,6 @@ func TestEachSizingKnobIsSeenOnItsOwn(t *testing.T) {
 					"knob is told it works", name)
 			}
 		})
-	}
-}
-
-// A Slack CHANNEL with no receiver still counts: it is a configured intention,
-// and the operator deserves to know it is going nowhere.
-func TestASlackChannelAloneIsAFinding(t *testing.T) {
-	lz := inertSpec(t)
-	lz.Spec.Alerting.Slack.Channel = "platform-alerts"
-	if len(InertFindings(lz)) == 0 {
-		t.Error("a configured Slack channel with no receiver produced no finding")
 	}
 }
 

@@ -97,15 +97,6 @@ const inertMarkerIntNeedle = "9137"
 // markerReachedTheSpec is the positive control: the marker is somewhere in the
 // decoded spec after Marker ran.
 func markerReachedTheSpec(lz *clusterspec.LandingZone) bool {
-	for _, r := range lz.Spec.Alerting.Receivers {
-		if strings.Contains(r, inertMarkerNeedle) {
-			return true
-		}
-	}
-	if strings.Contains(lz.Spec.Alerting.Slack.Channel, inertMarkerNeedle) ||
-		strings.Contains(lz.Spec.Alerting.Slack.ChannelCrit, inertMarkerNeedle) {
-		return true
-	}
 	for _, e := range lz.Spec.Environments {
 		for _, t := range e.Components {
 			if strings.Contains(t.Retention, inertMarkerNeedle) ||
