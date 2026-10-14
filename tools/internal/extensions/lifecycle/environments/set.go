@@ -44,7 +44,8 @@ func specSetCmd() *cobra.Command {
 			"re-renders every env. Per-env fields (cluster.* / components.*) go on\n" +
 			"`llz env set <env>`; shared VPCs on `llz network add`. Examples:\n" +
 			"  llz spec set dns.acmeEmail=ops@example.com\n" +
-			"  llz spec set defaults.cluster.nodePool.count=5 defaults.platform.externalIDP=true",
+			"  llz spec set defaults.cluster.nodePool.count=5 defaults.platform.externalIDP=true\n" +
+			"  llz spec set openbao=@openbao.yaml   # a structured field, from a YAML file",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			assigns, err := yamledit.ParseAssignments(args)
@@ -63,7 +64,18 @@ func specSetCmd() *cobra.Command {
 			}
 			if err := yamledit.EditSpecFileVia(specEditor("set"), lzPath, func(doc *yaml.Node) error {
 				for _, a := range assigns {
-					if err := yamledit.SetSpecPath(doc, a[0], a[1]); err != nil {
+					// `path=@file` sets a structured subtree (spec.openbao) from a
+					// YAML file; anything else is a typed scalar.
+					node, isFile, err := yamledit.FileValueNode(a[1])
+					if err != nil {
+						return err
+					}
+					if isFile {
+						err = yamledit.SetSpecPathNode(doc, a[0], node)
+					} else {
+						err = yamledit.SetSpecPath(doc, a[0], a[1])
+					}
+					if err != nil {
 						return err
 					}
 				}

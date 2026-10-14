@@ -80,14 +80,15 @@ checkout, a failed ACL open, a bad image pull. That is precisely what this
 weekly run exists to prove still works, and a probe that cannot report itself
 broken re-proves nothing.
 
-Two of the checks fail on a real FINDING — as distinct from failing because they could not look, which every check here does:
+Three of the checks fail on a real FINDING — as distinct from failing because they could not look, which every check here does:
 
 | Check | Fails when |
 |---|---|
 | `assert-wave-health-vap` | the wave-health guard VAP stopped enforcing — the PR #142 bootstrap-wedge class it exists to prevent |
+| `assert-openbao-extensions` | a `spec.openbao.kubernetesRoles` entry, logged into as its bound service account, does not carry exactly its declared policies, lacks a declared capability, or reaches a mount of the wrong engine. A bound service account that does not exist yet only warns — the workload is not deployed — and an instance declaring no roles is a no-op. The e2e lane (`openbao-ext`) runs it with `--require-bound` |
 | `assert-apl-deployed-version` | the apl-core RUNNING here is a MAJOR away from the version this llz release targets, or its version cannot be read at all. On managed App Platform **Linode** moves that version on their own schedule, with no event this repo sees, so a weekly cron is the only thing that will ever notice. Set the repo variable `LLZ_ALLOW_APL_CHART_MAJOR_DRIFT=1` to stage a major deliberately; a minor or patch apart only warns |
 
-There were two. `health-loki-objkey` was the other, and it is gone (#483) — it
+`health-loki-objkey` used to be on this list, and it is gone (#483) — it
 never once fired, which is the whole story below.
 
 Every check carries `if: always()` (except the first, which has nothing before

@@ -240,6 +240,15 @@ func Lanes(region string) []Lane {
 				"A color.Red lane is either a Keycloak fault or a bao-configure policy fault; the log names which assertion tripped. No-op when no teams are declared.",
 		},
 		{
+			Name: "openbao-ext", Gating: true,
+			// --require-bound: the e2e fixture binds the ESO controller, which always
+			// exists, so an absent service account here is a broken binding — not an
+			// undeployed workload, which is what the weekly instance run tolerates.
+			Steps: []Step{step("assert-identity", "assert-openbao-extensions", "--require-bound")},
+			Why: "Every spec.openbao kubernetes role, logged into as its bound service account: exactly the declared policies, every declared capability, " +
+				"each mount with its declared engine. The operator grants ride the team-write lane. No-op when no roles are declared.",
+		},
+		{
 			Name: "overlay", Gating: true,
 			Steps: []Step{
 				step("assert-platform", "assert-argo-comparisons"),

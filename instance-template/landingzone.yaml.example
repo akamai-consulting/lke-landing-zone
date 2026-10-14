@@ -123,6 +123,30 @@ spec:
       #   services.loadbalancers: "1"
       #   pods: "100"
 
+  # ── Instance OpenBao extensions (optional) ──────────────────────────────────
+  # Extra secrets engines, structured policies and Kubernetes-auth roles that
+  # `llz ci bao-configure` applies after its own sequence, plus team operators who
+  # administer a mount without root. Set the block from a file with
+  # `llz spec set openbao=@openbao.yaml`. Field rules: docs/landing-zone-spec.md.
+  # openbao:
+  #   mounts:
+  #     - path: pki-app-mtls
+  #       type: pki
+  #       maxLeaseTTL: 26280h
+  #       config:
+  #         - path: roles/app-client
+  #           data: {allowed_domains: app-client, allow_bare_domains: true, client_flag: true, server_flag: false, ttl: 720h}
+  #       operators: [platform]
+  #   policies:
+  #     - name: app-mtls-issue
+  #       rules:
+  #         - {path: pki-app-mtls/issue/app-client, capabilities: [create, update]}
+  #   kubernetesRoles:
+  #     - name: app-mtls
+  #       boundServiceAccountNames: [external-secrets]
+  #       boundServiceAccountNamespaces: [external-secrets]
+  #       policies: [app-mtls-issue]
+
   # ── Shared VPCs (optional — most instances leave this out) ──────────────────
   # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —
   # the safest posture, and what you get by leaving `networks` out entirely.

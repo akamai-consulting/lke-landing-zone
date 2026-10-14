@@ -77,6 +77,13 @@ type Spec struct {
 	// a short-lived token with `llz openbao login`. Instance-wide (the same teams
 	// exist on every cluster). See docs/designs/team-scoped-credentials.md.
 	Teams []Team `json:"teams,omitempty"`
+	// OpenBao declares instance-owned OpenBao additions — secrets engines,
+	// structured ACL policies and Kubernetes-auth roles — that `llz ci
+	// bao-configure` applies after its own fixed sequence, plus per-mount team
+	// operators who administer a mount with `llz openbao login --team` instead of
+	// root. Optional; unset leaves bao-configure byte-identical. See openbao_ext.go
+	// and docs/landing-zone-spec.md.
+	OpenBao OpenBaoExtensions `json:"openbao,omitempty"`
 }
 
 // Team is an APL team: a group of human operators granted scoped OpenBao write

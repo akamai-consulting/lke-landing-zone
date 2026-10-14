@@ -188,6 +188,51 @@ covered by unit tests).
 > with the root token (`llz openbao exec -- kv metadata delete secret/<subtree>/_llz_smoke_<ts>`) if
 > they pile up.
 
+## Mount operators (`spec.openbao.mounts[].operators`)
+
+A team named in a `spec.openbao` pki mount's `operators` gets `<mount>-operator`
+on its keycloak role: the intermediate-CA lifecycle and day-2 administration of
+that mount (issuers, keys, certificates, revocation, tidy, and the roles and
+config the spec does not declare), and nothing on `sys/`. It cannot generate a
+root, export or import a key, issue or sign a certificate, or delete the CA —
+those stay with root. What the spec's `config[]` declares (e.g. the workload's
+issuing role) is read-only to operators: change it in the spec and re-configure. The same
+`llz openbao login --team <name>` token that writes the team subtree can then
+stage a PKI intermediate without root:
+
+```console
+$ eval "$(llz openbao login --team platform)"
+$ llz openbao exec -- write -field=csr pki-app-mtls/intermediate/generate/internal \
+    common_name="App Issuing CA" key_type=ec key_bits=256 > app.csr
+# sign app.csr with the offline root, then:
+$ llz openbao exec -- write pki-app-mtls/intermediate/set-signed certificate=- < app-intermediate.crt
+```
+
+`llz openbao exec` runs with `OPENBAO_TOKEN` (the team token) when
+`OPENBAO_ROOT_TOKEN` is unset, so these calls carry only the team's policies. It
+still runs `bao` through `kubectl exec` into the OpenBao pod, so the operator also
+needs `pods/exec` in the `llz-openbao` namespace — the team token narrows what
+the call may do, not who may make it. Pass
+files over stdin (`key=-`), not `@file` — the command runs inside the OpenBao pod.
+
+**Stage it on every cluster of an HA pair.** Each cluster runs its own OpenBao,
+and `bao-configure` creates the mount on each — but the intermediate is staged by
+hand, against whichever cluster `kubectl` points at. A pair staged only on the
+active has a standby mount with no issuer, and issuance from it fails on failover.
+Repeat the login and both `exec` calls with `kubectl` pointed at the standby —
+`llz openbao login --team <name> --region <standby-env>`, since login derives the
+Keycloak issuer from the env and refuses to guess when the spec has several; it
+generates its own key and CSR, which the same offline root signs, so both chain
+to one trust anchor. `llz ci team-login-smoke` warns, per cluster, when an
+operated mount has no issuer.
+
+Like the team's own policies, the operator grant reaches a cluster on the next
+bootstrap or re-configure (`bao-configure` is root-gated and one-shot), and so
+does its removal: dropping the team from `operators` rewrites the team's keycloak
+role without `<mount>-operator` on that run, and once a mount has no operators
+left the policy itself is revoked. Until the re-configure runs, the grant stays —
+dispatch it when revoking access is the point.
+
 ## Offboard a team (remove write + ESO read access)
 
 Everything in this feature is **additive** — removing a team from `spec.teams` and

@@ -55,6 +55,7 @@ func (lz *LandingZone) Validate() []error {
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
 	errs = append(errs, validateAlerting(lz.Spec.Alerting)...)
 	errs = append(errs, validateTeams(lz.Spec.Teams)...)
+	errs = append(errs, ValidateOpenBao(lz.Spec.OpenBao, lz.Spec.Teams)...)
 	return errs
 }
 

@@ -877,6 +877,27 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `instance-custom-llz-e2e-custom` and synced it. `converge` and `assert-loki` gate the
   PLATFORM apps and stay green when the hatch generated NOTHING (the generated App simply
   would not exist) — only an assertion that names it catches that.
+* **team-write** — `team-login-smoke`: a member of the first declared team logs in
+  through Keycloak → OpenBao and writes inside its subtree (and is denied outside
+  it), ESO's `eso` role reads what the team wrote, and the platform admin writes
+  without team membership. It also carries the **spec.openbao operator** checks
+  (`assertidentity/openbaoext.go`, fixture `.github/e2e/spec-openbao.yaml`), because
+  they need the smoke team's own Keycloak login: the team's token must hold every
+  `clusterspec.OperatorRules` grant on each
+  mount it operates, be DENIED every `OperatorDeniedPaths` entry (`sys/mounts/<mount>`,
+  root generation, key export/import, issuance, CA deletion), hold every
+  spec-declared config path READ-ONLY, and read back every declared config write.
+  An operated pki mount with no issuer on the cluster is a `::warning::` (staging
+  the intermediate is a post-bootstrap, per-cluster human step).
+* **openbao-ext** — `assert-openbao-extensions --require-bound`: every declared
+  `spec.openbao.kubernetesRoles` entry is logged into with a TokenRequest for its
+  bound service account; its token must carry exactly the declared policies, and its
+  REAL capabilities (`sys/capabilities-self`) and mount types are compared with the
+  spec. Its own lane because it needs no human login — which is also why
+  `llz-scheduled-checks` runs it weekly on every instance (without `--require-bound`,
+  so an undeployed workload warns). Without these two lanes, a skipped
+  `(spec.openbao)` step in `bao-configure` leaves a green bootstrap over a
+  half-built extension.
 * **apl-deployed-version** — GATING proof that the apl-core RUNNING on this cluster is a
   version this llz release was tested against. Read from the IMAGE TAG of the
   `apl-operator` container, not that Deployment's chart labels — apl-core relabels them

@@ -181,6 +181,17 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-obj-roundtrip --settle 60 | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # spec.openbao kubernetes roles, checked as their workloads log in: exact
+      # policies, every declared capability, the declared engine. HERE for the same
+      # reason as the two steps above — the assert-suite lane that also runs it is
+      # release-e2e only, so without this an instance's OWN roles were verified by
+      # nothing after bootstrap-time bao-configure. No --require-bound: a role bound
+      # to a workload not deployed yet warns instead of failing. No-op when the
+      # spec declares no roles.
+      - name: Assert spec.openbao kubernetes roles grant what the spec declares
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        run: llz ci assert-openbao-extensions | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Self-heal the team-OIDC device-flow client. keycloak-configure runs once at
       # bootstrap; if that run raced ahead of apl-core's Keycloak convergence it
       # warns + exits 0, leaving the `llz` client absent or missing the openid

@@ -62,7 +62,8 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 // `login` AND `seed` BOTH HOLD `cluster-write`, AND BOTH WERE UNDECLARED UNTIL THE
 // CAPABILITY LAYER LOOKED. `llz openbao exec` shells into the OpenBao pod with a
-// ROOT token — policy writes, mount changes, anything root permits — which is a
+// ROOT token (or a team token, when root is unset) — policy writes, mount changes,
+// anything the token permits — which is a
 // cluster write even though nothing patches a Kubernetes object, because what an
 // exec may do is bounded by the container rather than by kubectl. The seal-key wait
 // annotates a parent Application to force a hard refresh when it wedges. Neither

@@ -454,6 +454,70 @@ teams:
 > is *not* how you get public ingress for an app. Route those through the shared
 > ingress gateway instead.
 
+**Instance OpenBao extensions (`spec.openbao`, instance-wide).** For an
+application that needs more of OpenBao than KV — the motivating case is a PKI
+issuing tier for a workload's mTLS client certificates — declare the additions
+here and `llz ci bao-configure` applies them in its root-holding run, after its own
+fixed sequence. Nothing is applied by `llz render`; like `spec.teams`, a change
+reaches a cluster on the next bootstrap or a deliberate re-configure dispatch —
+and that includes REMOVALS: a policy or `kubernetesRoles` entry removed from the
+spec (or a mount's last operator) is revoked on that run. `bao-configure` records
+what it created in the deny-only policy `llz-spec-openbao-manifest` and deletes
+only names recorded there, so hand-made OpenBao objects are never touched; the
+first run after upgrading records without pruning. A removed **mount** is never
+disabled — that destroys its keys — so the run warns and leaves it to you
+(`bao secrets disable <mount>/`). Two consequences to know: deleting a role does
+not revoke tokens it already issued, so if their policy is still declared
+elsewhere they keep access until their TTL runs out (at most 1h, the `ttl` cap);
+and declaring a policy or role under the name of one you made by hand takes it
+over — `bao-configure` overwrites and records it, so removing it from the spec
+later deletes it.
+
+| field | meaning |
+|---|---|
+| `mounts[]` | `{path, type, description?, maxLeaseTTL?, config[]?, operators[]?}`. `type` is `pki` (the only engine with a live gate; others are refused until one ships with its own); `path` is kebab, not `secret`/`sys`/`auth`/`identity`/`cubbyhole`/`kubernetes`/`jwt`/`keycloak`. A re-run converges `maxLeaseTTL`/`description` with a fatal `secrets tune`, and `bao-configure` fails if a declared path is mounted with a different engine (an existing mount is never re-typed for you). |
+| `mounts[].config[]` | `{path, data}` written as `bao write <mount>/<path>` with a JSON body. Allowed only on configuration endpoints — `roles/<name>` and `config/{crl,auto-tidy,urls,cluster,issuers}`. Not `config/acme`: ACME endpoints are unauthenticated, so enabling them from spec would open an issuance path no policy here governs. Generating or issuing endpoints (`root/`, `intermediate/`, `issue/`, `sign/`) are operator actions: their responses carry key material and would land in the bootstrap log. |
+| `mounts[].operators[]` | `spec.teams` names; each gets `<mount>-operator` added to its keycloak role, so `llz openbao login --team <name>` can generate an intermediate CSR (`intermediate/generate/internal`), import the signed certificate (`intermediate/set-signed`), and administer issuers, keys, the roles and config endpoints the spec does *not* declare, certificates, revocation and tidy. Every path this mount's `config[]` writes is **read-only** to operators: spec owns it, so an operator cannot widen a declared role that a workload issues from. It is **not** full mount admin: root generation, `generate/exported`, `issue`/`sign`/`sign-verbatim`, `config/ca`, key import and `DELETE <mount>/root` are denied, as is anything on `sys/`. The exact rules are `clusterspec.OperatorRules`. On an HA pair, each cluster has its own OpenBao, so the intermediate is staged once per cluster (see the runbook). |
+| `policies[]` | `{name, rules: [{path, capabilities}]}`. Rules may only sit under a declared mount or a declared team's `secret/{data,metadata}/<subtree>/…`. Under a mount, a rule that writes (`create`/`update`/`patch`/`delete`) must be an issuance path — `issue/<role>`, `sign/<role>`, or `issuer/<ref>/{issue,sign}/<role>` (`+` allowed for one segment, no trailing `*`). Every other write on a CA is administration and belongs to operators; reads and lists are unrestricted. Prefer exact role names to `issue/+`: a wildcard also reaches any role an operator creates later; `sudo`/`root` are refused; names may not reuse a platform policy or end in `-reader`/`-writer`/`-operator`. |
+| `kubernetesRoles[]` | `{name, boundServiceAccountNames, boundServiceAccountNamespaces, policies, ttl?}` on the `kubernetes` auth mount. `policies` must name `spec.openbao.policies` entries — never a platform or team policy; no wildcards; `ttl` ≤ 1h (default 15m). Binding the ESO controller (`external-secrets/external-secrets`) lets an ESO generator or `PushSecret` use a dedicated, narrowly-scoped identity instead of the shared `eso`/`eso-pusher` roles. |
+
+`bao-configure` re-validates the block and **fails** on any violation — or on a
+spec it cannot parse — rather than skipping it: unlike `spec.teams`, a dropped
+extension is half-built security configuration under a green bootstrap. The
+extension steps run last, after CI OIDC and team login are configured, so a bad
+`config[].data` value fails the run without taking those down with it. What OpenBao actually enforces is
+verified live: the Kubernetes roles weekly on every instance by
+`llz ci assert-openbao-extensions` (in `llz-scheduled-checks`), and the operator
+grants by the `team-write` e2e lane (see `docs/workflows/llz-bootstrap-openbao.md`).
+Structured values can't be spelled as `path=value`; set the whole block from a
+file with `llz spec set openbao=@openbao.yaml`.
+
+```yaml
+openbao:
+  mounts:
+    - path: pki-app-mtls
+      type: pki
+      maxLeaseTTL: 26280h           # covers a 3-year intermediate
+      config:
+        - path: roles/app-client
+          data: {allowed_domains: app-client, allow_bare_domains: true,
+                 client_flag: true, server_flag: false, key_type: ec, key_bits: 256, ttl: 720h}
+        - path: config/auto-tidy
+          data: {enabled: true, tidy_cert_store: true, safety_buffer: 72h}
+      operators: [platform]          # import the root-signed intermediate with a team login
+  policies:
+    - name: app-mtls-issue
+      rules:
+        - {path: pki-app-mtls/issue/app-client, capabilities: [create, update]}
+        - {path: secret/data/platform/app-mtls, capabilities: [create, update, read]}
+        - {path: secret/metadata/platform/app-mtls, capabilities: [create, update, read]}
+  kubernetesRoles:
+    - name: app-mtls
+      boundServiceAccountNames: [external-secrets]
+      boundServiceAccountNamespaces: [external-secrets]
+      policies: [app-mtls-issue]
+```
+
 > **`llz render` does not write apl-core's `values.yaml`.** LLZ runs exclusively on
 > Linode's **managed** App Platform, where apl-core owns its own values (ADR
 > [0005](adr/0005-managed-app-platform.md)) — `template-scripts/ci/scaffold-render-check.sh`

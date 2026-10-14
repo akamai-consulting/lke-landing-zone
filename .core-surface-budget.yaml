@@ -1652,7 +1652,13 @@ categories:
     #                       API carries no version field. The label read, the parse and
     #                       the verdict live in assertions/assertplatform; the line here
     #                       is registration.
-    budget: 1952
+    #   1,954 / 129 files  +2 for `assert-openbao-extensions`: one AddCommand, and
+    #                       one Deps field wiring its binding's own Writer
+    #                       (ExtWriter), so a weekly instance check mints its
+    #                       TokenRequests under a declaration that cannot create
+    #                       Keycloak users — login-smoke's Writer can. The lane
+    #                       logic is in assertions/assertidentity, unit-tested.
+    budget: 1954
     exact: true
     include:
       - "tools/internal/cli/*.go"
