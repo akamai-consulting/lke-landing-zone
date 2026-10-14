@@ -158,6 +158,13 @@ platform:
       # exceeded`, the rotator Job then fails on its 300s deadline).
       - namespace: llz-pat-rotator
         name: broad-pat-rotator
+      # The OpenBao backup CronJob (dedicated llz-openbao-backup namespace) logs in
+      # via Kubernetes-auth (`openbao-backup` role) and streams a Raft snapshot from
+      # the active node. Pod-scoped like the other CronJob clients; without it the
+      # login at :8200 is L4-blocked and every backup tick fails on a TCP timeout
+      # (LLZOpenBaoBackupNeverSucceeded is what then says so).
+      - namespace: llz-openbao-backup
+        name: openbao-backup
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     # `monitoring`, not llz-observability: that is where apl-core runs Loki, and
     # this allow existed for a Service that was never there — see the lokiPushUrl

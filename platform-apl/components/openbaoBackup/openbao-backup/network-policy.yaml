@@ -1,0 +1,56 @@
+# Default-deny for the namespace + the backup Job's minimal egress: DNS, OpenBao
+# (:8200, for the k8s-auth login, the key read and the snapshot), and outbound
+# HTTPS (:443) for Linode Object Storage. Port-restricted 0.0.0.0/0 on 443 is the
+# same posture as the other platform workloads that reach a Linode API: the
+# object-storage endpoint's addresses are Linode's to change, not ours to pin.
+#
+# The OpenBao side of the hop is opened by the llz-openbao-platform chart's
+# allowedClientPods entry for this pod (0.1.34). Both halves are required; either
+# alone is a TCP timeout on the login.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-openbao-backup-default-deny
+  namespace: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openbao-backup-egress
+  namespace: llz-openbao-backup
+  annotations:
+    # -10 with the default-deny it complements: an allow that lands after the
+    # first scheduled tick is a backup that fails closed for no reason.
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-backup
+  policyTypes: [Egress, Ingress]
+  ingress: []
+  egress:
+    # DNS — kube-system by NAMESPACE only: LKE-Enterprise CoreDNS is not labelled
+    # k8s-app=kube-dns, so a kube-dns podSelector matches nothing and every lookup
+    # times out (the scar recorded on broad-pat-rotator's policy).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }

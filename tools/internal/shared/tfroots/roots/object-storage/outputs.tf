@@ -17,6 +17,11 @@ output "harbor_registry_bucket" {
   value       = module.object_storage.harbor_registry_bucket
 }
 
+output "openbao_backup_bucket" {
+  description = "OpenBao Raft snapshot bucket label for this region (the openbaoBackup CronJob's target)."
+  value       = module.object_storage.openbao_backup_bucket
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster so destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = module.object_storage.s3_endpoint

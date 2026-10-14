@@ -683,6 +683,28 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci assert-database
 
+      # ── (e2e) OpenBao backup → restore drill ─────────────────────────────────
+      # HERE, before the root revoke, for the same reason as assert-database: a
+      # Raft restore needs `update` on sys/storage/raft/snapshot, which only root
+      # holds — no in-cluster role may roll the store back, by design.
+      #
+      # Proves the whole chain: writes a canary, runs a Job built from the
+      # openbaoBackup CronJob (its real role, policy, mTLS identity, NetworkPolicy
+      # and bucket key), fetches the exact snapshot that Job uploaded through a
+      # temporary read-only key, overwrites the canary, restores through the same
+      # functions `llz openbao restore` uses, and requires the canary back. It
+      # RESTORES THE LIVE e2e STORE IN PLACE — seconds-old state, on a throwaway
+      # cluster. Self-skips when spec.components.openbaoBackup is disabled.
+      #
+      # 25m: up to 10m for the CronJob to be synced, 8m for the Job, 3m each for
+      # the restore to settle and the canary to read back. Under the job's 45m.
+      - name: (e2e) assert OpenBao backup restores (drill)
+        if: ${{ inputs.assert_loki && steps.ensure.outputs.available == 'true' }}
+        timeout-minutes: 25
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci assert-openbao-restore --region "$REGION"
+
       # ── Revoke root token ────────────────────────────────────────────────────────
       # Revokes on success AND failure — fail-closed for credential hygiene. The
       # preserve_root_on_failure debug input suppresses it on FAILURE only, so an

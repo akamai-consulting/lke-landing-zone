@@ -32,10 +32,14 @@ type manifest struct {
 // skipDirs are never walked. `.git` and the build/vendor caches hold copies of
 // files that are not this tree's to scan; `.instance-test` is a RENDERED instance
 // (`make instance-test` writes it), so counting its manifests would demand config
-// entries for a directory that exists only after a test run.
+// entries for a directory that exists only after a test run. `.tf-instance` is the
+// same thing for Terraform: `make tf-validate-roots` (template-scripts/ci/
+// instantiate-terraform.sh) materialises the embedded roots there, gitignored, so
+// any `make lint` that touched Terraform failed this gate on its own scratch copy.
 var skipDirs = map[string]bool{
 	".git":           true,
 	".instance-test": true,
+	".tf-instance":   true,
 	"node_modules":   true,
 	"vendor":         true,
 	"testdata":       true,

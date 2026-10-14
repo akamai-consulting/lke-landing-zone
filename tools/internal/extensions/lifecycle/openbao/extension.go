@@ -40,6 +40,8 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //	transition:seeded/login          [read-repo, cluster-read, cluster-write, secret-custody]
 //	transition:seeded/regen-root     [cluster-read, cluster-write, secret-custody, cloud-mutate]
 //	                                 (requires operating)
+//	transition:seeded/restore        [cluster-read, cluster-write, secret-custody, cloud-mutate]
+//	                                 (requires operating)
 //
 // FIVE BINDINGS, AND THE GRANTS ARE WHY. Collapsing these into one would force the
 // union — every lane would hold `cloud-mutate`, and `peer-ca` would gain
@@ -114,6 +116,23 @@ func Extension() extension.Extension {
 				Grants: []extension.Grant{
 					extension.ReadRepo, extension.ClusterRead,
 					extension.ClusterWrite, extension.SecretCustody,
+				},
+			},
+			{
+				// `llz openbao backups` / `llz openbao restore`. Same state, same
+				// precondition and same grants as regen-root, for the same reason: it
+				// puts secret material back into a platform that is already up.
+				// cluster-write is the restore itself (it replaces the store through a
+				// port-forward, which no Kubernetes object records); cloud-mutate mints
+				// and deletes the temporary read-only bucket key, because the backup key
+				// lives in OpenBao — the thing being restored.
+				Kind:     extension.Transition,
+				Name:     "restore",
+				State:    extension.Seeded,
+				Requires: extension.Operating,
+				Grants: []extension.Grant{
+					extension.ClusterRead, extension.ClusterWrite,
+					extension.SecretCustody, extension.CloudMutate,
 				},
 			},
 			{

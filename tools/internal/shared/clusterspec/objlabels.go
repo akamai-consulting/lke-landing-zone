@@ -194,6 +194,36 @@ func ObjHarborRegistryBucket(prefix, env string) string {
 	return objLabel(prefix, "harbor-registry", env)
 }
 
+// ObjOpenBaoBackupBucket is the bucket the openbaoBackup CronJob writes OpenBao
+// Raft snapshots to and `llz openbao restore` reads them from. One derivation,
+// shared by the rotation table (which scopes the backup key to it and records it
+// in secret/obj/openbao-backup for the in-cluster job), the restore path, and the
+// bucket-presence preflight — so the three cannot name different buckets.
+func ObjOpenBaoBackupBucket(prefix, env string) string {
+	return objLabel(prefix, "openbao-backup", env)
+}
+
+// ObjBucketLabels are EVERY bucket the llz-object-storage module creates for a
+// deployment, in module order. The preflights that ask "are this deployment's
+// buckets there?" read this rather than each keeping a literal list, which is how
+// a bucket added to the module goes unchecked: four copies of the old four-bucket
+// list existed when the fifth (openbao-backup) arrived.
+//
+// It is NOT the scope of any one key — the broad platform key deliberately does
+// not cover the backup bucket. Use it for presence, never for grants.
+func ObjBucketLabels(prefix, env string) []string {
+	if prefix == "" || env == "" {
+		return nil
+	}
+	return []string{
+		ObjLokiChunksBucket(prefix, env),
+		objLabel(prefix, "loki-ruler", env),
+		objLabel(prefix, "loki-admin", env),
+		ObjHarborRegistryBucket(prefix, env),
+		ObjOpenBaoBackupBucket(prefix, env),
+	}
+}
+
 // ObjKeyLabels are the Object Storage KEY labels an instance mints per
 // deployment. Kept here beside the bucket derivations so `llz reap` and the
 // rotation table cannot drift from each other or from the prefix.
@@ -204,7 +234,7 @@ func ObjKeyLabels(prefix, env string) []string {
 	if prefix == "" || env == "" {
 		return nil
 	}
-	// THREE LABELS, THOUGH ONLY `obj` IS STILL MINTED. The per-app loki and
+	// FOUR LABELS, THOUGH ONLY `obj` AND `openbao-backup` ARE STILL MINTED. The per-app loki and
 	// harbor-registry keys were retired — their ExternalSecrets had been deleted,
 	// so nothing consumed them — but every cluster bootstrapped before that still
 	// has both keys in the Linode account, and teardown is the only thing that
@@ -219,6 +249,8 @@ func ObjKeyLabels(prefix, env string) []string {
 		objLabel(prefix, "loki", env),
 		objLabel(prefix, "harbor-registry", env),
 		objLabel(prefix, "obj", env),
+		// The OpenBao backup key, scoped to the openbao-backup bucket alone.
+		objLabel(prefix, "openbao-backup", env),
 	}
 }
 

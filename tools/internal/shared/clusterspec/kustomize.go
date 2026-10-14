@@ -493,6 +493,7 @@ const llzImageName = "ghcr.io/akamai-consulting/llz"
 // that is not retagged here is a fleet running mixed code.
 var carvedLLZImageComponents = map[string]bool{
 	"llzReconciler": true, "harbor": true, "broadPatRotator": true, "objProxy": true,
+	"openbaoBackup": true,
 }
 
 func RenderCarvedAppKustomization(c Component, ref, imageTag string) string {

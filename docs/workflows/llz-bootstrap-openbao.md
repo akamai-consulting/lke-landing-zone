@@ -491,6 +491,13 @@ from the env name). The downstream ESO wiring (`harbor-registry-s3` /
 `loki-object-store` ExternalSecrets → K8s Secrets → `REGISTRY_STORAGE_S3_*` env vars /
 `singleBinary` `extraEnvFrom`) is unchanged.
 
+The same step also mints the **OpenBao backup key** (`<prefix>-openbao-backup-<region>`,
+`read_write` on the `openbao-backup` bucket and nothing else) into
+`secret/obj/openbao-backup`, with `BUCKET`/`ENDPOINT` beside it so the in-cluster backup
+CronJob needs no per-env patch. It is a rotation-table entry, so the reconciler's
+`linode-creds` lane rotates it with the platform key. See
+[runbooks/openbao-backup-restore](../runbooks/openbao-backup-restore.md).
+
 ### Step: Mint + seed the in-cluster Linode PAT
 
 Same one-owner shape as the object-storage keys: `llz ci mint-bootstrap-pat` mints the
@@ -626,6 +633,32 @@ so the operator can decide whether to delete+recreate the affected workloads
 fail the workflow — the reclaim policy is the residual exposure, and whether the data
 is encrypted depends on the class it landed on, which `llz ci health` reports from the
 live parameters.
+
+### Step: (e2e) assert OpenBao backup restores (drill)
+
+`llz ci assert-openbao-restore` — release-e2e only (`assert_loki`), and the gate for
+OpenBao backup **and** restore. It writes a canary into OpenBao, runs a Job built from
+the `openbaoBackup` CronJob (so the real ServiceAccount, `openbao-backup` role and
+policy, mTLS identity, NetworkPolicy, chart `allowedClientPods` entry and bucket key are
+all exercised), fetches the exact snapshot that Job reports uploading through a
+temporary read-only bucket key, overwrites the canary, restores the snapshot through the
+same `baosnap.Fetch`/`Inspect`/`Apply` that `llz openbao restore` calls, and fails unless
+the canary reads back its snapshotted value. Self-skips when the component is disabled.
+
+**What stays green without it:** everything. The carved `llz-openbao-backup` App goes
+Healthy the moment the CronJob object exists; converge sees no Job until the first
+six-hourly tick; and a bucket full of objects says nothing about whether OpenBao will
+take one back. A backup that cannot restore is indistinguishable from a working one
+until the day it is needed.
+
+**Why here and not in the assert suite:** a Raft restore needs `update` on
+`sys/storage/raft/snapshot`, which no in-cluster role holds by design, and this job
+revokes its root token in the very next step — the same reason `assert-database` sits
+here. It restores the **live** e2e store in place, to state seconds old; that is
+acceptable only on a throwaway cluster, which is why it is not part of any instance's
+scheduled checks. The drill Job is owned by the CronJob, so its success supersedes a
+scheduled tick that failed earlier in bootstrap (before the role existed) in
+converge's failed-Job check.
 
 ### Step: Revoke root token
 

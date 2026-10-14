@@ -331,7 +331,9 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
 `cidrFirewall`, `broadPatRotator` (requires `externalSecrets`),
-`llzReconciler` (requires `observability`), `clusterHealthWorkflow`
+`llzReconciler` (requires `observability`), `openbaoBackup` (requires `openbao` +
+`observability`; the scheduled OpenBao Raft snapshot — see
+[runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md)), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not

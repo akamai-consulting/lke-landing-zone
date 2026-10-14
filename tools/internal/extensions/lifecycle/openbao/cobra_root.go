@@ -66,8 +66,60 @@ func OpenbaoCmd() *cobra.Command {
 		execCmd,
 		OpenbaoLoginCmd(),
 		RegenRootCmd(),
+		BackupsCmd(),
+		RestoreCmd(),
 	)
 	return s
+}
+
+// BackupsCmd is `llz openbao backups`.
+func BackupsCmd() *cobra.Command {
+	var region string
+	c := &cobra.Command{
+		Use:   "backups --region <deployment>",
+		Short: "list a deployment's OpenBao Raft snapshots in object storage (newest first)",
+		Long: "Lists the snapshots the openbaoBackup CronJob wrote for --region, newest first, with\n" +
+			"each one's age and the OpenBao cluster id it was taken from. Reads the bucket through a\n" +
+			"temporary read-only key minted from LINODE_API_TOKEN (deleted on exit) — not through\n" +
+			"OpenBao, which may be the thing that is gone. Run from the instance repo root.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return RunBackups(region) },
+	}
+	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose snapshots to list (required)")
+	return c
+}
+
+// RestoreCmd is `llz openbao restore`.
+func RestoreCmd() *cobra.Command {
+	var o RestoreOpts
+	c := &cobra.Command{
+		Use:   "restore --region <deployment> (--snapshot <key> | --latest) [--yes --confirm restore:<deployment>] [--force]",
+		Short: "restore a deployment's OpenBao from a Raft snapshot (dry run unless --yes)",
+		Long: "REPLACES THE WHOLE STORE of the OpenBao your kube-context points at with a snapshot from\n" +
+			"--region's backup bucket. Fetches the snapshot through a temporary read-only key\n" +
+			"(LINODE_API_TOKEN), verifies the archive, finds the active pod (openbao-active=true) and\n" +
+			"reports what it would do. With --yes --confirm restore:<deployment> it restores, using\n" +
+			"OPENBAO_ROOT_TOKEN (regenerate with `llz openbao regen-root`), and waits for OpenBao to\n" +
+			"come back unsealed.\n" +
+			"\n" +
+			"A snapshot from a DIFFERENT cluster (a rebuilt one — or the other half of an HA pair) is\n" +
+			"refused without --force. The cluster must hold the same static seal key\n" +
+			"(OPENBAO_SEAL_KEY) the snapshot's cluster used. HA pairs are restored one deployment at\n" +
+			"a time; see docs/runbooks/openbao-backup-restore.md.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// --yes is the global flag (as for `llz openbao set`), not a local one.
+			o.Yes = cliopts.Global.Yes
+			return RunRestore(o)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&o.Region, "region", "", "deployment (spec env name) whose snapshot to restore (required)")
+	f.StringVar(&o.Snapshot, "snapshot", "", "snapshot key, as printed by 'llz openbao backups'")
+	f.BoolVar(&o.Latest, "latest", false, "restore the newest snapshot (must be asked for explicitly)")
+	f.BoolVar(&o.Force, "force", false, "restore a snapshot taken by a different OpenBao cluster (a rebuild)")
+	f.StringVar(&o.Confirm, "confirm", "", "must be exactly restore:<deployment> to execute")
+	return c
 }
 func OpenbaoLoginCmd() *cobra.Command {
 	var o TeamLoginOpts

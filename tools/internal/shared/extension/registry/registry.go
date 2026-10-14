@@ -101,6 +101,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbaobackup"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/promote"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconcilelanes"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
@@ -137,6 +138,7 @@ var declarations = []func() extension.Extension{
 	configreadiness.Extension,
 	converge.Extension,
 	openbao.Extension,
+	openbaobackup.Extension,
 	harbor.Extension,
 	identityconfig.Extension,
 	reconciler.Extension,
@@ -273,7 +275,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// forty-one of the seventy-five — half of them: `assert-storage` lives in assertions/volumes,
+// forty-one of the seventy-six — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

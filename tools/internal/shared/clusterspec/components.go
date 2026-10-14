@@ -443,6 +443,32 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-reconciler", AppWave: 5, Namespace: "llz-reconciler"},
 	},
 	{
+		// Scheduled OpenBao backup — the openbao-backup CronJob (`llz ci
+		// openbao-backup`) snapshots the Raft store every six hours into this
+		// deployment's openbao-backup bucket and prunes to the newest 28, plus the
+		// PrometheusRule that alerts when it stops. OpenBao is the one piece of
+		// platform state nothing can re-derive, so this is DEFAULT-ON: an instance
+		// opts out of backups explicitly, never by omission.
+		//
+		// DependsOn openbao (it is what is backed up) and observability (the
+		// PrometheusRule CRD, and the staleness alert is the only thing that makes a
+		// stopped backup visible before the day it is needed). Not externalSecrets:
+		// the CronJob reads its bucket key from OpenBao directly under its own role.
+		//
+		// UPGRADING AN EXISTING DEPLOYMENT needs three things the CronJob cannot do
+		// for itself: apply the object-storage root (creates the bucket), re-run
+		// bootstrap-openbao.yml (writes the openbao-backup policy/role and seeds the
+		// key), and the chart's allowedClientPods entry (llz-openbao-platform
+		// 0.1.34). Until then every tick fails, converge reports the failed Job, and
+		// LLZOpenBaoBackupNeverSucceeded fires — loud, by design.
+		Name:              "openbaoBackup",
+		DependsOn:         []string{"openbao", "observability"},
+		ManifestResources: []string{"openbao-backup"},
+		// Its own health-inert Application, like the rotator: a failing backup must
+		// fail its own App, never platform-bootstrap. Wave 5, after OpenBao.
+		CarvedApp: &CarvedApp{AppName: "llz-openbao-backup", AppWave: 5, Namespace: "llz-openbao-backup"},
+	},
+	{
 		// ON-DEMAND cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
 		// running `llz ci health-incluster` (kubectl-free) on the slim llz image. It
 		// authenticates with the workflow pod's ServiceAccount (read-only RBAC), so it

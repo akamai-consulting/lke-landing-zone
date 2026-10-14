@@ -1,0 +1,54 @@
+# Alerts that make a stopped backup loud. A backup that silently stops is
+# indistinguishable from one that works until the day a restore is needed, so the
+# signal is FRESHNESS — when did the CronJob last succeed — not the presence of a
+# Job or of objects in the bucket (the bucket keeps its history for seven days
+# after the producer dies).
+#
+# Inputs are kube-state-metrics series (kube-prometheus-stack ships it), so no
+# exporter is added for this.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llz-openbao-backup-alerts
+  namespace: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system}. Without it the rule is never loaded.
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: llz-openbao-backup
+      interval: 60s
+      rules:
+        - alert: LLZOpenBaoBackupStale
+          # Two missed six-hourly ticks plus slack. One miss is a blip (a node
+          # drain, an object-storage hiccup); two is a producer that is not
+          # producing.
+          expr: time() - max(kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"}) > 13 * 3600
+          for: 15m
+          labels:
+            severity: warning
+            service: openbao-backup
+          annotations:
+            summary: OpenBao has not been backed up for over 13 hours
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/openbao-backup-restore.md"
+            description: The openbao-backup CronJob's last successful run is older than two schedule intervals. Every hour this persists is an hour of OpenBao writes with no restore point.
+        - alert: LLZOpenBaoBackupNeverSucceeded
+          # The case the rule above cannot see: a CronJob that has NEVER
+          # succeeded has no last-successful-time series at all, and a threshold
+          # over an absent series never evaluates. Fires when the CronJob exists
+          # but that series does not.
+          expr: |
+            count(kube_cronjob_info{namespace="llz-openbao-backup",cronjob="openbao-backup"}) > 0
+            unless on() kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"}
+          for: 13h
+          labels:
+            severity: warning
+            service: openbao-backup
+          annotations:
+            summary: OpenBao backups have never succeeded on this cluster
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/openbao-backup-restore.md"
+            description: The openbao-backup CronJob has existed for over 13 hours without a single successful run. Common causes are a deployment configured before the openbao-backup role existed (re-run bootstrap-openbao) or a backup bucket that was never applied.

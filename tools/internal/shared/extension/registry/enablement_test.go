@@ -154,6 +154,10 @@ func TestComponentLinksArePinned(t *testing.T) {
 		// initialising the store, exchanging peer CAs and seeding into it all
 		// presuppose the store the component installs
 		"openbao": "openbao",
+		// the producer IS the CronJob the component deploys, and the drill
+		// exercises that CronJob — with the component off there is nothing to
+		// back up with and nothing to drill
+		"openbao-backup": "openbaoBackup",
 	}
 	got := ComponentLinks()
 	for name, comp := range want {

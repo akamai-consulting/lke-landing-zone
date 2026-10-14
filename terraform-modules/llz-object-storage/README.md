@@ -1,7 +1,7 @@
 # `object-storage`
 
-Linode Object Storage buckets for a platform's container registry and log
-storage. **Buckets only** — the scoped access keys are NOT Terraform-managed.
+Linode Object Storage buckets for a platform's container registry, log
+storage, and OpenBao Raft snapshots. **Buckets only** — the scoped access keys are NOT Terraform-managed.
 
 > **MAJOR interface change (SemVer):** earlier releases minted the Loki/Harbor
 > scoped keys here with a 120-day `time_rotating` clock and exported them as
@@ -33,7 +33,11 @@ setting values instead of copying YAML. The operational scars travel with the mo
 
 | Resource | Count | Notes |
 |---|---|---|
-| `linode_object_storage_bucket` | 4 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>` |
+| `linode_object_storage_bucket` | 5 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>` |
+
+The `openbao-backup` bucket holds OpenBao Raft snapshots (barrier-encrypted
+ciphertext). It is its own bucket so the llz-minted backup key can be scoped to
+it alone — see [`docs/runbooks/openbao-backup-restore.md`](../../docs/runbooks/openbao-backup-restore.md).
 
 ## Inputs
 
@@ -45,7 +49,7 @@ setting values instead of copying YAML. The operational scars travel with the mo
 
 ## Outputs
 
-`bucket_names`, `harbor_registry_bucket`, `s3_endpoint`.
+`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `s3_endpoint`.
 
 ## Provider
 

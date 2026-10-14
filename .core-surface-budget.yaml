@@ -1658,7 +1658,14 @@ categories:
     #                       TokenRequests under a declaration that cannot create
     #                       Keycloak users — login-smoke's Writer can. The lane
     #                       logic is in assertions/assertidentity, unit-tested.
-    budget: 1954
+    #   1,955 / 129 files  +1 the import of lifecycle/openbaobackup, whose two verbs
+    #                       (`llz ci openbao-backup`, the CronJob's, and `llz ci
+    #                       assert-openbao-restore`, the restore drill) ride an
+    #                       existing AddCommand line. The extension builds its own
+    #                       handles from its declaration (deps.go), so no installer
+    #                       landed here; backup, restore and drill logic are in
+    #                       openbaobackup and shared/baosnap, unit-tested.
+    budget: 1955
     exact: true
     include:
       - "tools/internal/cli/*.go"

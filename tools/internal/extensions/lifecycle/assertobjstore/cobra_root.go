@@ -66,12 +66,10 @@ func runCIVerifyObjectStorage(region string) error {
 	for _, b := range buckets {
 		have[cli.AsString(b["label"])] = true
 	}
-	want := []string{
-		prefix + "-loki-chunks-" + region,
-		prefix + "-loki-ruler-" + region,
-		prefix + "-loki-admin-" + region,
-		prefix + "-harbor-registry-" + region,
-	}
+	// Every bucket the module creates, from the one list — this literal had four
+	// entries when the openbao-backup bucket arrived, so a deployment missing it
+	// would have passed here and failed at its first key mint.
+	want := clusterspec.ObjBucketLabels(prefix, region)
 	var missing []string
 	for _, label := range want {
 		if !have[label] {
@@ -80,11 +78,11 @@ func runCIVerifyObjectStorage(region string) error {
 	}
 	if len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "::error::object-storage bucket(s) not found on Linode for %s: %s\n", region, strings.Join(missing, " "))
-		fmt.Fprintln(os.Stderr, "The Loki/Harbor buckets are absent — the key mint below would fail and Loki/Harbor would have no object store. Remediate:")
+		fmt.Fprintln(os.Stderr, "Buckets are absent — the key mint below would fail, and Loki/Harbor would have no object store or OpenBao nowhere to write backups. Remediate:")
 		fmt.Fprintf(os.Stderr, "  gh workflow run terraform.yml -f action=apply -f module=object-storage -f region=%s\n", region)
 		fmt.Fprintf(os.Stderr, "  gh workflow run bootstrap-openbao.yml -f region=%s\n", region)
 		return fmt.Errorf("object-storage preflight failed: %d bucket(s) missing for %s", len(missing), region)
 	}
-	fmt.Printf("object-storage preflight OK for %s: all four buckets exist on Linode.\n", region)
+	fmt.Printf("object-storage preflight OK for %s: all %d buckets exist on Linode.\n", region, len(want))
 	return nil
 }

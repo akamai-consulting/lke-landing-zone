@@ -1,0 +1,7 @@
+# spec.components.openbaoBackup → this kustomize Component: the scheduled OpenBao
+# Raft snapshot (the openbao-backup CronJob) and the alerts that say when it stops.
+# Template-managed. See docs/runbooks/openbao-backup-restore.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - openbao-backup

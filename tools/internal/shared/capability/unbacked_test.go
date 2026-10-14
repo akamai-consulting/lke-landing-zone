@@ -108,10 +108,16 @@ var unbackedGrants = map[string]bool{
 	// allowedSeamCalls) and takes only .BaoAdmin from capability.For, so its
 	// cluster-write has no visible Writer. It was never backed; the marker said it
 	// was.
-	"identityconfig/ClusterWrite":   true,
-	"kyverno/ClusterWrite":          true,
-	"openbao/CloudMutate":           true,
-	"openbao/ClusterWrite":          true,
+	"identityconfig/ClusterWrite": true,
+	"kyverno/ClusterWrite":        true,
+	// openbao/CloudMutate WAS HERE AND IS PAID DOWN: `llz openbao restore` mints
+	// its temporary bucket key through capability.CloudFor(restore binding).
+	"openbao/ClusterWrite": true,
+	// The restore drill's custody is a ROOT token used over a port-forward: the
+	// restore endpoint needs `update` on sys/storage/raft/snapshot, which no
+	// Custodian operation expresses. (Its cloud grant IS backed — CloudFor on the
+	// drill binding, in deps.go.)
+	"openbaobackup/SecretCustody":   true,
 	"openbao/SecretCustody":         true,
 	"reconcilelanes/CloudMutate":    true,
 	"reconcilelanes/SecretCustody":  true,

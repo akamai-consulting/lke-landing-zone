@@ -1385,7 +1385,10 @@ jobs:
           github-token:          ${{ github.token }}
 
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
-      # destroy with "bucket is not empty" — drain first. Uses s5cmd (static Go
+      # destroy with "bucket is not empty" — drain first. SINGLE_BUCKETS are the
+      # one-bucket outputs (Harbor registry, OpenBao Raft snapshots); an output an
+      # older module version never wrote reads empty and is skipped. Destroying
+      # object-storage therefore deletes this deployment's OpenBao backups too. Uses s5cmd (static Go
       # binary) because TF_IMAGE ships neither awscli nor python+pip. Tolerant by
       # design: a failed drain only warns, and TF destroy then names the bucket.
       - name: Drain S3 buckets before destroy
@@ -1471,8 +1474,8 @@ jobs:
             bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
             [ -n "$bucket" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$bucket"
           done
-          HARBOR_BUCKET="$(read_output harbor_registry_bucket)"
-          [ -n "$HARBOR_BUCKET" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$HARBOR_BUCKET"
+          SINGLE_BUCKETS="$(read_output harbor_registry_bucket) $(read_output openbao_backup_bucket)"
+          for b in $SINGLE_BUCKETS; do BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$b"; done
           if [ -z "$BUCKET_LIST" ]; then
             echo "no buckets left in state — nothing to drain."
             exit 0
@@ -1485,12 +1488,12 @@ jobs:
           TEMP_SK="$(grep '^TEMP_OBJKEY_SECRET=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
           mask "$TEMP_SK"
 
-          # Loki — 3 buckets; Harbor registry — 1. All under the temp key.
+          # Loki — 3 buckets; Harbor registry — 1; OpenBao backups — 1. All under the temp key.
           for b in chunks ruler admin; do
             bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
             drain_bucket "loki/$b" "$TEMP_AK" "$TEMP_SK" "$bucket"
           done
-          drain_bucket "harbor-registry" "$TEMP_AK" "$TEMP_SK" "$HARBOR_BUCKET"
+          for b in $SINGLE_BUCKETS; do drain_bucket "$b" "$TEMP_AK" "$TEMP_SK" "$b"; done
 
           echo "drain pass complete."
 

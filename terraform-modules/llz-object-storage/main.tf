@@ -76,6 +76,31 @@ resource "linode_object_storage_bucket" "loki_admin" {
   label       = "${var.label_prefix}-loki-admin-${var.region_suffix}"
 }
 
+# ── OpenBao Raft snapshot bucket ──────────────────────────────────────────────
+# Holds the scheduled `bao operator raft snapshot` archives the openbaoBackup
+# CronJob writes (`llz ci openbao-backup`), and is what `llz openbao restore`
+# reads back. A SEPARATE bucket, not a prefix inside a Loki/Harbor one, because
+# Linode Object Storage scopes keys per BUCKET: only a dedicated bucket lets the
+# backup key (`<prefix>-openbao-backup-<suffix>`, minted by llz, never by
+# Terraform) reach the snapshots and nothing else, and keeps the broad platform
+# key — which apl-core hands to Loki and Harbor — from being able to delete them.
+#
+# Confidentiality does NOT rest on this bucket being private (it is, like every
+# bucket here): a snapshot is ciphertext under OpenBao's barrier keyring, which
+# only the deployment's static seal key (OPENBAO_SEAL_KEY) can unwrap. Linode OBJ
+# offers no managed keys, and none are needed for that. What the bucket DOES leak
+# to someone holding it is storage METADATA — see docs/runbooks/openbao-backup-restore.md.
+#
+# Label infix `openbao-backup` (16 chars with its hyphens) is deliberately no
+# longer than `-harbor-registry-` (17), the infix clusterspec's label-length
+# validation budgets for — a longer one would silently reject instance/deployment
+# name pairs that validate today.
+resource "linode_object_storage_bucket" "openbao_backup" {
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-openbao-backup-${var.region_suffix}"
+}
+
 # NOTE — the gitea_backup bucket + key + outputs were removed in the
 # apl-core anti-pattern cleanup. The off-cluster gitea backup integration
 # was blocked by apl-core's list-REPLACE behaviour on _rawValues.

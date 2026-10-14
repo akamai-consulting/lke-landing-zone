@@ -5,6 +5,10 @@ values change — `publish-charts.yml` pushes a chart only when its version is
 not already in the registry, and never overwrites a tag, so an unbumped change
 is silently never published.
 
+## 0.1.34
+
+Admit the OpenBao backup CronJob: a `platform.networkPolicy.allowedClientPods` entry for `llz-openbao-backup/openbao-backup`, the pod that streams scheduled Raft snapshots from the active node (`llz ci openbao-backup`, `spec.components.openbaoBackup`). Without it the pod's Kubernetes-auth login is dropped at L4 by `openbao-default-deny` and every backup fails on a TCP timeout. Additive; no other rendered change.
+
 ## 0.1.33
 
 Documentation only — the per-version history moved out of `Chart.yaml`

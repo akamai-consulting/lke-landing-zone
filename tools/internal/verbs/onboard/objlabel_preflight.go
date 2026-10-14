@@ -31,6 +31,7 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/color"
 )
 
@@ -53,12 +54,7 @@ var bucketPreflightClient = func() bucketLister {
 // objBucketLabels are the labels the object-storage root will create for a
 // deployment, in the order the module creates them.
 func objBucketLabels(prefix, env string) []string {
-	return []string{
-		prefix + "-loki-chunks-" + env,
-		prefix + "-loki-ruler-" + env,
-		prefix + "-loki-admin-" + env,
-		prefix + "-harbor-registry-" + env,
-	}
+	return clusterspec.ObjBucketLabels(prefix, env)
 }
 
 // checkBucketLabelsAvailable reports labels this instance intends to create that

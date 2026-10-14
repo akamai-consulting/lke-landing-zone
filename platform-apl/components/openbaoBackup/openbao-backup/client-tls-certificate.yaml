@@ -1,0 +1,33 @@
+# The CLIENT half of this workload's mTLS to OpenBao — the identity the listener's
+# tls_require_and_verify_client_cert demands (ADR 0010). The SERVER half, the
+# openbao-ca root it verifies OpenBao against, is openbao-ca-bundle.yaml beside it.
+# Two Certificates from two different roots, deliberately; see
+# components/certManagerBootstrapCA/llz-client-ca.yaml.
+#
+# Wave -14: after the llz-client-ca / openbao-ca ClusterIssuers (-15), before the
+# CronJob's first schedule.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openbao-backup-client-tls
+  namespace: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: openbao-backup-client-tls
+  commonName: openbao-backup
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["openbao-backup"]
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer

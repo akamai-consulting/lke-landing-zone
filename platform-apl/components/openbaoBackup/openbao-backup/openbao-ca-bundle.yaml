@@ -1,0 +1,26 @@
+# OpenBao CA bundle for this namespace — what lets the backup Job VERIFY OpenBao's
+# serving certificate. A throwaway leaf from the openbao-ca ClusterIssuer: only the
+# `ca.crt` cert-manager stamps onto its Secret is used (mounted at /etc/openbao-ca).
+# Same pattern, and the same reasons, as every other OpenBao consumer namespace —
+# see components/broadPatRotator/broad-pat-rotator/openbao-ca-bundle.yaml.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openbao-ca-bundle
+  namespace: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  secretName: openbao-ca-bundle
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  # Placeholder — this leaf is never presented to anything. Only ca.crt is read.
+  dnsNames:
+    - openbao-ca-bundle.llz-openbao-backup.svc.cluster.local
+  issuerRef:
+    name: openbao-ca
+    kind: ClusterIssuer
