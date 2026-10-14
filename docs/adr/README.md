@@ -26,6 +26,7 @@ command/flag check for exactly that reason, and still checks the links.)
 | [0012](0012-credential-observability-gaps.md) | Credential observability gaps | 2026-07-30 | Accepted |
 | [0013](0013-llz-as-apl-cli.md) | Reframe LLZ as the APL CLI: one binary, two altitudes | 2026-07-24 | Proposed |
 | [0014](0014-core-surface-budget.md) | The core-surface budget: cap the destination, not just the source | 2026-08-03 | Accepted |
+| [0015](0015-openbao-seal-and-recovery-custody.md) | Get OpenBao seal and recovery key material out of GitHub | 2026-10-14 | Proposed |
 
 ## ⚠️ Two ADRs share the number 0007
 
