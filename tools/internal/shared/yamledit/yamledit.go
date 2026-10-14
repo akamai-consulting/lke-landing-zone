@@ -166,6 +166,58 @@ func SetSpecPath(doc *yaml.Node, dotted, value string) error {
 	return nil
 }
 
+// SetSpecPathNode sets spec.<dotted> to a whole YAML subtree (a mapping or
+// sequence parsed from a file) rather than a scalar — the route for structured
+// fields like spec.openbao that no `path=value` pair can spell. Replaces an
+// existing value in place so the key's comment survives.
+func SetSpecPathNode(doc *yaml.Node, dotted string, value *yaml.Node) error {
+	keys := strings.Split(dotted, ".")
+	if dotted == "" || keys[0] == "" {
+		return fmt.Errorf("empty path")
+	}
+	if value == nil {
+		return fmt.Errorf("spec.%s: empty value", dotted)
+	}
+	cur := childMapping(doc.Content[0], "spec")
+	for _, k := range keys[:len(keys)-1] {
+		next := childMapping(cur, k)
+		if next == nil {
+			return fmt.Errorf("path %q crosses a non-mapping at %q", dotted, k)
+		}
+		cur = next
+	}
+	leaf := keys[len(keys)-1]
+	for i := 0; i+1 < len(cur.Content); i += 2 {
+		if cur.Content[i].Value == leaf {
+			cur.Content[i+1] = value
+			return nil
+		}
+	}
+	cur.Content = append(cur.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: leaf}, value)
+	return nil
+}
+
+// FileValueNode reads a `path=@file` value: the YAML document in file, as the
+// node to set. ok=false when value does not start with "@" (a plain scalar).
+func FileValueNode(value string) (node *yaml.Node, ok bool, err error) {
+	file, isFile := strings.CutPrefix(value, "@")
+	if !isFile {
+		return nil, false, nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, true, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, true, fmt.Errorf("parse %s: %w", file, err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil, true, fmt.Errorf("%s holds no YAML document", file)
+	}
+	return doc.Content[0], true, nil
+}
+
 // childMapping returns the mapping value for key under m, creating an empty
 // mapping if absent. Returns nil if key exists but isn't a mapping.
 func childMapping(m *yaml.Node, key string) *yaml.Node {

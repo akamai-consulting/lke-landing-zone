@@ -13,7 +13,7 @@ import (
 )
 
 func TestBaoConfigureStepsShape(t *testing.T) {
-	steps := baoConfigureSteps("acme/platform", "", nil)
+	steps := baoConfigureSteps("acme/platform", "", nil, clusterspec.OpenBaoExtensions{})
 	if len(steps) != 19 {
 		t.Fatalf("got %d steps, want 19 (15 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
@@ -26,7 +26,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("", "", nil)); n != 15 {
+	if n := len(baoConfigureSteps("", "", nil, clusterspec.OpenBaoExtensions{})); n != 15 {
 		t.Errorf("no-repo configure should omit JWT steps: got %d, want 15", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
@@ -87,7 +87,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 // the reconciler can't reach mesh-protected harbor-core from the llz-reconciler namespace.
 func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 	var reconcilerFound, harborRoleFound bool
-	for _, s := range baoConfigureSteps("acme/platform", "", nil) {
+	for _, s := range baoConfigureSteps("acme/platform", "", nil, clusterspec.OpenBaoExtensions{}) {
 		if len(s.args) < 2 || s.args[0] != "write" {
 			continue
 		}
@@ -128,7 +128,7 @@ func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 // fail incidentally) so a regression to key=value args trips a clear message.
 func TestBaoConfigureJWTBoundClaimsIsMap(t *testing.T) {
 	roles := 0
-	for _, s := range baoConfigureSteps("acme/platform", "", nil) {
+	for _, s := range baoConfigureSteps("acme/platform", "", nil, clusterspec.OpenBaoExtensions{}) {
 		if !(len(s.args) >= 2 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/")) {
 			continue
 		}
@@ -219,10 +219,10 @@ func TestKeycloakTeamSteps(t *testing.T) {
 	issuer := "https://keycloak.example/realms/otomi"
 	// No issuer or no teams → no steps, so a domain-less or team-less instance is
 	// byte-identical to before.
-	if s := keycloakTeamSteps("", []clusterspec.Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap"}}); s != nil {
+	if s := keycloakTeamSteps("", []clusterspec.Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap"}}, clusterspec.OpenBaoExtensions{}); s != nil {
 		t.Errorf("no issuer must yield no steps, got %d", len(s))
 	}
-	if s := keycloakTeamSteps(issuer, nil); s != nil {
+	if s := keycloakTeamSteps(issuer, nil, clusterspec.OpenBaoExtensions{}); s != nil {
 		t.Errorf("no teams must yield no steps, got %d", len(s))
 	}
 
@@ -230,7 +230,7 @@ func TestKeycloakTeamSteps(t *testing.T) {
 		{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
 		{Name: "web", OpenbaoSubtree: "secret/web"},
 	}
-	steps := keycloakTeamSteps(issuer, teams)
+	steps := keycloakTeamSteps(issuer, teams, clusterspec.OpenBaoExtensions{})
 	if len(steps) != 6 { // enable + config + (policy+role)*2
 		t.Fatalf("got %d steps, want 6", len(steps))
 	}
@@ -333,7 +333,7 @@ func TestESOTeamReaderPolicies(t *testing.T) {
 		{Name: "web", OpenbaoSubtree: "secret/web"},
 	}
 	// No keycloak issuer on purpose — the reader wiring must still be emitted.
-	steps := baoConfigureSteps("acme/platform", "", teams)
+	steps := baoConfigureSteps("acme/platform", "", teams, clusterspec.OpenBaoExtensions{})
 
 	// role/eso EXACTLY — not role/eso-pusher, which shares the prefix.
 	esoRolePolicies := func(all []baoConfigStep) string {
@@ -381,7 +381,7 @@ func TestESOTeamReaderPolicies(t *testing.T) {
 
 	// No teams → eso role is exactly platform-ci and no reader policies emitted, so
 	// a team-less instance is byte-identical to before.
-	nilSteps := baoConfigureSteps("acme/platform", "", nil)
+	nilSteps := baoConfigureSteps("acme/platform", "", nil, clusterspec.OpenBaoExtensions{})
 	for _, s := range nilSteps {
 		if len(s.args) >= 3 && s.args[0] == "policy" && s.args[1] == "write" && strings.HasSuffix(s.args[2], "-reader") {
 			t.Errorf("team-less instance emitted a reader policy: %s", s.args[2])
@@ -641,7 +641,7 @@ func TestManagedDomainFromIssuer(t *testing.T) {
 // full e2e run to surface.
 func TestKeycloakAuthConfigDoesNotPinACustomCA(t *testing.T) {
 	steps := keycloakTeamSteps("https://keycloak.lke1.akamai-apl.net/realms/otomi",
-		[]clusterspec.Team{{Name: "platform", OpenbaoSubtree: "secret/platform"}})
+		[]clusterspec.Team{{Name: "platform", OpenbaoSubtree: "secret/platform"}}, clusterspec.OpenBaoExtensions{})
 	if len(steps) == 0 {
 		t.Fatal("no steps built")
 	}

@@ -23,6 +23,11 @@ type Deps struct {
 	// the general exec seam, which could equally have run `delete namespace` or
 	// `exec ... -- sh -c`.
 	Writer capability.Writer
+	// ExtWriter is the openbao-extensions binding's Writer — the role lane's one
+	// mutation is a short-lived TokenRequest. Separate from Writer so that lane
+	// mutates under ITS declaration, not under login-smoke's (which may also
+	// create Keycloak users).
+	ExtWriter capability.Writer
 	// Exec captures a command's stdout.
 	Exec func(name string, args ...string) ([]byte, error)
 
@@ -129,4 +134,12 @@ func (d Deps) W() capability.Writer {
 		return capability.Denied()
 	}
 	return d.Writer
+}
+
+// ExtW is W for the openbao-extensions binding.
+func (d Deps) ExtW() capability.Writer {
+	if d.ExtWriter == nil {
+		return capability.Denied()
+	}
+	return d.ExtWriter
 }

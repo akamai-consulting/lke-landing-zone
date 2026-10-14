@@ -21,8 +21,9 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `assert-identity` declaration.
 //
-//	assertion:verified   "certificates" [cluster-read]
-//	transition:converged "login-smoke"  [cluster-read, cluster-write, secret-read]
+//	assertion:verified   "certificates"       [cluster-read]
+//	transition:converged "login-smoke"        [cluster-read, cluster-write, secret-read]
+//	transition:converged "openbao-extensions" [cluster-read, cluster-write]
 //
 // FIVE FOR FIVE ON HIDDEN MUTATIONS. Grepping for writes before declaring is
 // settled practice now, and it paid again: the smoke lane CREATES a Keycloak
@@ -75,6 +76,20 @@ func Extension() extension.Extension {
 					extension.ClusterWrite,
 					extension.SecretRead,
 				},
+			},
+			{
+				// spec.openbao kubernetes roles, as their consumers log in. Its one
+				// write is a 10-minute TokenRequest for each bound service account —
+				// the only way to log in AS that account — so cluster-write, and
+				// nothing else: no Keycloak, no Secrets. Separate from login-smoke
+				// so a weekly scheduled check does not run with the power to create
+				// Keycloak users. A transition rather than an assertion for the same
+				// reason login-smoke is one: an assertion may hold only read grants,
+				// and logging in AS a service account takes a write.
+				Kind:   extension.Transition,
+				Name:   "openbao-extensions",
+				State:  extension.Converged,
+				Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
 			},
 		},
 	}

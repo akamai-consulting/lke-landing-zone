@@ -70,7 +70,7 @@ func TestForgeFailureStillConfiguresKeycloakTeamAuth(t *testing.T) {
 	}
 
 	teams := []clusterspec.Team{{Name: "payments"}}
-	steps := baoConfigureSteps("acme/instance", "https://keycloak.example.com/realms/otomi", teams)
+	steps := baoConfigureSteps("acme/instance", "https://keycloak.example.com/realms/otomi", teams, clusterspec.OpenBaoExtensions{})
 
 	var sawKeycloakMount, sawTeamPolicy, sawJWTRole bool
 	for _, s := range steps {
@@ -98,7 +98,7 @@ func TestForgeFailureStillConfiguresKeycloakTeamAuth(t *testing.T) {
 // keep producing both halves.
 func TestForgeSuccessStillConfiguresBoth(t *testing.T) {
 	teams := []clusterspec.Team{{Name: "payments"}}
-	steps := baoConfigureSteps("acme/instance", "https://keycloak.example.com/realms/otomi", teams)
+	steps := baoConfigureSteps("acme/instance", "https://keycloak.example.com/realms/otomi", teams, clusterspec.OpenBaoExtensions{})
 	var sawJWTRole, sawTeamPolicy bool
 	for _, s := range steps {
 		joined := strings.Join(s.args, " ")

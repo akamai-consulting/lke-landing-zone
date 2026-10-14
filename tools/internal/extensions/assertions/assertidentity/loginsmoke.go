@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/keycloak"
@@ -92,6 +94,8 @@ func runTeamLoginSmoke(region, teamFlag string) error {
 	// / bao-configure) so the e2e team-write gate passes for teamless instances.
 	if len(caps.SpecTeams()) == 0 {
 		fmt.Println("No spec.teams declared — nothing to validate (team-login smoke skipped).")
+		// spec.openbao operators need a team, and the validator refuses an operator
+		// that is not a spec.teams name; kubernetes roles have their own lane.
 		return nil
 	}
 	base, team, subtree, err := smokeTargets(region, teamFlag)
@@ -333,6 +337,16 @@ func runTeamLoginSmoke(region, teamFlag string) error {
 		fmt.Printf("✓ platform-admin (%s) wrote %s without team-%s membership\n", adminRole, aPath, team)
 	}
 
+	// spec.openbao operator grants, checked with the team's own login token (see
+	// openbaoext.go). The kubernetes roles are the assert-openbao-extensions lane.
+	ext, err := specOpenBao()
+	if err != nil {
+		return err
+	}
+	if err := runOperatorChecks(ctx, addr, team, token, ext); err != nil {
+		return err
+	}
+
 	fmt.Printf("SMOKE PASS: team %q — device-identity login → scoped write OK, out-of-subtree denied, platform-admin write OK.\n", team)
 	return nil
 }
@@ -359,7 +373,12 @@ const esoServiceAccount = "external-secrets"
 // output-capturing shell-out — this is not one of the interactive/stdin call
 // sites that deliberately keep calling os/exec directly.
 func mintServiceAccountToken(ns, sa string) (string, error) {
-	out, err := caps.W().CreateToken(ns, sa, "10m")
+	return mintServiceAccountTokenVia(caps.W(), ns, sa)
+}
+
+// mintServiceAccountTokenVia mints through the given binding's Writer.
+func mintServiceAccountTokenVia(w capability.Writer, ns, sa string) (string, error) {
+	out, err := w.CreateToken(ns, sa, "10m")
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return "", fmt.Errorf("kubectl create token %s/%s: %s", ns, sa, strings.TrimSpace(string(ee.Stderr)))
@@ -426,4 +445,39 @@ func checkAplCoreLookup(k *kc) error {
 		return fmt.Errorf("apl-core realm reconcile is deadlocked on a nameless client — APL console users are not reaching Keycloak; `llz ci keycloak-configure --region <region>` names the clients llz owns")
 	}
 	return nil
+}
+
+// specOpenBao loads spec.openbao from the instance. An unreadable spec is an
+// error here: the team half of the smoke already required it.
+func specOpenBao() (clusterspec.OpenBaoExtensions, error) {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return clusterspec.OpenBaoExtensions{}, fmt.Errorf("load spec for spec.openbao checks: %w", err)
+	}
+	return lz.Spec.OpenBao, nil
+}
+
+// runAssertOpenBaoExtensions is `llz ci assert-openbao-extensions`: the
+// kubernetes-role half of the spec.openbao checks against the cluster kubectl
+// points at. No spec, or no roles declared, is a clean skip; a spec that exists
+// but cannot be read is an error, never "nothing declared".
+func runAssertOpenBaoExtensions(requireBound bool) error {
+	lz, err := clusterspec.LoadInstance(".")
+	if errors.Is(err, clusterspec.ErrNoSpec) {
+		fmt.Println("No landingzone.yaml — spec.openbao checks skipped.")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load spec for spec.openbao checks: %w", err)
+	}
+	if len(lz.Spec.OpenBao.KubernetesRoles) == 0 {
+		fmt.Println("No spec.openbao.kubernetesRoles declared — nothing to verify.")
+		return nil
+	}
+	addr, cleanup, err := caps.PortForwardOpenbao()
+	if err != nil {
+		return fmt.Errorf("port-forward to OpenBao for the spec.openbao checks: %w", err)
+	}
+	defer cleanup()
+	return runRoleChecks(context.Background(), addr, lz.Spec.OpenBao, requireBound)
 }

@@ -1,0 +1,37 @@
+# spec.openbao fixture for the e2e lane (e2e-instantiate.yml → `llz spec set
+# openbao=@.github/e2e/spec-openbao.yaml`). Exercises every extension surface the
+# openbao-ext lane (the kubernetes role) and the team-write lane (the operator)
+# verify (assertidentity/openbaoext.go):
+# a mount, a config write, an operator team, a policy and a kubernetes role
+# bound to the ESO controller identity. `platform` is the scaffold's default
+# team (openbao_team), so the smoke team is the operator. No issuer is created:
+# nothing here can mint a certificate, and the lane's "no issuer on this cluster"
+# ::warning:: for llz-e2e-pki is expected. roles/e2e-client is spec-owned, so the
+# lane also proves the operator holds it read-only.
+mounts:
+  - path: llz-e2e-pki
+    type: pki
+    description: llz e2e spec.openbao fixture
+    maxLeaseTTL: 24h
+    config:
+      - path: roles/e2e-client
+        data:
+          allowed_domains: e2e.invalid
+          allow_bare_domains: true
+          client_flag: true
+          server_flag: false
+          ttl: 1h
+    operators: [platform]
+policies:
+  - name: llz-e2e-pki-issue
+    rules:
+      - path: llz-e2e-pki/issue/e2e-client
+        capabilities: [create, update]
+      - path: secret/data/platform/llz-e2e-pki/*
+        capabilities: [read]
+kubernetesRoles:
+  - name: llz-e2e-pki
+    boundServiceAccountNames: [external-secrets]
+    boundServiceAccountNamespaces: [external-secrets]
+    policies: [llz-e2e-pki-issue]
+    ttl: 15m

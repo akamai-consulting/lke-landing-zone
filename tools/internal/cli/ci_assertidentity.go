@@ -18,6 +18,7 @@ func installAssertIdentityDeps() {
 		// The Writer comes FROM THE DECLARATION: what this lane may mutate is
 		// exactly what assertidentity's binding declared, not whatever an argv can express.
 		Writer:         capability.MustWriter(assertidentity.Extension().MustBinding("login-smoke")),
+		ExtWriter:      capability.MustWriter(assertidentity.Extension().MustBinding("openbao-extensions")),
 		Exec:           execOutput,
 		SecretField:    kube.SecretFieldOf,
 		ManagedDomain:  identityconfig.DiscoverManagedDomain,

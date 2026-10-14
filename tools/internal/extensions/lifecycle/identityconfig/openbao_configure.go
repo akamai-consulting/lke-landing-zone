@@ -8,8 +8,10 @@ package identityconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
@@ -171,6 +173,12 @@ type baoConfigStep struct {
 	args  []string
 	stdin string
 	fatal bool
+	// tolerate makes a fatal step non-fatal ONLY when its error carries this
+	// text. The platform enables use plain non-fatal; spec.openbao enables use
+	// "path is already in use", so a refused enable (bad flag, unknown engine,
+	// sealed store) fails the run instead of printing "skipped" over a mount
+	// that does not exist.
+	tolerate string
 }
 
 // baoConfigureSteps is the ordered configure sequence: mounts/auth enables,
@@ -179,7 +187,7 @@ type baoConfigStep struct {
 // GitHub-OIDC (JWT) auth method + a repo-bound role are appended so CI can
 // authenticate with a short-lived OIDC token instead of a long-lived AppRole
 // secret_id stashed in GitHub Actions secrets.
-func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) []baoConfigStep {
+func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team, ext clusterspec.OpenBaoExtensions) []baoConfigStep {
 	// Team ESO read access — the missing half of the team-credentials feature.
 	// Each spec.teams entry gets a read-only `<name>-reader` policy on its
 	// openbaoSubtree, attached to the ESO `eso` k8s-auth role below. Without it a
@@ -377,7 +385,7 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 				"Keycloak team auth is unaffected and still configured; `llz ci rotate-incluster-pat` and any "+
 				"GitHub workflow authenticating to OpenBao by OIDC will not work until LLZ_FORGE/LLZ_FORGE_HOST "+
 				"resolve.\n", err)
-			return appendKeycloakTeamSteps(steps, keycloakIssuer, teams)
+			return appendTailSteps(steps, keycloakIssuer, teams, ext)
 		}
 		discoveryURL, boundIssuer := forge.OpenBaoJWTAuthConfig(f)
 		// SECURITY — bound_claims pins each role to THIS instance repo and
@@ -414,15 +422,25 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 	// apl-core realm role `team-<name>`. Appended only when a realm issuer is known
 	// (derived from the env's domainSuffix) AND teams are declared; otherwise
 	// omitted, so a domain-less or team-less instance is unchanged.
-	return appendKeycloakTeamSteps(steps, keycloakIssuer, teams)
+	return appendTailSteps(steps, keycloakIssuer, teams, ext)
 }
 
-// appendKeycloakTeamSteps exists so the keycloak team auth is appended on EVERY
-// exit from the function above, not only the one that falls off the end. It was
-// reachable from one path and skipped by the other, which is how a forge
-// resolution failure took human team-login down with CI OIDC.
-func appendKeycloakTeamSteps(steps []baoConfigStep, issuer string, teams []clusterspec.Team) []baoConfigStep {
-	return append(steps, keycloakTeamSteps(issuer, teams)...)
+// appendTailSteps exists so the keycloak team auth — and after it spec.openbao —
+// is appended on EVERY exit from the function above, not only the one that falls
+// off the end. It was reachable from one path and skipped by the other, which is
+// how a forge resolution failure took human team-login down with CI OIDC.
+//
+// spec.openbao goes LAST, after every platform step including CI OIDC and team
+// login. Its steps are fatal and its config bodies are free-form (the validator
+// can't know every engine field), so one bad `data` value aborts the run — and
+// anything after it never gets written. Placed before the jwt/keycloak steps, that
+// took CI OIDC and `llz openbao login --team` down with it on a fresh bootstrap.
+// A team role may name `<mount>-operator` before the policy exists: OpenBao
+// resolves policies at token use, not at role write. Empty spec.openbao → no
+// steps, so an instance that declares none is byte-identical to before.
+func appendTailSteps(steps []baoConfigStep, issuer string, teams []clusterspec.Team, ext clusterspec.OpenBaoExtensions) []baoConfigStep {
+	steps = append(steps, keycloakTeamSteps(issuer, teams, ext)...)
+	return append(steps, openbaoExtensionSteps(ext)...)
 }
 
 // keycloakRoleBody is the JSON body for a `keycloak` jwt-auth role. bound_claims
@@ -539,7 +557,7 @@ const aplPlatformAdminRole = "platform-admin"
 // steps. Pure (spec → step table) so it is unit-tested without a cluster. Returns
 // nil when there is no issuer or no team, so the configure sequence is unchanged
 // on instances that declare neither.
-func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep {
+func keycloakTeamSteps(issuer string, teams []clusterspec.Team, ext clusterspec.OpenBaoExtensions) []baoConfigStep {
 	if issuer == "" || len(teams) == 0 {
 		return nil
 	}
@@ -611,8 +629,13 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			// grants (identity.PlatformAdminRole). It is NOT `team-admin`, the apl
 			// admin *team's* own role (excluded from user teams in import.go); the
 			// platform admin is not a member of that team.
-			BoundClaims:   map[string][]string{"groups": {t.AplRole(), aplPlatformAdminRole}},
-			TokenPolicies: []string{policy},
+			BoundClaims: map[string][]string{"groups": {t.AplRole(), aplPlatformAdminRole}},
+			// The team's writer policy, plus `<mount>-operator` for every
+			// spec.openbao mount that names this team in operators — the non-root
+			// path for administering an instance-owned engine (e.g. importing a
+			// root-signed PKI intermediate). The operator policies themselves are
+			// written by openbaoExtensionSteps.
+			TokenPolicies: teamTokenPolicies(policy, t.Name, ext),
 			// This is a HUMAN, device-login-gated writer token (not a machine
 			// k8s-auth role) — an operator often runs several `llz openbao set` seeds
 			// in one sitting. 15m/30m is machine-grade and expired mid-flow, forcing a
@@ -704,6 +727,36 @@ func ManagedDomainFromIssuer(issuer string) string {
 	return s
 }
 
+// SpecOpenBao returns spec.openbao. No spec, or an unreadable spec that declares
+// no `openbao:` block, is the empty value — matching SpecTeams and
+// keycloakIssuerFor in the same run, which configure the platform only. An
+// unreadable spec that DOES declare one is an error: the spec decodes strictly,
+// so a misspelled key under `openbao:` makes the whole file unreadable, and
+// treating that as "nothing declared" would configure none of it under a green
+// bootstrap.
+func SpecOpenBao() (clusterspec.OpenBaoExtensions, error) {
+	lz, err := clusterspec.LoadInstance(".")
+	if errors.Is(err, clusterspec.ErrNoSpec) {
+		return clusterspec.OpenBaoExtensions{}, nil
+	}
+	if err != nil {
+		raw, rerr := os.ReadFile(clusterspec.LandingZoneFile)
+		if rerr == nil && !declaresOpenBao(raw) {
+			return clusterspec.OpenBaoExtensions{}, nil
+		}
+		return clusterspec.OpenBaoExtensions{}, fmt.Errorf("load spec for spec.openbao (the spec declares an openbao block, so it cannot be skipped): %w", err)
+	}
+	return lz.Spec.OpenBao, nil
+}
+
+// openbaoKeyRe matches an uncommented `openbao:` mapping key at any indent. It
+// reads raw text on purpose: it is only consulted when the spec failed to parse.
+var openbaoKeyRe = regexp.MustCompile(`(?m)^[ \t]*openbao[ \t]*:`)
+
+// declaresOpenBao reports whether raw landingzone.yaml text carries an
+// `openbao:` key (a commented-out example does not count). Pure.
+func declaresOpenBao(raw []byte) bool { return openbaoKeyRe.Match(raw) }
+
 // SpecTeams returns spec.teams, or nil when the spec can't be loaded.
 func SpecTeams() []clusterspec.Team {
 	lz, err := clusterspec.LoadInstance(".")
@@ -765,13 +818,26 @@ func RunBaoConfigure(dryRun bool, region string) error {
 	// `groups: team-<name>` claim binding; OpenBao validates it at LOGIN, not at
 	// creation, so a role whose group is still being provisioned is inert and
 	// harmless. Order-independent with the reconciler.
+	// spec.openbao — FAIL CLOSED, unlike the teams warning above. A team that fails
+	// validation only loses a convenience login; an extension that fails validation
+	// is security configuration the operator declared, and silently skipping it
+	// would leave e.g. a PKI issuing tier half-built under a green bootstrap. It is
+	// validated against the teams that survived validation, so an operator naming a
+	// team that was just dropped fails here too.
+	ext, err := SpecOpenBao()
+	if err != nil {
+		return err
+	}
+	if errs := clusterspec.ValidateOpenBao(ext, teams); len(errs) > 0 {
+		return fmt.Errorf("spec.openbao failed validation — fix the spec and re-run `llz ci bao-configure`: %v", errs)
+	}
 	keycloakIssuer := keycloakIssuerFor(region)
 	if len(teams) > 0 && keycloakIssuer == "" {
 		fmt.Fprintf(os.Stderr, "::warning::spec.teams declares %d team(s) but no Keycloak issuer could be derived for region %q (spec unreadable or cluster.bootstrap.domainSuffix unset) — skipping the keycloak team auth setup.\n", len(teams), region)
 	}
 	if dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")
-		for _, s := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
+		for _, s := range baoConfigureSteps(ghRepo, keycloakIssuer, teams, ext) {
 			fmt.Fprintf(os.Stderr, "    bao %s\n", strings.Join(s.args, " "))
 		}
 		return nil
@@ -813,18 +879,32 @@ func RunBaoConfigure(dryRun bool, region string) error {
 	}
 	fmt.Printf("OPENBAO_ROOT_TOKEN preflight on %s OK — proceeding.\n", region)
 
-	for _, step := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
+	for _, step := range baoConfigureSteps(ghRepo, keycloakIssuer, teams, ext) {
 		out, errOut, err := bao.Run(pod, token, step.stdin, step.args...)
 		if err != nil {
-			if step.fatal {
-				return fmt.Errorf("%s: %s", step.desc, strings.TrimSpace(firstNonEmpty(errOut, out)))
+			msg := firstNonEmpty(errOut, out)
+			if step.fatal && !(step.tolerate != "" && strings.Contains(msg, step.tolerate)) {
+				return fmt.Errorf("%s: %s", step.desc, strings.TrimSpace(msg))
 			}
 			// The bash's `|| true`: an enable against an existing mount/auth
 			// method errors with "path is already in use" — fine on re-runs.
-			fmt.Printf("%s: skipped (%s)\n", step.desc, strings.TrimSpace(firstNonEmpty(errOut, out)))
+			fmt.Printf("%s: skipped (%s)\n", step.desc, strings.TrimSpace(msg))
 			continue
 		}
 		fmt.Printf("%s: done\n", step.desc)
+	}
+
+	// An enable tolerated as "already in use" proves only that SOMETHING is
+	// mounted there — not the declared engine. Ask OpenBao what is.
+	if len(ext.Mounts) > 0 {
+		mountsOut, errOut, err := bao.Run(pod, token, "", "secrets", "list", "-format=json")
+		if err != nil {
+			return fmt.Errorf("verify spec.openbao mounts: %s", strings.TrimSpace(firstNonEmpty(errOut, mountsOut)))
+		}
+		if err := verifyExtensionMounts(mountsOut, ext); err != nil {
+			return err
+		}
+		fmt.Printf("spec.openbao: %d mount(s) present with the declared engine.\n", len(ext.Mounts))
 	}
 
 	auditOut, _, _ := bao.Run(pod, token, "", "audit", "list")
@@ -839,4 +919,131 @@ func RunBaoConfigure(dryRun bool, region string) error {
 
 	fmt.Println("OpenBao configuration complete.")
 	return nil
+}
+
+// teamTokenPolicies is a team keycloak role's token_policies: its writer policy,
+// then the operator policy of every spec.openbao mount the team operates.
+func teamTokenPolicies(writer, team string, ext clusterspec.OpenBaoExtensions) []string {
+	out := []string{writer}
+	for _, m := range ext.OperatorMountsFor(team) {
+		out = append(out, clusterspec.OperatorPolicyName(m))
+	}
+	return out
+}
+
+// k8sRoleBody is the JSON body for an extension kubernetes-auth role. Written over
+// stdin like the jwt roles: the list fields are typed as lists.
+type k8sRoleBody struct {
+	BoundServiceAccountNames      []string `json:"bound_service_account_names"`
+	BoundServiceAccountNamespaces []string `json:"bound_service_account_namespaces"`
+	TokenPolicies                 []string `json:"token_policies"`
+	TokenTTL                      string   `json:"token_ttl"`
+	TokenMaxTTL                   string   `json:"token_max_ttl"`
+}
+
+// renderPolicyHCL renders one structured spec.openbao policy. Pure; the live gate
+// (assertidentity) checks the same rules against `sys/capabilities-self`, and
+// TestExtensionPolicyHCLMatchesRules holds the two to one rule set.
+func renderPolicyHCL(p clusterspec.OpenBaoPolicy) string {
+	var b strings.Builder
+	for _, r := range p.Rules {
+		caps := make([]string, len(r.Capabilities))
+		for i, c := range r.Capabilities {
+			caps[i] = fmt.Sprintf("%q", c)
+		}
+		fmt.Fprintf(&b, "path %q { capabilities = [%s] }\n", r.Path, strings.Join(caps, ", "))
+	}
+	return b.String()
+}
+
+// operatorPolicyHCL renders clusterspec.OperatorRules — the intermediate-CA
+// lifecycle and day-2 administration of one mount (its spec-declared config
+// read-only), and nothing on sys/ or any other path.
+func operatorPolicyHCL(m clusterspec.OpenBaoMount) string {
+	return renderPolicyHCL(clusterspec.OpenBaoPolicy{Rules: clusterspec.OperatorRules(m)})
+}
+
+// verifyExtensionMounts checks `bao secrets list -format=json` against the
+// declared mounts: each must exist with its declared engine. Pure.
+func verifyExtensionMounts(listJSON string, ext clusterspec.OpenBaoExtensions) error {
+	var mounts map[string]struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(listJSON), &mounts); err != nil {
+		return fmt.Errorf("verify spec.openbao mounts: parse `secrets list`: %w", err)
+	}
+	if len(mounts) == 0 {
+		return fmt.Errorf("verify spec.openbao mounts: `secrets list` returned no mounts — refusing to call that verified")
+	}
+	var problems []string
+	for _, m := range ext.Mounts {
+		got, ok := mounts[m.Path+"/"]
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Sprintf("%s/ is not mounted", m.Path))
+		case got.Type != m.Type:
+			problems = append(problems, fmt.Sprintf("%s/ is a %s mount, spec declares %s (an existing mount was kept — re-type it by hand: disable, then re-run)", m.Path, got.Type, m.Type))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("spec.openbao mounts not as declared: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// openbaoExtensionSteps renders spec.openbao into configure steps. Pure. Order:
+// enable → tune → config writes per mount, then operator policies, extension
+// policies, kubernetes roles. Enables tolerate only "path is already in use"
+// (re-runs) and the TUNE that follows is fatal, so a re-run still converges the
+// lease cap on an existing mount instead of reporting success over a stale one;
+// RunBaoConfigure then checks every mount's engine type (verifyExtensionMounts).
+func openbaoExtensionSteps(ext clusterspec.OpenBaoExtensions) []baoConfigStep {
+	var steps []baoConfigStep
+	for _, m := range ext.Mounts {
+		enable := []string{"secrets", "enable", "-path=" + m.Path}
+		tune := []string{"secrets", "tune"}
+		if m.Description != "" {
+			enable = append(enable, "-description="+m.Description)
+			tune = append(tune, "-description="+m.Description)
+		}
+		if m.MaxLeaseTTL != "" {
+			enable = append(enable, "-max-lease-ttl="+m.MaxLeaseTTL)
+			tune = append(tune, "-max-lease-ttl="+m.MaxLeaseTTL)
+		}
+		steps = append(steps, baoConfigStep{desc: "enable " + m.Type + " at " + m.Path + "/ (spec.openbao)",
+			fatal: true, tolerate: "path is already in use", args: append(enable, m.Type)})
+		if len(tune) > 2 {
+			steps = append(steps, baoConfigStep{desc: "tune " + m.Path + "/ (spec.openbao)", fatal: true,
+				args: append(tune, m.Path+"/")})
+		}
+		for _, w := range m.Config {
+			body := []byte("{}") // a nil map would marshal to `null`, which is not a body
+			if len(w.Data) > 0 {
+				body, _ = json.Marshal(w.Data) // map[string]any from a decoded spec
+			}
+			steps = append(steps, baoConfigStep{desc: "write " + m.Path + "/" + w.Path + " (spec.openbao)", fatal: true,
+				stdin: string(body), args: []string{"write", m.Path + "/" + w.Path, "-"}})
+		}
+		if len(m.Operators) > 0 {
+			name := clusterspec.OperatorPolicyName(m.Path)
+			steps = append(steps, baoConfigStep{desc: "write policy " + name + " (spec.openbao operators)", fatal: true,
+				stdin: operatorPolicyHCL(m), args: []string{"policy", "write", name, "-"}})
+		}
+	}
+	for _, p := range ext.Policies {
+		steps = append(steps, baoConfigStep{desc: "write policy " + p.Name + " (spec.openbao)", fatal: true,
+			stdin: renderPolicyHCL(p), args: []string{"policy", "write", p.Name, "-"}})
+	}
+	for _, r := range ext.KubernetesRoles {
+		body, _ := json.Marshal(k8sRoleBody{
+			BoundServiceAccountNames:      r.BoundServiceAccountNames,
+			BoundServiceAccountNamespaces: r.BoundServiceAccountNamespaces,
+			TokenPolicies:                 r.Policies,
+			TokenTTL:                      r.EffectiveTTL(),
+			TokenMaxTTL:                   r.EffectiveTTL(),
+		})
+		steps = append(steps, baoConfigStep{desc: "write kubernetes auth role " + r.Name + " (spec.openbao)", fatal: true,
+			stdin: string(body), args: []string{"write", "auth/kubernetes/role/" + r.Name, "-"}})
+	}
+	return steps
 }

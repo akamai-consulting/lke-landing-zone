@@ -122,7 +122,10 @@ func ciCmd() *cobra.Command {
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.
 		identityconfig.KeycloakConfigureCmd(),
-		assertidentity.TeamLoginSmokeCmd())
+		assertidentity.TeamLoginSmokeCmd(),
+		// The spec.openbao kubernetes-role lane needs no human login, so unlike
+		// team-login-smoke it IS workflow-driven: llz-scheduled-checks runs it weekly.
+		assertidentity.AssertOpenBaoExtensionsCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
 	// THE FIRST REGISTRY-DRIVEN VERB. `llz ci gates` runs every gate binding the

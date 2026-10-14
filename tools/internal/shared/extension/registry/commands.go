@@ -112,6 +112,7 @@ func Commands() []Command { return append([]Command(nil), commands...) }
 var commands = []Command{
 	{"assertidentity", assertidentity.CertificatesCmd},
 	{"assertidentity", assertidentity.TeamLoginSmokeCmd},
+	{"assertidentity", assertidentity.AssertOpenBaoExtensionsCmd},
 	{"assertnetwork", assertnetwork.AdmissionEnforcementCmd},
 	{"assertnetwork", assertnetwork.NetProbeCmd},
 	{"assertnetwork", assertnetwork.NetworkEnforcementCmd},
