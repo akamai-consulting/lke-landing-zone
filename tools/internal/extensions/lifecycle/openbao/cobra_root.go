@@ -42,7 +42,7 @@ func OpenbaoCmd() *cobra.Command {
 	// precedes `openbao`; an explicit `llz openbao exec -- …` also still works.
 	execCmd := &cobra.Command{
 		Use:   "exec [--] <bao args...>",
-		Short: "run a bao command in the cluster via kubectl exec (day-2 auth/policy admin; needs OPENBAO_ROOT_TOKEN)",
+		Short: "run a bao command in the cluster via kubectl exec (OPENBAO_ROOT_TOKEN for auth/policy admin, else a team OPENBAO_TOKEN)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE:  func(_ *cobra.Command, a []string) error { return RunExec(cliopts.Global.DryRun, a) },
 	}

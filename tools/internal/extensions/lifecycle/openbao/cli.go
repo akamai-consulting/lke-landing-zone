@@ -140,29 +140,43 @@ func RunSet(dryRun, yes bool, path string, kvPairs []string) error {
 
 // RunExec runs `bao <args>` in the OpenBao pod via kubectl exec, wiring
 // the process stdio through so heredoc policy writes and JSON output work. The
-// root token comes from OPENBAO_ROOT_TOKEN (never argv-visible to anyone but the
-// in-cluster exec). Travels with the binary, so it works in an instance that
+// token is OPENBAO_ROOT_TOKEN, else a team OPENBAO_TOKEN (execToken; never
+// argv-visible to anyone but the in-cluster exec). Either way the CALLER needs
+// pods/exec on the OpenBao pod — a team token narrows what the bao call may do,
+// not who may run it. Travels with the binary, so it works in an instance that
 // carries no scripts/ (the openbao-accounts.md playbook used to call the
 // now-retired instance-scripts/openbao/bao-exec.sh, which an instance never had).
 func RunExec(dryRun bool, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: llz openbao exec <bao args...>  (e.g. llz openbao exec policy list)")
 	}
-	token := os.Getenv("OPENBAO_ROOT_TOKEN")
+	token, tokenVar := execToken()
 	if token == "" {
-		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set (an OpenBao root/admin token for the cluster kubectl points at)")
+		return fmt.Errorf("set OPENBAO_ROOT_TOKEN (auth/policy admin) or OPENBAO_TOKEN from `eval \"$(llz openbao login --team <name>)\"` (what that team's policies allow — e.g. administering a spec.openbao mount it operates)")
 	}
-	// `exec` is genuinely root-only (auth/policy admin), but remind the operator
-	// that day-2 secret reads/writes do NOT need root — `llz openbao get/set`
-	// with a team-scoped token from `llz openbao login` cover those.
-	openbao.WarnRootToken()
+	if tokenVar == "OPENBAO_ROOT_TOKEN" {
+		// Root is for auth/policy admin; remind the operator that day-2 secret
+		// reads/writes and operated spec.openbao mounts do NOT need it.
+		openbao.WarnRootToken()
+	}
 	if dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+quote(openbao.ExecArgv(baoread.RootPod, "$OPENBAO_ROOT_TOKEN", args)))
+		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+quote(openbao.ExecArgv(baoread.RootPod, "$"+tokenVar, args)))
 		return nil
 	}
 	cmd := exec.Command("kubectl", openbao.ExecArgv(baoread.RootPod, token, args)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// execToken picks the token `exec` runs with: root when set, else the team token
+// `llz openbao login` exports. A team token is safe to pass through — OpenBao
+// enforces its policies, so it can do only what the team (and any
+// spec.openbao mount it operates) is granted.
+func execToken() (token, envVar string) {
+	if t := os.Getenv("OPENBAO_ROOT_TOKEN"); t != "" {
+		return t, "OPENBAO_ROOT_TOKEN"
+	}
+	return os.Getenv("OPENBAO_TOKEN"), "OPENBAO_TOKEN"
 }
 
 // contains is a COPY. It was defined in ci_pin_images.go, which moved to
