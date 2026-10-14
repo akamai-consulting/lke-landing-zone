@@ -193,14 +193,34 @@ func TestIssuerWarning(t *testing.T) {
 }
 
 func TestServiceAccountAbsent(t *testing.T) {
-	if !serviceAccountAbsent(errors.New(`kubectl create token app/app-sa: error: failed to create token: serviceaccounts "app-sa" not found`)) {
-		t.Fatal("a missing service account must read as absent")
+	for name, c := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"service account absent": {errors.New(`kubectl create token app/app-sa: error: failed to create token: serviceaccounts "app-sa" not found`), true},
+		"namespace absent":       {errors.New(`kubectl create token app/app-sa: Error from server (NotFound): namespaces "app" not found`), true},
+		// The two that used to pass as "not deployed yet" and verify nothing:
+		"kubectl missing": {errors.New(`kubectl create token app/app-sa: exec: "kubectl": executable file not found in $PATH`), false},
+		"API not served":  {errors.New(`kubectl create token app/app-sa: error: the server could not find the requested resource (post serviceaccounts.token) not found`), false},
+		"a different SA":  {errors.New(`kubectl create token app/app-sa: serviceaccounts "other" not found`), false},
+		"a different ns":  {errors.New(`kubectl create token app/app-sa: namespaces "other" not found`), false},
+		"forbidden":       {errors.New("kubectl create token app/app-sa: forbidden"), false},
+		"no error":        {nil, false},
+	} {
+		if got := serviceAccountAbsent(c.err, "app", "app-sa"); got != c.want {
+			t.Errorf("%s: absent=%v, want %v", name, got, c.want)
+		}
 	}
-	if !serviceAccountAbsent(errors.New(`kubectl create token app/app-sa: Error from server (NotFound): namespaces "app" not found`)) {
-		t.Fatal("a missing namespace must read as absent")
+}
+
+func TestRoleSummary(t *testing.T) {
+	if s := roleSummary(2, 2); !strings.HasPrefix(s, "✓") {
+		t.Fatalf("all verified must be a pass line: %q", s)
 	}
-	if serviceAccountAbsent(errors.New("kubectl create token app/app-sa: forbidden")) || serviceAccountAbsent(nil) {
-		t.Fatal("anything else is a real failure, not an undeployed workload")
+	for _, v := range []int{0, 1} {
+		if s := roleSummary(v, 2); strings.Contains(s, "✓") || !strings.HasPrefix(s, "::warning::") {
+			t.Fatalf("%d of 2 verified must be a warning, never a ✓: %q", v, s)
+		}
 	}
 }
 

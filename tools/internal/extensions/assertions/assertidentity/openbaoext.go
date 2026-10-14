@@ -236,7 +236,7 @@ func runRoleChecks(ctx context.Context, addr string, ext clusterspec.OpenBaoExte
 		subject := "kubernetes role " + e.Role
 		jwt, err := mintServiceAccountTokenVia(caps.ExtW(), e.Namespace, e.ServiceAccount)
 		if err != nil {
-			if serviceAccountAbsent(err) && !requireBound {
+			if serviceAccountAbsent(err, e.Namespace, e.ServiceAccount) && !requireBound {
 				fmt.Printf("::warning::%s: %s/%s does not exist yet — not verified until the workload is deployed (%v)\n", subject, e.Namespace, e.ServiceAccount, err)
 				continue
 			}
@@ -261,14 +261,35 @@ func runRoleChecks(ctx context.Context, addr string, ext clusterspec.OpenBaoExte
 	if len(problems) > 0 {
 		return fmt.Errorf("spec.openbao kubernetes roles are not what OpenBao enforces:\n  - %s\nCheck: the bao-configure log for a failed (spec.openbao) step; `bao policy read <name>`; `bao read auth/kubernetes/role/<name>`; `bao secrets list`", strings.Join(problems, "\n  - "))
 	}
-	fmt.Printf("✓ spec.openbao: %d of %d kubernetes role(s) verified against what OpenBao enforces\n", verified, len(ext.KubernetesRoles))
+	fmt.Println(roleSummary(verified, len(ext.KubernetesRoles)))
 	return nil
 }
 
-// serviceAccountAbsent: the TokenRequest failed because the service account (or
-// its namespace) does not exist — kubectl reports `… "<name>" not found`. Pure.
-func serviceAccountAbsent(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not found")
+// roleSummary is the lane's last line. Only a run that verified EVERY role gets
+// the ✓ — a run that skipped some (undeployed workloads) says so as a warning,
+// so a step that examined nothing never reads as a pass in the summary. Pure.
+func roleSummary(verified, total int) string {
+	if verified == total {
+		return fmt.Sprintf("✓ spec.openbao: all %d kubernetes role(s) verified against what OpenBao enforces", total)
+	}
+	return fmt.Sprintf("::warning::spec.openbao: %d of %d kubernetes role(s) verified — the rest are bound to service accounts not deployed yet", verified, total)
+}
+
+// serviceAccountAbsent: the TokenRequest failed because the API server said THIS
+// service account, or its namespace, does not exist. Pure.
+//
+// SCAR: this was strings.Contains(err, "not found"), which also matched
+// `exec: "kubectl": executable file not found in $PATH` and the server's
+// "could not find the requested resource". Both turned every role into an
+// "undeployed workload" warning, so the weekly step passed having verified
+// nothing. Only the two API answers, naming the objects asked about, count.
+func serviceAccountAbsent(err error, namespace, serviceAccount string) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, fmt.Sprintf(`serviceaccounts %q not found`, serviceAccount)) ||
+		strings.Contains(msg, fmt.Sprintf(`namespaces %q not found`, namespace))
 }
 
 // runOperatorChecks is the operator half, run inside team-login-smoke because it
