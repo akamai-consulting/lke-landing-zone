@@ -42,6 +42,21 @@ spec:
         - port: 8200
           protocol: TCP
     {{- end }}
+    # Pod-scoped clients: a single workload in a shared namespace. Both selectors
+    # sit in ONE `from` element, so they AND — only the named pod in that namespace
+    # reaches :8200, not the whole namespace. See allowedClientPods.
+    {{- range .Values.platform.networkPolicy.allowedClientPods }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .name }}
+      ports:
+        - port: 8200
+          protocol: TCP
+    {{- end }}
     - from:
         - podSelector:
             matchLabels:
@@ -76,6 +91,17 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+    # Audit shipping to the Loki gateway. BOTH ports, for the same post-DNAT
+    # reason spelled out for the apiserver above: the gateway Service publishes
+    # :80 but its pods listen on :8080, and Cilium evaluates egress on the
+    # TARGET port. Allowing only :80 drops every push at the CNI, which surfaces
+    # as promtail retrying `context deadline exceeded` forever — a timeout, not a
+    # refusal, so it looks like an unreachable host rather than a policy.
+    #
+    # This is the SECOND half of the audit-pipeline break. #387 fixed the target
+    # (llz-observability → monitoring) and left the port, so the rule went on
+    # granting nothing while naming the right namespace — the same shape-correct,
+    # effect-free allow the values.yaml note below describes.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -83,4 +109,32 @@ spec:
       ports:
         - port: 80
           protocol: TCP
+        - port: 8080
+          protocol: TCP
+    {{- if .Values.platform.networkPolicy.gatewayNamespace }}
+    # apl-core Keycloak: the `keycloak` OIDC auth mount fetches the realm JWKS to
+    # validate team-login id_tokens, and that fetch carries SIGNING KEYS, so it
+    # must be verified TLS (ADR 0010).
+    #
+    # The egress is to the INGRESS GATEWAY, not to Keycloak. apl-core gives the
+    # Keycloak pod no TLS key material, so its :8443 is declared but dead; the
+    # only endpoint serving Keycloak over TLS is the gateway, which presents the
+    # `otomi-wildcard` certificate (SAN *.<domainSuffix>, issued by custom-ca —
+    # the same CA openbao-apl-ca chains to). `llz ci pin-keycloak-gateway-alias`
+    # points keycloak.<domain> at this Service's ClusterIP so the request stays
+    # in-cluster instead of hairpinning through the external LoadBalancer, which
+    # LKE-E does not support.
+    #
+    # NOTE the keycloak namespace is deliberately NOT allowed here any more.
+    # Both previous targets were dead ends — :8080 was the plaintext fetch this
+    # exists to eliminate, and :8443 never had a listener — so keeping either
+    # would be a standing permission for a path nothing uses.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.gatewayNamespace }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
 {{- end }}

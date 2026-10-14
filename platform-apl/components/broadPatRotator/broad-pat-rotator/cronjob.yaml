@@ -1,0 +1,133 @@
+# Broad Linode PAT rotator CronJob — the in-cluster owner of the account:read_write
+# LINODE_API_TOKEN rotation (was the CI create/revoke-linode-pat jobs in
+# llz-secret-rotation.yml). Weekly: when the OpenBao rotated_at is older than
+# ROTATE_AFTER_DAYS, mints a fresh broad PAT, verifies it, writes it to OpenBao,
+# publishes it to each deployment's infra-<d> GitHub environment secret (sealed box),
+# then revokes older siblings outside the grace window. A not-due tick is a cheap no-op.
+#
+# RUN THIS ON EXACTLY ONE DEPLOYMENT. The broad PAT is ACCOUNT-wide (one family for all
+# CI), so enabling the component on more than one cluster would race mint/revoke.
+# BROAD_PAT_DEPLOYMENTS lists every deployment whose infra-<d> LINODE_API_TOKEN secret
+# gets the new value.
+#
+# OpenBao TLS is VERIFIED via the namespace's openbao-ca-bundle Certificate
+# (OPENBAO_CA_FILE); OPENBAO_SKIP_VERIFY is the cold-start fallback only.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: broad-pat-rotator
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    ignore-check.kube-linter.io/env-value-from: "broad-pat-rotator-* Secrets are created at runtime by ESO (externalsecret.yaml); not static manifests the linter can resolve"
+    ignore-check.kube-linter.io/read-secret-from-env-var: "LINODE_TOKEN mints the successor PAT and GH_TOKEN publishes it — both are the rotator's purpose"
+spec:
+  schedule: "17 3 * * 1"   # weekly, Monday 03:17 UTC (offset from the 02:00 sweeps)
+  startingDeadlineSeconds: 300
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          # Batch pod — keep out of the istio mesh (a never-exiting sidecar would stop
+          # the Job completing; managed clusters may have injection on for this ns).
+          annotations:
+            sidecar.istio.io/inject: "false"
+          labels:
+            app.kubernetes.io/name: broad-pat-rotator
+        spec:
+          restartPolicy: Never
+          serviceAccountName: broad-pat-rotator
+          containers:
+            - name: rotate
+              # Literal :latest, retagged to the signed sha (e2e) / release tag by the
+              # carved app's kustomize images: transformer — same as llz-reconciler and
+              # harbor (broadPatRotator is in carvedLLZImageComponents). Must NOT be a
+              # copier llz_image_ref placeholder: platform-apl is Argo-fetched from the
+              # template, never copier-rendered, so a placeholder ships literally and the
+              # pod can't pull it (the registry-compliance policy rejects it).
+              image: ghcr.io/akamai-consulting/llz:latest
+              args: ["ci", "rotate-broad-pat", "--apply"]
+              env:
+                - name: LINODE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: broad-pat-rotator-linode-token
+                      key: token
+                - name: GH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: broad-pat-rotator-gh-token
+                      key: token
+                # Filled per-env by RenderBroadPATEnvPatch (like BROAD_PAT_* below);
+                # NOT a copier token, for the same platform-apl-is-Argo-fetched reason.
+                - name: GH_REPO
+                  value: "REPLACE_ME"
+                # The Linode label of the broad PAT family (matches the CI rotation's).
+                - name: BROAD_PAT_LABEL
+                  value: "REPLACE_ME"
+                # Space-separated deployment names whose infra-<d> LINODE_API_TOKEN
+                # env secret gets the new value. MUST list every deployment.
+                - name: BROAD_PAT_DEPLOYMENTS
+                  value: "REPLACE_ME"
+                - name: ROTATE_AFTER_DAYS
+                  value: "60"
+                - name: GRACE_DAYS
+                  value: "7"
+                - name: OPENBAO_ADDR
+                  value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+                # Verify OpenBao's TLS: `ca.crt` from the openbao-ca-bundle Certificate
+                # issued into this namespace (openbao-ca-bundle.yaml). Takes
+                # precedence over ADR 0010. The skip-verify fallback #358 kept here is
+                # REMOVED: the listener now also requires a CLIENT certificate, so
+                # unverified TLS cannot complete the handshake — the fallback was
+                # unreachable, and leaving it would imply a downgrade that no
+                # longer exists.
+                - name: OPENBAO_CA_FILE
+                  value: /etc/openbao-ca/ca.crt
+
+                - name: OPENBAO_KUBERNETES_ROLE
+                  value: "broad-pat-rotator"
+              resources:
+                limits: { cpu: 200m, memory: 128Mi }
+                requests: { cpu: 50m, memory: 64Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+                # SERVER half — verifies OpenBao's serving cert (#358's bundle).
+                - { name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true }
+                # CLIENT half — this workload's identity (ADR 0010). A Job whose
+                # Secret is not yet written waits in ContainerCreating and the
+                # next schedule picks it up.
+                - { name: openbao-client-tls, mountPath: /etc/openbao-client-tls, readOnly: true }
+          volumes:
+            # optional: the CA bundle Secret appears once cert-manager issues the
+            # leaf. Absent -> the pod still starts and falls back to
+            # OPENBAO_SKIP_VERIFY rather than wedging in ContainerCreating.
+            # NOT optional any more: with mTLS required there is no skip-verify
+            # path to fall back to, so a missing CA must park the pod rather than
+            # let it start and fail every OpenBao call.
+            - name: openbao-ca
+              secret:
+                secretName: openbao-ca-bundle
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }
+            # 0444 (not 0400): Secret volumes are root-owned and this pod runs as
+            # uid 65532 with no fsGroup, so 0400 would be unreadable to it. The
+            # key's protection is RBAC on the Secret + etcd encryption, not the
+            # in-pod mode — the only process in this pod is the rotator.
+            - name: openbao-client-tls
+              secret:
+                secretName: broad-pat-rotator-client-tls
+                defaultMode: 0444

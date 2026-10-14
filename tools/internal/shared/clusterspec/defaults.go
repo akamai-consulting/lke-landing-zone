@@ -1,0 +1,73 @@
+package clusterspec
+
+// DefaultTeamName is the team `llz new` scaffolds by default (the copier
+// openbao_team question / ensureLandingZone fallback): a `platform` operators
+// team scoped to secret/platform. It is authored into a NEW instance's
+// landingzone.yaml at scaffold time — deliberately NOT a load-time default, so an
+// existing instance that never declared spec.teams is left byte-identical (no
+// surprise team provisioned on upgrade). Existing instances opt in via the
+// retrofit path in docs/runbooks/openbao-team-login.md.
+const DefaultTeamName = "platform"
+
+// Defaults fills the derived/implied fields so the renderer and validator see a
+// complete spec. It is idempotent. Defaults are deliberately minimal — fields
+// the author omits and that have a sensible tfvars-example default (the two
+// control-plane bools, autoscaler) are left nil so the renderer leaves the
+// example value untouched rather than forcing a zero. spec.teams is NOT
+// defaulted here (new-clusters-only — see DefaultTeamName / ensureLandingZone).
+// DefaultManagedApps is the set of optional apl-core apps LLZ enables by default on
+// a managed cluster (ADR 0006): harbor/loki/grafana for the platform + kyverno so the
+// image-signature ClusterPolicy has its CRD. `llz ci bootstrap-cluster` enables the
+// env's managedApps in apl-core; `llz render` emits the LLZ extras that ride on them.
+var DefaultManagedApps = []string{"harbor", "loki", "grafana", "kyverno"}
+
+func (lz *LandingZone) Defaults() {
+	for name, env := range lz.Spec.Environments {
+		// domainSuffix is NOT defaulted: LLZ runs exclusively on Linode's MANAGED App
+		// Platform, where Linode owns the lke<id>.akamai-apl.net domain (LLZ discovers
+		// it in-cluster) and validateEnv REJECTS a non-empty domainSuffix. Defaulting
+		// it would make every spec un-renderable.
+		//
+		// managedApps defaults to the LLZ-required optional apl-core apps (ADR 0006):
+		// LLZ enables them in apl-core at bootstrap (so apl-core installs them) and
+		// layers its extras on them. Only defaulted when unset; an explicit list is
+		// respected. Kyverno in the set is what makes the imageSignature ClusterPolicy
+		// safe to emit (its CRD is guaranteed present).
+		if len(env.Cluster.Bootstrap.ManagedApps) == 0 {
+			env.Cluster.Bootstrap.ManagedApps = append([]string(nil), DefaultManagedApps...)
+		}
+		// Components default to all-enabled, except the DefaultDisabled ones (gitea,
+		// cidrFirewall, broadPatRotator, clusterHealthWorkflow).
+		// A nil/empty map gets the full default set; a partial map only fills in
+		// components the author didn't mention (so an explicit enabled:false sticks).
+		if env.Components == nil {
+			env.Components = map[string]ComponentToggle{}
+		}
+		for _, r := range Components {
+			t, set := env.Components[r.Name]
+			if !set {
+				// Nobody wrote this one: Explicit is decided here as false, NOT left nil,
+				// so a second (idempotent) pass — which now finds the key present with a
+				// non-nil Enabled — does not mistake our own fill for the author's intent.
+				env.Components[r.Name] = ComponentToggle{
+					Enabled: boolPtr(!r.DefaultDisabled), Explicit: boolPtr(false),
+				}
+				continue
+			}
+			// This is the LAST point where "the author wrote enabled:" is still visible
+			// — the fill below erases it. Record it (see ComponentToggle.Explicit);
+			// EmitOnManaged needs the distinction. Only when undecided: once a pass has
+			// answered, re-running Defaults must not re-answer from the filled state.
+			if t.Explicit == nil {
+				t.Explicit = boolPtr(t.Enabled != nil)
+			}
+			// A toggle that sets only sizing (Enabled nil) resolves to the built-in
+			// default so the rest of the pipeline sees a complete, non-nil state.
+			if t.Enabled == nil {
+				t.Enabled = boolPtr(!r.DefaultDisabled)
+			}
+			env.Components[r.Name] = t
+		}
+		lz.Spec.Environments[name] = env
+	}
+}

@@ -1,0 +1,23 @@
+# spec.components.objProxy → this kustomize Component (default-disabled).
+#
+# Deploys `llz obj-proxy`: the S3 gateway that injects SSE-C headers so Linode
+# Object Storage holds Loki chunks and Harbor image layers ENCRYPTED. Linode
+# implements no other server-side mode (SSE-S3 400s, PutBucketEncryption 501s) and
+# neither writer can emit SSE-C itself, so this is the only route to an encrypted
+# object store on this platform. See docs/designs/obj-sse-c-gateway.md.
+#
+# ENABLING THIS COMPONENT IS NOT SUFFICIENT ON ITS OWN. Two things outside this
+# kustomization make it take effect, and both are deliberately separate because
+# each can break object storage cluster-wide if flipped early:
+#
+#   1. The CA that issues obj-proxy-tls must be TRUSTED by Loki's and Harbor's
+#      pods, or they get x509 unknown-authority against the endpoint name.
+#   2. CoreDNS must rewrite <region>.linodeobjects.com to the obj-proxy Service.
+#      This is the ON SWITCH; stage it last, after (1) is verified.
+#
+# Until (2) lands this component is inert — running, healthy, and carrying no
+# traffic — which is the intended way to stage it.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - obj-proxy

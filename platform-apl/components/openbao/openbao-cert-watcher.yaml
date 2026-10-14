@@ -1,0 +1,239 @@
+# Event-driven restart of the OpenBao StatefulSet on openbao-tls rotation.
+#
+# Why: OpenBao loads its TLS cert from the mounted openbao-tls Secret at
+# process startup, and there's no in-process reload mechanism (SIGHUP doesn't
+# work on the chart's container image). When cert-manager rotates openbao-tls
+# (every ~80-day renewal), OpenBao keeps serving the OLD cert. ESO's
+# ClusterSecretStore then gets a cert it can't verify (`x509: certificate
+# signed by unknown authority`), flips to Ready=False (InvalidProviderConfig),
+# and the downstream ExternalSecret cascade silently breaks. The only fix is to
+# restart the OpenBao pods so they re-read the new cert.
+#
+# This Deployment watches the openbao-tls Certificate.status.notBefore in a
+# 60-second polling loop. Reading the Certificate (public material) avoids
+# granting access to the underlying Secret which holds tls.key. On change it
+# deletes the 3 platform-openbao pods. The StatefulSet recreates them; they
+# auto-join Raft via retry_join, come up SEALED, and require operator
+# intervention to unseal (run .github/workflows/bootstrap-openbao.yml).
+#
+# Note: the analogous ESO restart-on-rotation watcher was REMOVED — ESO >=0.10.7
+# re-reads the openbao-tls caProvider CA on its store-requeue-interval (set to 1m)
+# and recovers natively. OpenBao still needs THIS watcher because it loads its
+# serving cert only at process start and cannot reload it in place.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  name: openbao-cert-watcher
+  namespace: llz-openbao
+---
+# Read access to the openbao-tls Certificate.status.notBefore. Reads only the
+# Certificate (public metadata), NOT the Secret which holds tls.key.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  name: openbao-cert-watcher-read
+  namespace: llz-openbao
+rules:
+  - apiGroups: [cert-manager.io]
+    resourceNames: [openbao-tls]
+    resources: [certificates]
+    verbs: [get]
+---
+# Delete the 3 platform-openbao StatefulSet pods. Scoped to the specific names —
+# the watcher can't delete arbitrary pods in the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  name: openbao-cert-watcher-restart
+  namespace: llz-openbao
+rules:
+  - apiGroups: [""]
+    resourceNames: [platform-openbao-0, platform-openbao-1, platform-openbao-2]
+    resources: [pods]
+    verbs: [get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  name: openbao-cert-watcher-read
+  namespace: llz-openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-cert-watcher-read
+subjects:
+  - kind: ServiceAccount
+    name: openbao-cert-watcher
+    namespace: llz-openbao
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+  name: openbao-cert-watcher-restart
+  namespace: llz-openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-cert-watcher-restart
+subjects:
+  - kind: ServiceAccount
+    name: openbao-cert-watcher
+    namespace: llz-openbao
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/component: cert-rotation-trigger
+    app.kubernetes.io/name: openbao-cert-watcher
+  name: openbao-cert-watcher
+  namespace: llz-openbao
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-cert-watcher
+  # Singleton watcher — RollingUpdate with maxSurge=0 + maxUnavailable=1 gives
+  # Recreate-equivalent semantics without tripping the no-rolling-update-strategy
+  # kube-linter check.
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: cert-rotation-trigger
+        app.kubernetes.io/name: openbao-cert-watcher
+    spec:
+      containers:
+        - args:
+            - |
+              set -u
+              echo "openbao-cert-watcher: polling llz-openbao/openbao-tls Certificate.status.notBefore every 60s"
+              prev=""
+              while :; do
+                cur=$(kubectl -n llz-openbao get certificate openbao-tls \
+                  -o jsonpath='{.status.notBefore}' 2>/dev/null || true)
+                if [ -z "$cur" ]; then
+                  echo "$(date -Is) openbao-tls Certificate not readable yet (rbac? not issued?) — skipping tick"
+                elif [ -z "$prev" ]; then
+                  # First successful read: record baseline, DON'T restart.
+                  echo "$(date -Is) baseline notBefore=$cur"
+                  prev="$cur"
+                elif [ "$cur" != "$prev" ]; then
+                  echo "$(date -Is) openbao-tls rotated: $prev -> $cur"
+                  echo "$(date -Is) deleting platform-openbao-{0,1,2} so pods reload the new cert. Pods will come up SEALED — operator must run .github/workflows/bootstrap-openbao.yml to unseal."
+                  for POD in platform-openbao-2 platform-openbao-1 platform-openbao-0; do
+                    if kubectl -n llz-openbao delete pod "$POD" --wait=false 2>&1; then
+                      echo "$(date -Is) deleted $POD"
+                    else
+                      echo "$(date -Is) delete $POD failed (rbac? already gone?) — continuing"
+                    fi
+                  done
+                  prev="$cur"
+                  echo "$(date -Is) restart triggered. cluster is SEALED until operator unseals. ClusterSecretStore will report InvalidProviderConfig in the meantime."
+                fi
+                sleep 60
+              done
+          command: ["sh", "-c"]
+          image: alpine/k8s:1.32.4
+          name: watcher
+          resources:
+            limits:   { cpu: "100m", memory: "64Mi" }
+            requests: { cpu: "10m",  memory: "16Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:             { drop: ["ALL"] }
+            readOnlyRootFilesystem:   true
+            runAsNonRoot:             true
+            runAsUser:                1000
+            seccompProfile:           { type: RuntimeDefault }
+      serviceAccountName: openbao-cert-watcher
+---
+# Ingress denied, egress stated — and the egress half is the repair for a policy
+# that left this pod unable to reach anything at all.
+#
+# THIS DOCUMENT USED TO DECLARE `policyTypes: [Ingress]` ONLY, on the reasoning
+# that there was "no egress restriction" to work around. That reasoning was true
+# of this file and false of the namespace. llz-openbao-platform ships
+# `openbao-default-deny` with `podSelector: {}` over Ingress AND Egress — every
+# pod in llz-openbao, not just OpenBao's own — and its single companion allow,
+# `openbao-allow`, selects `app.kubernetes.io/name: openbao`. This pod carries
+# `app.kubernetes.io/name: openbao-cert-watcher`. NetworkPolicies are additive, so
+# declaring only Ingress here added no egress permission to a namespace that
+# denies it by default: the watcher had ZERO egress.
+#
+# WHAT THAT COST, and why nothing reported it. Every `kubectl get certificate`
+# was dropped, so `cur` was always empty and the loop logged
+# "openbao-tls Certificate not readable yet (rbac? not issued?)" once a minute
+# forever — a message that names the two causes it is NOT and never mentions the
+# one it is. The pod stays 1/1 Running. At renewal nothing restarts OpenBao, the
+# StatefulSet keeps serving the old certificate, and the ClusterSecretStore
+# cascade this Deployment exists to prevent happens exactly as if the Deployment
+# were not there.
+#
+# THE CROSS-TREE JOIN IS WHY IT WAS INVISIBLE: the default-deny is in a CHART
+# (kubernetes-charts/llz-openbao-platform) and the workload it strands is in
+# platform-apl/. Neither tree read on its own shows the problem, and neither
+# kube-linter nor the kind dry-run reads platform-apl/ at all.
+# `llz ci default-deny-egress` is the gate — it joins the two trees by namespace.
+#
+# EGRESS IS WRITTEN THE WAY llz-reconciler's IS, for the reasons recorded there:
+# DNS matched on the kube-system NAMESPACE (LKE-E CoreDNS is labeled
+# app.kubernetes.io/name=coredns, so a `k8s-app: kube-dns` podSelector matches
+# nothing), and the apiserver as a BARE ports rule on 443 AND 6443 — there is no
+# in-cluster kube-apiserver pod to select on managed LKE-E, and Cilium evaluates
+# egress post-DNAT so :443 alone is dropped. Deliberately NOT `to: ipBlock:
+# 0.0.0.0/0`, which is what the old comment reached for: a CIDR block misses
+# cluster identities on Cilium and produces exactly the silent timeouts it warned
+# about.
+#
+# RENAMED from openbao-cert-watcher-ingress-deny, because it is no longer an
+# ingress-only document and a name that says otherwise is the next reader's wrong
+# turn. Argo prunes and recreates in one sync; the namespace default-deny holds
+# throughout, so there is no window in which this pod is more reachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    # -10, not -5: the tree's convention for per-namespace NetworkPolicies, and
+    # the chart's own default-deny is -10. Landing after the deny would leave the
+    # watcher briefly egress-less at every sync.
+    argocd.argoproj.io/sync-wave: "-10"
+  name: openbao-cert-watcher
+  namespace: llz-openbao
+spec:
+  ingress: []
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-cert-watcher
+  policyTypes: [Ingress, Egress]
+  egress:
+    # DNS. Namespace-scoped, no podSelector — see above.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # LKE-E apiserver, dual-port DNAT. The only thing this pod talks to: it reads
+    # one Certificate's status and deletes three pods.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

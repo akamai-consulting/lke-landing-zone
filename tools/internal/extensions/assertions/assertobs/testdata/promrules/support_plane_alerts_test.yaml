@@ -1,0 +1,189 @@
+# promtool unit tests for the support-plane alert rules.
+#
+# THE FAILURE THESE PIN DOWN. `LokiStatefulSetUnavailable` shipped as
+# `kube_statefulset_status_replicas_ready{statefulset="loki"} == 0` and could not
+# fire, for two independent reasons:
+#
+#   1. apl-core runs the loki chart's DISTRIBUTED topology, so the StatefulSet is
+#      `loki-ingester`. The selector matched no series, and an expression over an
+#      empty vector is never true.
+#   2. `== 0` asks for a total outage. The failure that actually happened was 1 of
+#      3 ingesters ready for 16 days — ingestion degraded, node drains blocked —
+#      which a zero-replica test grades healthy.
+#
+# `promtool check rules` proved the expression parsed, every day, throughout. The
+# only thing that can tell a live rule from a firing one is executing it against
+# series named the way the cluster names them, which is what this file does.
+#
+# rules.yml is written by the Go test from the PrometheusRule CRD's spec.groups,
+# so these run against the rules the cluster loads, not a copy.
+rule_files:
+  - rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── THE INCIDENT, reproduced from its own numbers ─────────────────────────
+  # loki-ingester: 3 desired, 1 ready, indefinitely. This is the shape that was
+  # live for 16 days while every alert in this file stayed quiet.
+  - interval: 30s
+    name: one of three ingesters ready is degraded, and the old rule could not see it
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "1x120"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+    alert_rule_test:
+      # Below the 15m window a rolling restart looks the same; nothing yet.
+      - eval_time: 10m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: loki
+              namespace: monitoring
+              statefulset: loki-ingester
+            exp_annotations:
+              summary: "Loki loki-ingester has fewer ready replicas than desired"
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: "monitoring/loki-ingester has had a replica not-Ready for 15m (1 ready). Ingestion is degraded and the PodDisruptionBudget will block node drains. On an INGESTER the usual cause is an OOMKill during WAL replay, which does not self-heal — `kubectl -n monitoring logs <pod> --previous | tail` and check the memory limit against the WAL-replay floor (`llz ci assert-loki` reports it)."
+      # AND THE POINT OF THE SPLIT: a partial outage is NOT the total-outage
+      # alert. If these ever collapse into one rule, this expectation fails.
+      - eval_time: 20m
+        alertname: LokiStatefulSetUnavailable
+        exp_alerts: []
+
+  # ── THE CONTROL. A healthy fleet must be silent, or the rule above is just
+  # "always fire" and proves nothing.
+  - interval: 30s
+    name: a fully ready ingester fleet raises nothing
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LokiStatefulSetUnavailable
+        exp_alerts: []
+
+  # ── A ROLLING RESTART MUST NOT PAGE. One replica down, back inside 15m. If
+  # the `for:` is ever shortened, this goes red — which is the trade being made
+  # visible rather than argued about.
+  - interval: 30s
+    name: an ordinary rolling restart clears before the window
+    input_series:
+      # 2/3 for 10m (20 samples), then healthy again.
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "2x20 3x100"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts: []
+
+  # ── TOTAL OUTAGE still has its own alert, and still fires.
+  - interval: 30s
+    name: zero ready replicas raises the unavailable alert
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "0x120"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiStatefulSetUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: loki
+              namespace: monitoring
+              statefulset: loki-ingester
+            exp_annotations:
+              summary: "Loki loki-ingester has no ready replicas"
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: "monitoring/loki-ingester has 0 ready replicas for 10m — log ingestion and queries are down."
+
+  # ── THE RENAME THAT STARTED THIS. A future chart could split the ingester
+  # again (loki-write, loki-backend). The selector is a prefix match so that
+  # lands covered; pinning it here means narrowing the selector back to an exact
+  # name is a red test rather than a silent loss of coverage.
+  - interval: 30s
+    name: a renamed loki workload is still watched
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-write"}'
+        values: "1x120"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-write"}'
+        values: "3x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: loki
+              namespace: monitoring
+              statefulset: loki-write
+            exp_annotations:
+              summary: "Loki loki-write has fewer ready replicas than desired"
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: "monitoring/loki-write has had a replica not-Ready for 15m (1 ready). Ingestion is degraded and the PodDisruptionBudget will block node drains. On an INGESTER the usual cause is an OOMKill during WAL replay, which does not self-heal — `kubectl -n monitoring logs <pod> --previous | tail` and check the memory limit against the WAL-replay floor (`llz ci assert-loki` reports it)."
+
+  # ── A NON-LOKI STATEFULSET IN THE SAME NAMESPACE MUST NOT MATCH. Prometheus
+  # and Alertmanager also live in `monitoring`; a selector that caught them would
+  # route their outages to the Loki runbook.
+  - interval: 30s
+    name: prometheus in the same namespace is not a loki alert
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="prometheus-system"}'
+        values: "0x120"
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="prometheus-system"}'
+        values: "1x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LokiStatefulSetUnavailable
+        exp_alerts: []
+
+  # ── DESIRED, NOT CREATED — the case the two metrics disagree on ─────────────
+  # A replica the controller cannot create (quota, nothing schedulable, a PVC
+  # stuck Pending) never appears in kube_statefulset_status_replicas. So a
+  # StatefulSet wanting 3 with only 1 pod created AND ready has
+  # ready(1) < created(1) FALSE and ready(1) < desired(3) TRUE.
+  #
+  # This is the only fixture that can tell the two metrics apart: every other case
+  # here has created == desired, so the rule passes them whichever it reads. If
+  # the expression is ever switched back to status_replicas, this goes red alone.
+  - interval: 30s
+    name: a replica that was never created still counts as degraded
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "1x120"
+      # Only one pod was ever created…
+      - series: 'kube_statefulset_status_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "1x120"
+      # …but three are wanted.
+      - series: 'kube_statefulset_replicas{namespace="monitoring",statefulset="loki-ingester"}'
+        values: "3x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiStatefulSetDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: loki
+              namespace: monitoring
+              statefulset: loki-ingester
+            exp_annotations:
+              summary: "Loki loki-ingester has fewer ready replicas than desired"
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: "monitoring/loki-ingester has had a replica not-Ready for 15m (1 ready). Ingestion is degraded and the PodDisruptionBudget will block node drains. On an INGESTER the usual cause is an OOMKill during WAL replay, which does not self-heal — `kubectl -n monitoring logs <pod> --previous | tail` and check the memory limit against the WAL-replay floor (`llz ci assert-loki` reports it)."

@@ -1,0 +1,344 @@
+package health
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+// sections.go ports the remaining count/phase/condition checks (sections 3a–3i):
+// PV hygiene, NetworkPolicy presence, Jobs, CronWorkflows, Service endpoints,
+// PodDisruptionBudgets, Ingress addresses, Argo Workflows, and stuck-finalizer
+// deletions. All reuse the established categories + deferred/phase-1 routing; the
+// caller resolves phase1Pending (phase1 && MatchPrefix) where a name match applies.
+
+// ClassifyPVPhase classifies a PersistentVolume by phase: Failed/Pending are hard
+// failures; Bound/Available/Released are fine (Released is an expected orphan
+// under Retain — the orchestrator emits a single aggregate warn when any exist);
+// an unrecognized phase warns.
+func ClassifyPVPhase(phase string) Category {
+	switch phase {
+	case "Failed", "Pending":
+		return CatFail
+	case "Bound", "Available", "Released":
+		return CatOK
+	default:
+		return CatWarn
+	}
+}
+
+// NetpolExemptNamespace reports whether a namespace owns no repo default-deny
+// NetworkPolicy (argocd is operator-managed; kube-system is implicit-allow).
+func NetpolExemptNamespace(ns string) bool { return ns == "argocd" || ns == "kube-system" }
+
+// ClassifyNamespaceNetpol classifies a namespace's NetworkPolicy presence: ≥1 is
+// healthy; zero defers when the namespace's NPs ride along with an operator-
+// deferred Application, else fails (default-deny missing).
+func ClassifyNamespaceNetpol(ns string, count int) (Category, string) {
+	if count >= 1 {
+		return CatOK, fmt.Sprintf("Namespace %s has %d NetworkPolicy(s)", ns, count)
+	}
+	if r, ok := MatchExternalDep(ns, NPExternalDepNamespaces()); ok {
+		return CatDeferred, fmt.Sprintf("Namespace %s has NO NetworkPolicies — %s", ns, r)
+	}
+	return CatFail, fmt.Sprintf("Namespace %s has NO NetworkPolicies — default-deny missing (workloads run unrestricted)", ns)
+}
+
+// ClassifyJob classifies a Job: Complete passes; Failed fails (pending under a
+// Phase-1 cascade); a never-started Job (no active/succeeded/failed pods) warns
+// (pending under Phase 1); otherwise it's in progress.
+func ClassifyJob(key string, complete, failed bool, active, succeeded, failedCount int, phase1Pending bool) (Category, string) {
+	if complete {
+		return CatOK, fmt.Sprintf("Job %s Complete (%d succeeded)", key, succeeded)
+	}
+	if failed {
+		if phase1Pending {
+			return CatPending, "Job " + key + " Failed — waiting on OpenBao bootstrap"
+		}
+		return CatFail, fmt.Sprintf("Job %s Failed (succeeded=%d failed=%d)", key, succeeded, failedCount)
+	}
+	if active == 0 && succeeded == 0 && failedCount == 0 {
+		if phase1Pending {
+			return CatPending, "Job " + key + " not started — waiting on OpenBao bootstrap"
+		}
+		return CatWarn, "Job " + key + " no active/succeeded/failed pods (stuck pre-admission?)"
+	}
+	return CatOK, fmt.Sprintf("Job %s active=%d succeeded=%d failed=%d (in progress)", key, active, succeeded, failedCount)
+}
+
+// JobRun is the subset of a Job the supersession analysis needs.
+type JobRun struct {
+	Key       string    // namespace/name
+	CronOwner string    // owning CronJob name ("" if not CronJob-spawned)
+	Created   time.Time // metadata.creationTimestamp
+	Complete  bool
+	Failed    bool
+}
+
+// SupersededFailedJobs returns the keys of Failed Jobs that a NEWER (or
+// same-time) Completed sibling under the same CronJob owner has superseded —
+// an early CronJob tick that failed before its backing service was up (e.g.
+// harbor-robot-provisioner firing before harbor-core serves, or argo-resync-
+// nudger before argocd is ready), later made moot by a successful tick.
+//
+// The gate would otherwise hard-fail on such a historical Failed Job even
+// though the CronJob is healthy — a recurring false red (2026-07-02 e2e). The
+// rule is deliberately narrow: a Failed Job is superseded ONLY by a success
+// created at-or-after it, so a CURRENT regression (latest tick failing after an
+// earlier success) still fails. Jobs with no CronJob owner are never masked.
+func SupersededFailedJobs(jobs []JobRun) map[string]bool {
+	latestOK := map[string]time.Time{}
+	for _, j := range jobs {
+		if j.Complete && j.CronOwner != "" {
+			if t, ok := latestOK[j.CronOwner]; !ok || j.Created.After(t) {
+				latestOK[j.CronOwner] = j.Created
+			}
+		}
+	}
+	out := map[string]bool{}
+	for _, j := range jobs {
+		if j.Failed && !j.Complete && j.CronOwner != "" {
+			if t, ok := latestOK[j.CronOwner]; ok && !j.Created.After(t) {
+				out[j.Key] = true
+			}
+		}
+	}
+	return out
+}
+
+// ClassifyCronWorkflow classifies a CronWorkflow: a SubmissionError fails; a
+// suspended one warns; ageDays<0 (never scheduled) is informational; a
+// lastScheduledTime older than staleDays fails (schedule isn't firing); else OK.
+func ClassifyCronWorkflow(key, submissionErr string, suspended bool, ageDays, staleDays int) (Category, string) {
+	switch {
+	case submissionErr != "":
+		return CatFail, "CronWorkflow " + key + " SubmissionError — " + submissionErr
+	case suspended:
+		return CatWarn, "CronWorkflow " + key + " suspended (spec.suspend=true)"
+	case ageDays < 0:
+		return CatOK, "CronWorkflow " + key + " has not yet scheduled a run"
+	case ageDays > staleDays:
+		return CatFail, fmt.Sprintf("CronWorkflow %s lastScheduledTime is %dd old (> %dd) — schedule isn't firing", key, ageDays, staleDays)
+	default:
+		return CatOK, fmt.Sprintf("CronWorkflow %s (%dd ago, no SubmissionError)", key, ageDays)
+	}
+}
+
+// ClassifyServiceEndpoints classifies a Service by its endpoint counts:
+// >0 ready passes; zero routes through Phase-1, then operator-deferred, then the
+// endpoints-exist-but-none-ready case, before failing.
+//
+// THE OLD MESSAGE NAMED BOTH CAUSES AND CHOSE THE WRONG VERDICT FOR ONE OF THEM:
+// "selector drift or all backing pods NotReady". Those need opposite answers.
+// Selector drift is a spec error that waiting never fixes. Backing pods that are
+// not Ready YET is what every Service looks like while its Deployment rolls out —
+// and on a four-minute-old cluster it cost a release-e2e round, because two such
+// Services sixty seconds apart tripped converge's hard-failure abort while the
+// cluster was still installing.
+//
+// The endpoint counts tell them apart without guessing. An EndpointSlice lists
+// notReady addresses too, so total>0 with ready==0 means the pods EXIST and have
+// not passed their probes — pending, bounded by the convergence budget. total==0
+// means nothing backs this Service at all, which is the selector-drift case and
+// stays a failure.
+func ClassifyServiceEndpoints(key string, readyCount, totalCount int, phase1Pending bool) (Category, string) {
+	if readyCount > 0 {
+		return CatOK, fmt.Sprintf("Service %s (%d ready endpoint(s))", key, readyCount)
+	}
+	if phase1Pending {
+		return CatPending, "Service " + key + " has 0 ready endpoints — waiting on OpenBao bootstrap"
+	}
+	if r, ok := MatchExternalDep(key, ExternalDepWorkloads()); ok {
+		return CatDeferred, "Service " + key + " has 0 ready endpoints — " + r
+	}
+	if totalCount > 0 {
+		// SAME BUDGET RULE AS THE ZERO-ENDPOINT CASE BELOW. Pods that have not
+		// passed readiness YET is a rollout; pods that never pass it is a broken
+		// workload, and only a budget can tell the two apart. This branch returned
+		// CatPending unconditionally while its neighbour was already gated —
+		// leaving a Service whose pods never become Ready reading "still starting"
+		// forever in one-shot `llz ci health`, which is the regression budgeted.go
+		// exists to prevent, in the file that motivated it.
+		return PendingIfBudgeted(
+			fmt.Sprintf("Service %s has %d endpoint(s) but none Ready yet — backing pods still starting", key, totalCount),
+			fmt.Sprintf("Service %s has %d endpoint(s) and NONE Ready — this is a steady-state check, so the "+
+				"backing pods are not starting, they are failing their readiness probe", key, totalCount))
+	}
+	// ZERO ENDPOINTS IS ALSO PENDING, which is easy to get wrong: "endpoints exist
+	// but are notReady" looks like it covers the still-starting case, but a pod only
+	// appears in an
+	// EndpointSlice once it HAS a PodIP, so a Service whose pods are still
+	// Pending/ContainerCreating has no endpoints AT ALL. The young-cluster abort
+	// this whole change set exists to stop would have survived it, now wearing a
+	// more confident message ("selector drift, or nothing backing it").
+	//
+	// Nothing observable here distinguishes drift from not-created-yet: both are
+	// an empty slice. So the poll defers, and the convergence BUDGET is what
+	// decides — a Service that still has no endpoints when the budget runs out is
+	// named in the exhaustion report (reportConvergePending), which is the same
+	// information arriving a few minutes later instead of aborting a cluster that
+	// is merely young.
+	return PendingIfBudgeted(
+		"Service "+key+" has no endpoints yet — backing pods not created, or selector drift; the budget decides",
+		"Service "+key+" has no endpoints (selector drift, or nothing backing it) — this is a steady-state "+
+			"check, so there is no budget left for it to be 'not yet'")
+}
+
+// ClassifyPDB classifies a PodDisruptionBudget. An orphan (expectedPods=0) is
+// informational; a satisfied budget (currentHealthy≥desired with disruptions
+// allowed, or single-replica / over-provisioned) passes; otherwise an operator-
+// deferred match defers, Phase 1 pends, and the two remaining shapes — a budget
+// that can NEVER permit a drain, and a satisfiable budget whose workload is not
+// healed yet — are both left to the convergence budget.
+//
+// WHY THE TAIL IS BUDGETED AND NOT AN UNCONDITIONAL FAIL. A PDB reports
+// currentHealthy=0 for the whole window in which its pods are ContainerCreating,
+// which on a young cluster is indistinguishable from a workload that will never
+// come up — the same ambiguity ClassifyServiceEndpoints resolves through
+// PendingIfBudgeted, and for the same reason. This branch was gated on phase1
+// instead, which does NOT mean "workloads still settling" despite the message it
+// printed: phase1 is specifically "OpenBao bootstrap pending" and it is one-way,
+// so it has already resolved by the time later-wave charts start rolling out. A
+// real e2e round aborted a healthy cluster ~13 minutes old on nothing but
+// `PDB monitoring/loki-ingester (currentHealthy=0 desiredHealthy=2
+// disruptionsAllowed=0 expectedPods=3)` while the same poll reported all three
+// loki-ingester pods as ContainerCreating and monitoring-loki as Progressing.
+//
+// The two shapes are split because they need different remediation and the old
+// single message named the wrong one. desiredHealthy ≥ expectedPods is a
+// CONFIG defect — minAvailable ≥ replicas can never allow a disruption even at
+// full health — and that is the case "check minAvailable vs replicas" describes.
+// desiredHealthy < expectedPods is a config that WILL permit drains once the
+// workload heals, so pointing the operator at minAvailable sends them to a file
+// with nothing wrong in it; the verdict belongs to the workload's own section.
+func ClassifyPDB(key string, cur, des, allow, exp int, phase1 bool) (Category, string) {
+	label := fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d)", key, cur, des, allow)
+	switch {
+	case exp == 0:
+		return CatOK, "PDB " + key + " expectedPods=0 (selector matches nothing — orphan PDB?)"
+	case cur >= des && allow != 0:
+		return CatOK, label
+	case cur >= des && exp == 1:
+		return CatOK, "PDB " + key + " (single-replica, drain blocks until reschedule)"
+	case cur >= des && des < exp:
+		return CatOK, "PDB " + key + " (over-provisioned, permits drains once healed)"
+	}
+	if r, ok := MatchExternalDep(key, ExternalDepWorkloads()); ok {
+		return CatDeferred, label + " — " + r
+	}
+	if phase1 {
+		return CatPending, label + " — support plane still installing"
+	}
+	// minAvailable ≥ replicas: no amount of healing raises disruptionsAllowed, so
+	// this is a real defect — but expectedPods is read live, and a StatefulSet
+	// scaling up reports a partial one, so a budget still gets to see it settle.
+	if exp > 1 && des >= exp {
+		return PendingIfBudgeted(
+			fmt.Sprintf("%s — desiredHealthy ≥ expectedPods=%d, which permits no drain; still budgeted in case the workload is mid-scale-up and expectedPods has yet to rise", label, exp),
+			fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d expectedPods=%d) — node drains will block: minAvailable ≥ replicas, so disruptionsAllowed can never rise above 0 even at full health. Lower minAvailable or raise replicas.", key, cur, des, allow, exp))
+	}
+	// desiredHealthy < expectedPods: the budget itself is fine and will permit
+	// drains as soon as the workload heals. The only thing wrong here is pod
+	// health, which the workload and pod sections already judge.
+	return PendingIfBudgeted(
+		fmt.Sprintf("%s — budget is satisfiable (desiredHealthy < expectedPods=%d); backing pods still starting", label, exp),
+		fmt.Sprintf("PDB %s (currentHealthy=%d desiredHealthy=%d disruptionsAllowed=%d expectedPods=%d) — the budget is fine (minAvailable < replicas); %d of %d pods are healthy, so the BACKING WORKLOAD is unhealthy — this is a steady-state check, so they are not starting. Its own section carries the verdict.", key, cur, des, allow, exp, cur, exp))
+}
+
+// ClassifyIngress classifies an Ingress by whether its loadBalancer address is
+// programmed: ≥1 address passes; none pends under Phase 1, else fails.
+func ClassifyIngress(key string, addressCount int, phase1 bool) (Category, string) {
+	if addressCount > 0 {
+		return CatOK, "Ingress " + key + " programmed"
+	}
+	if phase1 {
+		return CatPending, "Ingress " + key + " has no address — ingress controller may not yet be Ready"
+	}
+	return CatFail, "Ingress " + key + " has no .status.loadBalancer.ingress (controller down / IngressClass mismatch / webhook rejection)"
+}
+
+// ClassifyWorkflowPhase classifies a (persisted) Argo Workflow by phase:
+// Failed/Error fails (pends under Phase 1, where cert-automation is gated on
+// OpenBao); Succeeded passes; Pending/Running are in-flight (OK/info).
+// IsEphemeralE2EProbe reports whether a Workflow/Job/Pod name is an ephemeral e2e
+// EXERCISE object created by an `llz ci assert-*` step, NOT a platform component:
+//   - the health-probe Workflow (generateName "e2e-assert-health-")
+//   - the broad-PAT rotator exercise Job ("broad-pat-rotator-e2e")
+//
+// Each is judged by its OWN assert step; a Failed one lingering on a REUSED e2e
+// cluster must never gate convergence, which scans ALL Workflows/Jobs/Pods and
+// would otherwise inherit a prior run's dead exercise object (converge runs
+// BEFORE the assert steps, so it can only ever see prior-run leftovers).
+func IsEphemeralE2EProbe(name string) bool {
+	return strings.HasPrefix(name, "e2e-assert-health-") || name == "broad-pat-rotator-e2e"
+}
+
+func ClassifyWorkflowPhase(key, phase string, phase1 bool) (Category, string) {
+	// key is "namespace/name" — ignore ephemeral e2e probes regardless of phase.
+	if name := key[strings.LastIndex(key, "/")+1:]; IsEphemeralE2EProbe(name) {
+		return CatOK, "Workflow " + key + " (ephemeral e2e probe — not a convergence signal)"
+	}
+	switch phase {
+	case "Failed", "Error":
+		if phase1 {
+			return CatPending, fmt.Sprintf("Workflow %s phase=%s — cert-automation gated on OpenBao bootstrap", key, phase)
+		}
+		return CatFail, fmt.Sprintf("Workflow %s phase=%s", key, phase)
+	case "Succeeded":
+		return CatOK, "Workflow " + key + " Succeeded"
+	default:
+		return CatOK, fmt.Sprintf("Workflow %s %s (in flight)", key, phase)
+	}
+}
+
+// StuckFinalizer reports whether a resource is a dead, un-GC-able object: it has
+// a deletionTimestamp, a non-empty finalizer set, and has been Terminating for
+// more than 5 minutes.
+func StuckFinalizer(hasDeletionTimestamp bool, finalizerCount int, ageSeconds float64) bool {
+	return hasDeletionTimestamp && finalizerCount > 0 && ageSeconds > 300
+}
+
+// StuckResourceRef maps one StuckResourceKinds entry's resource plural to the
+// (group, Kind) identity the ownership index is keyed on, so the stuck-finalizer
+// sweep can ask the boundary like every other section. ok=false for a plural with
+// no mapping — which gates, the fail-closed direction.
+//
+// The sweep scans exactly the kinds instance-owned Applications declare
+// (ExternalSecrets, Certificates, PVCs, Workflows), and a half-deleted escape-hatch
+// app is one of the likelier ways to produce a stuck finalizer, so leaving it on
+// the platform-only funnel meant an app team's wedged delete aborted the platform
+// bootstrap.
+func StuckResourceRef(plural, namespace, name string) (ResourceRef, bool) {
+	res, group, _ := strings.Cut(plural, ".")
+	kind, ok := map[string]string{
+		"pv":                  "PersistentVolume",
+		"pvc":                 "PersistentVolumeClaim",
+		"certificates":        "Certificate",
+		"certificaterequests": "CertificateRequest",
+		"workflows":           "Workflow",
+		"externalsecrets":     "ExternalSecret",
+		"clustersecretstores": "ClusterSecretStore",
+		"clusterissuers":      "ClusterIssuer",
+		"issuers":             "Issuer",
+	}[res]
+	if !ok {
+		return ResourceRef{}, false
+	}
+	return ResourceRef{Group: group, Kind: kind, Namespace: namespace, Name: name}, true
+}
+
+// StuckResourceKinds are the kinds swept for stuck-finalizer deletions, in
+// "kind|scope" form (scope "-A" = namespaced, "" = cluster-scoped).
+func StuckResourceKinds() []string {
+	return []string{
+		"pv|",
+		"pvc|-A",
+		"certificates.cert-manager.io|-A",
+		"certificaterequests.cert-manager.io|-A",
+		"workflows.argoproj.io|-A",
+		"externalsecrets.external-secrets.io|-A",
+		"clustersecretstores.external-secrets.io|",
+		"clusterissuers.cert-manager.io|",
+		"issuers.cert-manager.io|-A",
+	}
+}

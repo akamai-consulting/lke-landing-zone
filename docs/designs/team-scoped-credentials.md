@@ -1,0 +1,255 @@
+# Design: team-scoped credentials — retire the shared admin kubeconfig and root-for-writes
+
+**Status:** Partial — phase 1 shipped in #300 (Keycloak → OpenBao write identity, no
+LKE-E control-plane dependency), completed by #336, which added the **read** half
+the sketch below omits (ESO consuming what a team writes — see *The read half* at
+the end); Phase 2 (scoped kube credentials) remains proposed, gated on an open
+LKE-Enterprise feasibility question (see *Open question*). Where the as-built
+Phase 1 diverges from the sketch below, see **As-built** at the end — the shipped
+code is authoritative.
+
+Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
+[`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
+[`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go),
+[`tools/internal/extensions/lifecycle/openbao/cli.go`](../../tools/internal/extensions/lifecycle/openbao/cli.go).
+
+## Problem
+
+There is exactly **one** human-facing credential per LKE-Enterprise cluster: the
+Linode-issued **cluster-admin** kubeconfig (`lke-admin-token`), fetched via the
+Linode API or Terraform state
+([`fetch.go:9`](../../tools/internal/extensions/lifecycle/clusteraccess/fetch.go),
+[`lkeadmin.go`](../../tools/internal/extensions/lifecycle/credrotate/lkeadmin.go)) and
+shared by every SRE and every CI job
+([`lke-admin-rotation.md:13`](../runbooks/lke-admin-rotation.md),
+[`prom_query.go:8`](../../tools/internal/extensions/assertions/assertobs/promquery.go)). It is
+`system:masters`-equivalent, unattributable (everyone is the same identity),
+and can only be rotated by deleting and regenerating that single token — never
+scoped or individually revoked.
+
+That single identity sits at the bottom of **two** access paths:
+
+1. **Cluster access** — anyone with the kubeconfig is cluster-admin.
+2. **Secret writes** — `llz openbao get|set` reaches OpenBao *through* that
+   kubeconfig (kubectl `port-forward` / `exec`, since OpenBao has no external
+   ingress). Broad writes require the **root token**, which every bootstrap
+   deliberately revokes
+   ([`ci_openbao_configure.go:358`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go)),
+   so the documented operator flow is `regen-root` (a 3-of-5 unseal-key quorum)
+   before every write session.
+
+The result: routine secret writes require reconstituting root, and there is no
+per-team attribution or least-privilege anywhere in the human path.
+
+## Key insight — these are separable problems
+
+Cluster access and OpenBao write authority are coupled only by *network
+transport*, not by *authorization*:
+
+- The kubeconfig is needed to **reach** OpenBao (port-forward), because OpenBao
+  has no external ingress.
+- The kubeconfig is *not* inherently needed to **authorize** a write — OpenBao's
+  own auth methods decide that, and **we run OpenBao**. Its JWT/OIDC auth is
+  already used for GitHub Actions OIDC
+  ([`ci_openbao_configure.go:284`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go));
+  pointing a second mount at Keycloak needs no LKE-E cooperation.
+
+Therefore: **root-for-writes can be eliminated without solving the LKE-E
+kubeconfig problem.** The shared kubeconfig stays as the port-forward transport;
+it stops being the write *authority*. This is Phase 1 — the majority of the
+value — and it carries no managed-control-plane risk.
+
+## Identity model — teams are Keycloak groups
+
+APL/Otomi already ships a non-disableable **standalone Keycloak** in the `otomi`
+realm, used today only as the browser-SSO IdP for platform web UIs via
+oauth2-proxy — it is **not** wired to the kube-apiserver. We reuse that realm as
+the identity source: an **APL team is a Keycloak group** (e.g. `gsap`). One human
+login backs both halves of the plan; no new IdP is introduced.
+
+## Phase 1 — Keycloak-backed OpenBao write identity (no LKE-E dependency)
+
+Extend [`ci_openbao_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go),
+whose policy/role sequence is already idempotent and root-driven at bootstrap:
+
+1. **Second JWT/OIDC auth mount** `oidc-keycloak`, with
+   `oidc_discovery_url = https://keycloak.<domainSuffix>/realms/otomi`. This
+   mirrors the existing GitHub-OIDC `jwtRole` closure
+   ([`:274`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go)); the GitHub mount is
+   untouched.
+2. **Per-team write policy**, shaped like the existing narrow allowlists
+   ([`:74-104`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go)). Example
+   `gsap-writer`:
+   ```hcl
+   path "secret/data/gsap/*"     { capabilities = ["create","update","read"] }
+   path "secret/metadata/gsap/*" { capabilities = ["read","list"] }
+   ```
+3. **Role bound on the group claim**: `bound_claims = {"groups":"gsap"}`,
+   `user_claim = "sub"`, `token_ttl = 1h` (max `8h`), policy `gsap-writer`. A team's
+   secret subtree and its Keycloak group are declared together (see *Spec surface*).
+   The TTL is human-scale, not machine-scale: this token is minted by an interactive
+   browser device login, and an operator running several `llz openbao set` seeds in
+   one sitting had a 15m token expire mid-flow and had to redo the whole login.
+   Scope is unchanged — still only the team's `<name>-writer` policy.
+4. **`llz openbao login`** — a Keycloak **device-code flow** (`keycloak.<suffix>`
+   is externally reachable) → id_token → `auth/oidc-keycloak/login` on OpenBao,
+   reached over the **existing auto port-forward** from PR #298 → caches a
+   short-lived, team-scoped token in the shell. Subsequent `llz openbao set`
+   picks it up via the normal `OPENBAO_TOKEN` path
+   ([`openbao.go`](../../tools/internal/extensions/lifecycle/openbao/cli.go)).
+
+**Outcome:** operators authenticate as themselves; writes are **attributed** (the
+`sub` claim) and **least-privilege** (their team subtree only); root stays
+revoked. The interim workaround until this lands is a one-time-root-minted
+periodic token stored as `OPENBAO_TOKEN` — Phase 1 replaces that hand-minted
+token with a Keycloak-brokered one.
+
+## Phase 2 — scoped kube credentials per team (LKE-E-constrained)
+
+Retiring the shared admin kubeconfig itself. The design forks on the *Open
+question* below:
+
+- **If the LKE-E apiserver can consume a custom OIDC issuer** → issue real
+  per-user OIDC kubeconfigs against the same Keycloak realm; map the group claim
+  to scoped `Role`/`RoleBinding`s (a per-team RBAC generator in `render`, which
+  emits none today). Cleanest outcome — one identity, both planes.
+- **If it cannot** (the expected result for a managed control plane) → per-team
+  **ServiceAccount + scoped RBAC**, issued as short-lived **bound
+  ServiceAccount-token kubeconfigs** (TokenRequest API) by a new
+  `llz credentials team-kubeconfig`, ideally brokered behind the oauth2-proxy /
+  Keycloak that already fronts the platform so issuance is itself group-gated.
+
+**The minimum that connects the phases:** a team SA needs only `pods/portforward`
++ `get pods` in the `llz-openbao` namespace to *reach* OpenBao — a tiny `Role`,
+no cluster-admin. That plus the Phase-1 token yields a complete team-scoped
+secret-write path with **neither** the shared admin kubeconfig **nor** root.
+Broader team kube access (operating workloads, namespaces) is a separate, larger
+RBAC effort layered on the same identity.
+
+Phase 2 also inherits two LKE-E realities to design around: the control-plane
+**IP-ACL** gating (`cluster-access` opens the runner egress IP;
+[`cluster-access/action.yml`](../../instance-template/.github/actions/cluster-access/action.yml))
+and admission **webhook denials** on some subresources for even cluster-admin
+(`services/proxy` denied, `pods/portforward` allowed —
+[`prom_query.go:6`](../../tools/internal/extensions/assertions/assertobs/promquery.go)).
+
+## Spec surface
+
+Teams are greenfield in the spec — the LandingZone CRD has no `Team` type today
+([`clusterspec/types.go`](../../tools/internal/shared/clusterspec/types.go)). Introduce a
+minimal declaration so team → group → secret-subtree is one source of truth that
+`ci bao-configure` (and, in Phase 2, an RBAC generator) consumes:
+
+```yaml
+spec:
+  teams:
+    - name: gsap
+      openbaoSubtree: secret/gsap  # → gsap-writer policy on secret/data/gsap/*
+```
+
+> **As-built:** the surface is just `{name, openbaoSubtree}` — there is no
+> `keycloakGroup` field. Teams reuse apl-core's **native** teams: `llz render`
+> emits a `teamConfig.<name>` overlay and apl-core provisions the group + realm
+> role **`team-<name>`**, which is what the OpenBao role binds on. See *As-built*
+> at the end.
+
+## Open question (decides Phase 2, blocks nothing in Phase 1)
+
+**Can the LKE-Enterprise managed apiserver accept a custom OIDC issuer** — via
+`--oidc-*` flags or a Structured Authentication Config file? There is no such
+wiring anywhere in the repo today, and managed control planes typically do not
+expose it. The answer (from Akamai/Linode docs or support) determines whether
+Phase 2 is "real OIDC kubeconfigs" or "brokered SA tokens." Phase 1 is unaffected
+either way.
+
+## Non-goals
+
+- CI / in-cluster automation identity — already solved (GitHub-OIDC jwt roles +
+  Kubernetes-auth roles); this design is scoped to **human operators**.
+- External app-team tenancy (teams deploying their own workloads) — a later layer
+  on the same Keycloak-group identity.
+- Giving OpenBao an external ingress — out of scope; the port-forward transport
+  stays.
+
+## As-built (Phase 1, shipped in #300)
+
+The Phase 1 sketch above is preserved as the design record; the shipped code
+diverges in these specifics (the code is authoritative):
+
+- **Mount name is `keycloak`**, not `oidc-keycloak` — so operators hit
+  `auth/keycloak/login` and `llz openbao login` targets that mount.
+- **Validated via internal JWKS, not the public discovery URL.**
+  `oidc_discovery_url = https://keycloak.<domainSuffix>/…` hairpins on LKE-E (the
+  public host resolves to the cluster's own LB IP), so the mount uses `jwks_url`
+  (Keycloak's in-cluster http service) + `bound_issuer` (the public issuer,
+  matching the token `iss`), plus `skip_jwks_validation=true` so the config write
+  doesn't eagerly fetch before Keycloak converges. An egress NetworkPolicy allows
+  openbao → keycloak.
+- **Teams reuse apl-core's native teams.** No bespoke Keycloak group/mapper:
+  `llz render` emits `teamConfig.<name>` and apl-core provisions the group +
+  realm role **`team-<name>`** + the `groups`-claim mapper. The OpenBao role
+  binds on the `groups` value `team-<name>` (not a bare `gsap`), and the spec
+  drops `keycloakGroup` (§ *Spec surface*).
+- **`llz ci keycloak-configure`** ensures the one thing apl-core doesn't — a
+  public device-flow `llz` client with the `openid` scope + an `aud:llz` mapper —
+  and the OpenBao role sets **`bound_audiences=[llz]`**, so only a token minted
+  for OpenBao login is accepted (not any otomi-realm id_token carrying `groups`).
+- **New-clusters-only default.** `llz new` scaffolds a `platform` team (the
+  `openbao_team` question); there is no load-time default, so existing instances
+  are byte-identical until they opt in via the retrofit runbook.
+
+Reference: [`ci_openbao_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go),
+[`ci_keycloak_configure.go`](../../tools/internal/extensions/lifecycle/identityconfig/keycloak_configure.go),
+[`openbao_login.go`](../../tools/internal/extensions/lifecycle/openbao/teamlogin.go),
+[`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
+
+## The read half (shipped in #336)
+
+Phase 1 as sketched — and as first shipped — was **write-only**. A team could
+write `secret/<subtree>/*` with an attributed, least-privilege token, but nothing
+in-cluster could consume it: ESO's `openbao` ClusterSecretStore authenticates as
+the `eso` Kubernetes-auth role, which carried only `platform-ci` — a fixed
+platform allowlist with no team coverage. Every ExternalSecret aimed at a
+team-written path 403'd, so the feature's actual use case (seed a credential as a
+team, consume it in a build or app) did not close.
+
+`bao-configure` now also writes a read-only **`<name>-reader`** policy per
+declared team and attaches it to the `eso` role
+(`policies=platform-ci,<team>-reader,…`):
+
+```hcl
+path "secret/data/<subtree>/*"     { capabilities = ["read"] }
+path "secret/metadata/<subtree>/*" { capabilities = ["read", "list"] }
+```
+
+Three properties worth keeping in mind when extending this:
+
+- **Read-only, unlike the writer twin** — ESO never writes app secrets (the
+  separate `eso-pusher` role owns the two generated push paths).
+- **Not gated on the Keycloak issuer.** ESO read must work on an instance whose
+  device-flow client was never configured, so the reader wiring sits in the main
+  step list, not `keycloakTeamSteps`. A team-less instance is byte-identical
+  (`policies=platform-ci`, no reader steps).
+- **Not a confidentiality boundary between teams.** Every reader hangs off the
+  ONE shared `eso` identity, and the ClusterSecretStore carries no namespace
+  `conditions` — so an ExternalSecret in any namespace resolves any team's
+  subtree, exactly as it already resolves platform-ci's paths. The **write** side
+  stays properly per-team (each `<name>-writer` is minted only for that team's
+  Keycloak group). Per-team read isolation would need a per-team SecretStore +
+  OpenBao role, or `conditions` on the store — deliberately not attempted here,
+  and the natural place to start if the *External app-team tenancy* non-goal above
+  is ever picked up.
+
+**Lifecycle caveat.** `bao-configure` needs root, and root is revoked at the end
+of every bootstrap, so the eso role's policy list is only ever re-derived on a
+cluster bootstrap or a deliberate re-configure dispatch — not by `llz upgrade`
+and not by the weekly scheduled-checks job. Declaring a team later, or
+offboarding one, therefore needs the manual steps in
+[the runbook](../runbooks/openbao-team-login.md); in particular, offboarding must
+re-write the eso role *before* deleting the reader policy, or ESO keeps a dormant
+grant on the ex-team's subtree.
+
+Covered by `TestESOTeamReaderPolicies` (policy HCL + role binding) and, live, by
+the `team-write` e2e lane — `llz ci team-login-smoke` mints the `external-secrets`
+SA token, logs in as the `eso` role, and asserts it can read the key the team just
+wrote while a path no policy covers still 403s.

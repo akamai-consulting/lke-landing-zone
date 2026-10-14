@@ -6,6 +6,17 @@
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [What you're getting access to](#what-youre-getting-access-to)
+- [Onboarding checklist](#onboarding-checklist)
+- [Things you cannot do as a fresh operator](#things-you-cannot-do-as-a-fresh-operator)
+- [What "done" looks like](#what-done-looks-like)
+- [Next: run something on it](#next-run-something-on-it)
+
+<!-- /toc -->
+
 ## What you're getting access to
 
 Five distinct surfaces, each with its own playbook for ongoing work:
@@ -13,12 +24,12 @@ Five distinct surfaces, each with its own playbook for ongoing work:
 | Surface | Where | Playbook | Auth model |
 |---|---|---|---|
 | Kubernetes (per cluster / per env) | LKE-Enterprise via `lke-admin` kubeconfig | — | kubeconfig (operator) |
-| OpenBao (per region) | `<release>-openbao-0` pod in `openbao` ns | [openbao-accounts.md](openbao-accounts.md) | root via `generate-root` (3-of-5 unseal shares) |
-| Harbor (primary only) | `harbor.<primary-cluster>.internal:5000` | [harbor-accounts.md](harbor-accounts.md) | admin password / per-person local user |
-| Grafana (per region) | port-forward `<release>-grafana` in `observability` | [grafana-access.md](grafana-access.md) | admin / per-person local user |
-| Loki (per region) | through Grafana or port-forward `<release>-loki-gateway` | [loki-access.md](loki-access.md) | `X-Scope-OrgID: <project>` header |
+| OpenBao (per region) | `<release>-openbao-0` pod in `llz-openbao` ns | [openbao-team-login.md](../runbooks/openbao-team-login.md) → [openbao-accounts.md](openbao-accounts.md) | **per-person, via `llz openbao login --team`** (Keycloak device flow); root is break-glass only |
+| Harbor (primary only) | the host the robot carries — `llz openbao get active secret/harbor/pull-robot registry_host` | [harbor-accounts.md](harbor-accounts.md) | admin password / per-person local user |
+| Grafana (per region) | port-forward `<release>-grafana` in `grafana` | [grafana-access.md](grafana-access.md) | admin / per-person local user |
+| Loki (per region) | through Grafana or port-forward `<release>-loki-gateway` in `monitoring` | [loki-access.md](loki-access.md) | `X-Scope-OrgID` header — tenant depends on the writer (`admins` for landing-zone namespaces) |
 
-GitHub Actions (the CI surface) is separate: see [Git + GitHub access](#git--github-access) below.
+GitHub Actions (the CI surface) is separate: see [Git + GitHub access](#2-git--github-access) below.
 
 ---
 
@@ -28,22 +39,37 @@ Tick each item once you've successfully exercised the access. The whole checklis
 
 ### 1. Local toolchain
 
+Your instance repo carries the spec, the overlays, and the workflows — **not** a
+Makefile or a scripts tree. Everything below is the `llz` binary plus the CLIs it
+drives.
+
 ```bash
 # Clone
 git clone git@github.com:<org>/<repo>.git
 cd <repo>
 
-# Enable the shared git hooks (pre-commit secret scan + audit, pre-push build check)
-git config core.hooksPath template-scripts/hooks
+# Install llz (or `llz self-update` if you already have it)
+curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
 
-# Install all required build + system tools (helm, kube-linter, syft, trivy, ...)
-make install-tools
+# Arm the pre-commit hook: secret-file guard + `llz lint`.
+# The hook is per-clone and NOT committed, so this is required after every fresh clone.
+llz hooks
 
-# Sanity-check
-make build
+# Sanity-check the toolchain (authoritative, always-current list of what the flow needs)
+llz doctor
 ```
 
-If `make install-tools` fails on syft/trivy, see the install helpers under `template-scripts/ci/` — they auto-install on macOS via brew or via SHA-verified tarball on Linux.
+> **Do not set `core.hooksPath`.** `llz hooks` installs to `.git/hooks/pre-commit`.
+> Pointing `core.hooksPath` somewhere else makes git ignore that directory
+> entirely — and if the path does not exist, **no hooks run at all**, silently,
+> including the secret guard.
+
+`llz doctor` lists anything missing and the command to fix it. To skip host
+installs altogether, open the repo in its [Dev Container](../devcontainer.md) —
+same toolchain, prebuilt.
+
+Add your own extra pre-commit checks in `.githooks/pre-commit.local` (an `owned`
+file the template never touches); `llz precommit` runs it after the built-in gate.
 
 ### 2. Git + GitHub access
 
@@ -60,72 +86,234 @@ If `make install-tools` fails on syft/trivy, see the install helpers under `temp
 
 ### 3. Kubernetes access (per cluster)
 
-Kubeconfigs are stored in Terraform state per cluster — CI fetches them via a composite action. Locally, do the same thing by hand:
+Kubeconfigs are stored in Terraform state per cluster. Reach for one of the two
+purpose-built commands rather than driving Terraform yourself:
 
 ```bash
-export AWS_ACCESS_KEY_ID="$TF_STATE_ACCESS_KEY"           # from your password manager
-export AWS_SECRET_ACCESS_KEY="$TF_STATE_SECRET_KEY"
-export AWS_ENDPOINT_URL_S3="https://us-ord-10.linodeobjects.com"
+export LINODE_API_TOKEN=…        # both paths need it; A also needs the TF state creds
 
-cd instance-template/terraform-iac-bootstrap/cluster-bootstrap
-for cluster in <cluster-1> <cluster-2>; do
-  terraform init -reconfigure \
-    -backend-config="bucket=<state-bucket>" \
-    -backend-config="key=cluster/${cluster}/terraform.tfstate" \
-    -backend-config="region=us-east-1"
-  terraform output -raw kubeconfig_raw > ~/.kube/<project>-${cluster}.config
-  chmod 0600 ~/.kube/<project>-${cluster}.config
-done
+# A. From Terraform state — what CI uses. Run from the cluster root; the command
+#    handles init, the encryption env, and the empty-output diagnostics.
+cd terraform-iac-bootstrap/cluster
+llz ci fetch-kubeconfig-state --region <env> --output ~/.kube/<instance>-<env>.config
 
-# Then switch with KUBECONFIG=~/.kube/<project>-<cluster-1>.config kubectl get nodes
+# B. From the Linode API — no terraform, no S3 backend, no state passphrase.
+#    Prefer this when you are locked out and unsure what still works.
+llz ci fetch-kubeconfig --region <env> --output ~/.kube/<instance>-<env>.config
 ```
+
+> **In a fresh clone, give B the cluster explicitly.** `--region` resolves the
+> cluster by reading `cluster_label`/`region` out of
+> `terraform-iac-bootstrap/cluster/<env>.tfvars` — and those tfvars are
+> **gitignored build artifacts**, so a clone that has not run `llz render <env>`
+> does not have them. Either render first, or name the cluster yourself, which
+> needs nothing from the repo at all:
+>
+> ```bash
+> llz ci fetch-kubeconfig --cluster-label <label> --linode-region <us-ord> \
+>   --output ~/.kube/<instance>-<env>.config
+> # or, if you have the numeric id:  --cluster-id 638034
+> ```
+
+Both write mode `0600`. Then:
+
+```bash
+export KUBECONFIG=~/.kube/<instance>-<env>.config
+kubectl get nodes
+```
+
+> **The control-plane ACL may refuse you.** LKE-E clusters restrict API-server
+> access to the CIDRs the spec seeded plus whatever the in-cluster firewall
+> controller reconciles. A `kubectl` that hangs or times out from a new location is
+> usually the ACL, not the kubeconfig — get your egress CIDR added to
+> `cluster.apiServerAllowCIDRs`.
 
 Verify:
 
-- [ ] `kubectl get nodes` returns nodes on each cluster (skip envs that aren't deployed yet — `terraform output` will be empty).
-- [ ] `kubectl -n openbao get pods` shows the 3-replica OpenBao StatefulSet.
+- [ ] `kubectl get nodes` returns nodes on each cluster (skip envs that aren't deployed yet — the fetch reports `available=false`).
+- [ ] `kubectl -n llz-openbao get pods` shows the 3-replica OpenBao StatefulSet.
+
+### 3b. Running OpenTofu by hand — `llz tofu`
+
+Sooner or later a runbook asks you to run OpenTofu directly (`apply -refresh-only`
+after an lke-admin rotation, `state pull` during a rotation window, a `plan` you
+want to read before dispatching a build). A bare `tofu` will not work, and the way
+it fails is worth understanding once:
+
+```
+Error: Invalid expression
+  on encryption.tf line 56, in terraform:
+A single static variable reference is required: only attribute access and
+indexing with constant keys …
+```
+
+That is **the tripwire doing its job, not a broken checkout.** Every root carries
+`encryption.tf`, which holds only the enforcement posture — the key provider and
+methods arrive from `$TF_ENCRYPTION`. Without it OpenTofu refuses to run rather
+than silently writing **plaintext state**, which would put kubeconfigs and every
+database admin password in the state bucket in the clear
+([ADR 0007](../adr/0007-terraform-state-encryption.md)). The message is OpenTofu's
+own and names neither the passphrase nor the variable.
+
+Do not assemble that document by hand. `llz tofu` resolves it — along with the
+object-storage backend credentials and the Linode token — from the
+`.llz/secrets.env` your `llz tokens` run already wrote:
+
+```bash
+cd terraform-iac-bootstrap/cluster
+
+llz tofu --region <env> -- init -upgrade      # --region also fills in the backend config
+llz tofu -- plan -var-file=<env>.tfvars
+llz --yes tofu -- apply -refresh-only -auto-approve -var-file=<env>.tfvars
+```
+
+Everything after `--` is passed through untouched, and anything you have already
+exported wins and is left alone — so this is a no-op in CI and never overrides a
+value you set deliberately.
+
+**On a fresh clone, run `llz render` first.** An instance commits zero `.tf` — the
+roots are generated from the `llz` binary and gitignored — and `llz tofu` refuses
+rather than passing an empty directory through, because `tofu init` there prints
+*"OpenTofu initialized in an empty directory!"*, **exits 0**, and resolves nothing.
+
+**Mutating verbs need `--yes`**, the same gate as `llz build` / `llz reap` /
+`llz credentials`; reads (`plan`, `init`, `output`, `state list`, `fmt`) do not.
+A few flags move a read into the first group — `init -migrate-state`,
+`-reconfigure` and `-force-copy` rewrite or re-point remote state, so they are
+gated even though a plain `init` is not.
+
+> The `llz ci tf-*` verbs (`tf-apply`, `tf-destroy`, `tf-import`) do **not** gate
+> on `--yes`. They are CI plumbing, and their confirmation lives in the calling
+> workflow — `tf-destroy` sits behind `assert-destroy-confirm`, for instance. Run
+> one by hand and you bypass the gate above, so prefer `llz tofu` for anything
+> you are driving yourself.
+`--dry-run` prints the exact OpenTofu command and the variables it would set, by
+name, and runs nothing:
+
+```bash
+llz --dry-run tofu -- apply -var-file=<env>.tfvars
+```
+
+**Prefer a plain `tofu`?** A command cannot export into the shell that launched
+it, so nothing `llz` runs can fix a shell that is already open. Put this in
+`~/.bashrc` / `~/.zshrc` once — it defines a `tofu` function that routes through
+`llz tofu`:
+
+```bash
+command -v llz >/dev/null 2>&1 && eval "$(llz tofu --shell-init)"
+```
+
+The dev container does this for you on create, so `tofu` just works there.
+Outside an instance checkout it changes nothing, and it falls through to the real
+binary if `llz` is ever missing.
+
+**This is also the safest option**, which is worth a sentence because the
+alternative looks equivalent and is not. The `tofu` function passes the
+credentials to the **child process only** — they never enter your interactive
+shell, so they are not inherited by everything else you run and not readable out
+of `/proc/<pid>/environ`.
+
+`llz tofu --export` exists for the remaining case — a script running several
+commands against one environment:
+
+```bash
+eval "$(llz tofu --export)"     # this shell, this session
+tofu init -upgrade
+```
+
+It writes the values to a private `0600` file and puts **only** a
+source-and-delete command on stdout, so the passphrase never lands in scrollback,
+a `script(1)` capture, a CI log or a `set -x` trace. The file is removed the
+moment your shell has read it, and any file an interrupted run left behind is
+swept by the next `llz tofu`. **Evaluate it straight away** — capturing the
+snippet and running it minutes later can find the file already swept, which is
+deliberate: the alternative is a passphrase sitting on disk for longer. It refuses to run on a terminal: with no `eval`
+around it, the handoff would leave a passphrase in a temp file and nothing on
+screen would say so.
+
+> **The passphrase is unrecoverable if lost.** A wrong one is a hard decryption
+> failure, not a fallback to plaintext. Escrow `TF_STATE_ENCRYPTION_PASSPHRASE`
+> offline with the same discipline as `OPENBAO_SEAL_KEY`.
+
+Verify:
+
+- [ ] `llz tofu -- version` runs from `terraform-iac-bootstrap/cluster` without an encryption error.
 
 ### 4. OpenBao access
 
-You don't get a permanent OpenBao token — operator access is via `bao operator generate-root` and requires 3-of-5 unseal-key shareholders to cooperate. The on-call docs list current shareholders; coordinate with them when you need a token.
+You get a **per-person, team-scoped** login through your APL/Keycloak identity — not
+a permanent token and not a root token. A platform admin adds you to the
+`team-<name>` group; then:
 
-Verify (no token needed for this — just port-forward):
+```bash
+eval "$(llz openbao login --team <name>)"     # browser device flow → OPENBAO_TOKEN
+```
 
-- [ ] `llz openbao get <cluster> secret/<example-path> <key> | head -1` returns the expected first line. If it errors with auth, you don't have an operator token yet — see [openbao-accounts.md](openbao-accounts.md).
+- [ ] A platform admin has added you to a `team-<name>` group (`llz apl user add --email <you> --team <name> --yes`).
+- [ ] `llz openbao login --team <name>` returns a token, and `llz openbao get active secret/<your-team>/<path> <key> | head -1` reads back. Full flow + troubleshooting: [openbao-team-login.md](../runbooks/openbao-team-login.md).
 
-You'll receive a **recovery key share** if you're a shareholder. That share lives in your password manager forever — it authorizes `bao operator generate-root` (emergency root-token regeneration), not unseal: the cluster auto-unseals itself from a static seal key after a pod restart. Never lose it.
+Root is break-glass only, and it is revoked at the end of every bootstrap — the
+supported way to get one back is the `breakglass-openbao.yml` workflow, which
+reconstitutes it from the recovery quorum stored in the `infra-<env>` environment.
+You do **not** need to hold recovery keys for that.
+
+If you *are* a recovery-key shareholder you'll receive a share. It lives in your
+password manager forever — it authorizes `generate-root` (emergency root-token
+regeneration), not unseal: the cluster auto-unseals itself from a static seal key
+after a pod restart. Never lose it.
 
 ### 5. Harbor access
 
-Harbor only runs on the primary cluster. Browse to `https://harbor.<primary-cluster>.internal:5000` (requires cluster network — VPN or jump host).
+Harbor runs on the primary cluster. **Don't hand-assemble the URL** — on Managed App
+Platform the domain is Linode's (`lke<id>.akamai-apl.net`), so read the authoritative
+host from the robot credential:
+
+```bash
+llz openbao get active secret/harbor/pull-robot registry_host    # → the host to browse
+```
+
+Reaching it needs cluster network (VPN or jump host).
 
 - [ ] You can log in with admin / password from [harbor-accounts.md](harbor-accounts.md#human-account--ui-login-recommended).
-- [ ] An admin has created a per-person local-DB user for you with appropriate role on the `<project>` project (see [harbor-accounts.md](harbor-accounts.md)). After login, change your initial password.
+- [ ] An admin has created a per-person local-DB user for you with the appropriate role on the `platform` project (see [harbor-accounts.md](harbor-accounts.md)). After login, change your initial password.
 
 ### 6. Grafana access
 
-- [ ] `kubectl -n observability port-forward svc/<release>-grafana 3000:80` works against the primary cluster.
+- [ ] `kubectl -n grafana port-forward svc/<release>-grafana 3000:80` works against the primary cluster.
 - [ ] You can log in at <http://localhost:3000> as admin with the password from [grafana-access.md](grafana-access.md). An admin should create a per-person Grafana user for you.
 - [ ] The platform dashboards load with data.
 
 ### 7. Loki access (sanity)
 
-- [ ] In Grafana → Explore → Loki, run `{namespace="openbao"}` over the last 24h. You should see audit-log entries from OpenBao.
+- [ ] In Grafana → Explore → Loki, run `{namespace="llz-openbao"}` over the last 24h.
+
+If that returns nothing, check the data source's tenant before assuming the pipeline
+is broken: Loki runs `auth_enabled: true` here, the OpenBao audit stream is written
+under tenant `platform`, and everything else in a landing-zone namespace lands under
+`admins`. An empty result is the signature of the wrong tenant, not a dead writer —
+see [loki-access.md](loki-access.md).
 
 ### 8. Argo CD access
 
-Argo CD is the GitOps engine for everything under the Argo manifests (the shared `instance-template/apl-values/_shared/manifest/` base + the per-component `instance-template/apl-values/components/`). To inspect deploys:
+Argo CD is installed and owned by apl-core, and it reconciles the LLZ Applications
+your instance's `apl-values/<env>/manifest` overlay points at.
+
+Log in through the platform console's Argo CD link (Keycloak SSO — the same identity
+as §4), or port-forward for a direct look:
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:443
-# Browse to https://localhost:8080
-# Get the initial admin password:
-kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 -d
+# Browse to https://localhost:8080 and use the SSO button.
 ```
 
+> The upstream chart's `argocd-initial-admin-secret` local admin is **not** the
+> intended path here and may not exist on an apl-core-managed Argo CD. If you need a
+> local admin for a break-glass case, check whether the Secret is present before
+> planning around it:
+> `kubectl -n argocd get secret argocd-initial-admin-secret`.
+
 - [ ] You can log in to Argo CD on the primary cluster.
-- [ ] All Applications under the `<project>` project show `Healthy` + `Synced`.
+- [ ] Every LLZ Application shows `Healthy` + `Synced` (`llz status <env>` reports the same thing without a browser).
 
 If anything is out-of-sync or unhealthy, see [argocd-ops.md](argocd-ops.md).
 
@@ -133,10 +321,17 @@ If anything is out-of-sync or unhealthy, see [argocd-ops.md](argocd-ops.md).
 
 Skim each [`docs/runbooks/`](../runbooks/) file once so you know what exists and where. You'll come back to them when alerts fire:
 
+- `bootstrap-openbao.md` — first-time / re-bootstrap of OpenBao, **and the break-glass root-token workflow**
+- `openbao-team-login.md` — onboarding a person to a team; the whole `login --team` troubleshooting matrix
 - `lke-admin-rotation.md` — rotating LKE-Enterprise admin tokens (monthly)
 - `linode-credential-rotation.md` — Linode PAT + OBJ-key rotation
-- `bootstrap-openbao.md` — first-time / re-bootstrap of OpenBao
 - `orphan-volume-cleanup.md` — reclaiming orphaned block-storage volumes
+- `volume-labels.md` — why nothing renames Volumes any more, and what to do about ones older builds did
+- `reconciler-alerts.md` — triaging `LLZReconciler*` alerts
+- `apl-values-propagation.md` — a values change that hasn't reached the cluster
+- `apl-branch-recreate-wedge.md` — the `apl-<env>` branch wedge
+- `import-apl-site.md` — adopting an existing APL site onto LLZ
+- `e2e-lane-diagnostics.md` — debugging the release-e2e lane (maintainers)
 
 ### 10. On-call
 
@@ -152,7 +347,11 @@ Just so you don't burn time looking:
 
 - **Delete OpenBao recovery keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
 - **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
-- **Change a `*.terraform.lock.hcl` provider version casually** — these come through dependabot PRs that the CVE gate audits.
+- **Change a provider version casually** — and you no longer have a `.terraform.lock.hcl` to change. The pin and the
+  `required_providers` constraint it satisfies are embedded together inside `llz`, and `llz render` writes both into each
+  root before every Terraform op, so a provider move is a template release rather than a PR in this repo. It used to be
+  yours (`owned` in `.template-manifest`), which meant a release that raised a constraint left your lock behind by design
+  and hard-blocked every Terraform op until someone regenerated it by hand.
 
 ---
 
@@ -165,3 +364,13 @@ Onboarding is complete when you've ticked every box in the checklist above AND y
 - An Argo CD sync of a non-trivial PR.
 
 If any of those haven't happened in your first 30 days, ask to be paired into one — these are the muscle-memory operations that the playbooks alone can't teach.
+
+---
+
+## Next: run something on it
+
+This checklist gets you *access to* the platform. Putting your own application on it
+is a different set of contracts — which Harbor project, why nothing hands your
+namespace an imagePullSecret, where an app's secrets have to live for External
+Secrets to read them. Those are walked end to end in
+[**Run your first workload**](first-workload.md).

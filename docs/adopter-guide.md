@@ -20,6 +20,19 @@
 
 ---
 
+<!-- toc -->
+## Contents
+
+- [1. Prerequisites](#1-prerequisites)
+- [2. The reusable artifacts](#2-the-reusable-artifacts)
+- [3. The values contract (what you must set)](#3-the-values-contract-what-you-must-set)
+- [4. Scaffold an instance, and pull template updates — Copier](#4-scaffold-an-instance-and-pull-template-updates--copier)
+- [5. Org literals to repoint to your fork](#5-org-literals-to-repoint-to-your-fork)
+- [6. Bootstrap order](#6-bootstrap-order)
+- [7. Checklist](#7-checklist)
+
+<!-- /toc -->
+
 ## 1. Prerequisites
 
 You must have these before you start — the platform assumes them and does not
@@ -28,9 +41,9 @@ provision them:
 | Prerequisite | Why | Notes |
 |---|---|---|
 | **Linode account with LKE-Enterprise** | The cluster, VPC, Object Storage, and Cloud Firewalls are all Linode | LKE-E (`+lke` k8s versions), not standard LKE. Production accounts need an executive sponsor + InfoSec approval — start this first (longest lead time); follow the [Linode account request checklist](infosec/linode-account-request-checklist.md) |
-| **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | Pinned via `apl_chart_version`; verify with `helm search repo apl/apl --versions` |
+| **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | **Linode owns the deployed version** on managed App Platform — there is no tfvar and no API field for it. `llz` tracks a baseline it is tested against (`clusterspec.BaselineAplChartVersion`) and `llz ci assert-apl-deployed-version` reports when the cluster has drifted from it. To see what upstream has published: `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions` (the `repo add` is required first — without it `search repo` reports no results rather than an error) |
 | **A GitOps repo reachable over HTTPS** | apl-core's values schema requires an HTTPS Git URL that every node can reach | Must be reachable over HTTPS by every node — use github.com, gitlab.com, or an internal HTTPS mirror |
-| **A fork of this repo** | The TF-managed bootstrap Argo CD Application tracks *your* first-party repo over SSH | See §5 for the literals to repoint |
+| **Your own instance repo** | The TF-managed bootstrap Argo CD Application tracks *your* repo over SSH; `gh` targets it | Created for you by `llz new --push` (the `instance_repo` copier answer) — but its **owner must already exist**: `llz new` creates the repository, never the GitHub org that holds it, so [create the org](https://github.com/organizations/new) first (or answer `instance_repo` with your own user). **Forking this template is *not* required** — `upstream_org` defaults to `akamai-consulting` and the charts are public on GHCR. Fork only if you want to publish your own artifacts; then see §5 |
 | **GHCR pull access** | Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` | The packages are **public** — Argo CD pulls them anonymously, no credential needed. (A private fork can still seed a repo credential from `GHCR_READ_TOKEN` + `GHCR_USERNAME`; the Terraform gate honors it when set.) |
 | CLI tooling | `terraform`/`tofu`, `kubectl`, `helm`, `linode-cli`, `gh`, `bao`, `jq` | **`llz doctor` is the authoritative, always-current list** + reports which are installed and whether `gh` is authed. Skip the host installs by working in the [Dev Container](devcontainer.md), which ships them all. |
 
@@ -48,7 +61,7 @@ You consume two published artifact sets — you do **not** copy their source:
 
 Upstream fixes reach you via version bumps, not manual diffs. To point at your own
 fork/registry, override the chart `gitRepoURL`/`chartsRegistry` values (§5) and the
-module `git::` host in the four TF roots.
+module `git::` host in the generated TF roots.
 
 ### Keeping the pins current — Renovate
 
@@ -65,8 +78,8 @@ for:
   (`helpers:pinGitHubActionDigests`) and kept current automatically.
 
 The **first-party LLZ pins are NOT Renovate-managed**: the Terraform module
-`?ref=`, the reusable-workflow `uses:@`, and `template-ref:` are rendered from the
-copier `llz_version` and move in lockstep. You adopt a new umbrella release by
+`?ref=` is rendered from the copier `llz_version`, and everything else in CI
+reads that same answer at runtime, so they move in lockstep by construction. You adopt a new umbrella release by
 `llz self-update` (get the new CLI) then `llz upgrade` (re-renders every first-party
 pin to that version) — the CLI is the version anchor. Renovate is deliberately
 disabled on these so it never races `llz upgrade` (the `enabled: false` rule in
@@ -77,17 +90,27 @@ PR ("LLZ platform artifacts"). **After forking, repoint** the `packageName` /
 `registryAliases` in `renovate.json` from `akamai-consulting` to your fork/registry —
 the same repoint you do for the module `git::` host.
 
-For an **upstream chart** whose version lives in tfvars (e.g. `apl_chart_version`),
-add a one-line annotation above it so the annotation manager bumps it too:
+For an **upstream chart** whose version lives in tfvars, add a one-line annotation
+above it so the annotation manager bumps it too:
 
 ```hcl
-# renovate: datasource=helm depName=apl registryUrl=https://<your-apl-helm-repo>
-apl_chart_version = "5.0.0"
+# renovate: datasource=helm depName=<chart> registryUrl=https://<your-helm-repo>
+<chart>_chart_version = "v1.2.3"
 ```
 
+> This used to be shown with `apl_chart_version`, which is no longer a Terraform
+> variable at all: LLZ runs on Linode's **managed** App Platform, where Linode
+> installs and versions apl-core, so there is nothing in tfvars for Renovate to bump.
+> (`spec.cluster.bootstrap.aplChartVersion` survives as a spec field, and
+> `llz env add --apl-chart-version` still writes one if you ask for it — but neither
+> reaches a cluster.) See `cluster.bootstrap.aplChartVersion` in the field reference below for what
+> the remaining spec field does — and does not — control.
+
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
-(workflows, overlays), `llz env add` / `llz upgrade` stamp a committed
-`.template-version` recording the template repo/ref/commit you generated from.
+(workflows, overlays), the template repo/ref you generated from is recorded once,
+by copier, in `.copier-answers.yml` — `llz drift` and CI both read it there. (LLZ
+used to write a second copy to a committed `.template-version`; `llz upgrade`
+deletes that orphan.)
 
 `llz upgrade` also applies `.template-removals` after the `copier update` —
 `copier` never deletes a file the template dropped between versions, so the
@@ -98,23 +121,36 @@ Idempotent, so re-running is safe; review + commit the resulting removals.
 
 The
 Scheduled Checks workflow's `template-drift` job (monthly) reports how far behind
-the template your instance has fallen (run `llz drift` for the same check locally). After you pull upstream template
-changes, re-run `template-scripts/stamp-template-version.sh` and commit the refreshed stamp so
-the baseline advances. Point it at the upstream template with an `upstream` git remote
-(or `TEMPLATE_REPO=<owner/repo>`); `git remote add upstream <template-repo-url>`.
+the template your instance has fallen (run `llz drift` for the same check locally).
+There is no stamp to refresh by hand — `llz upgrade` re-records the pin in
+`.copier-answers.yml`, which is the one place both `llz drift` and CI read it from.
+Point the check at the upstream template with an `upstream` git remote
+(`git remote add upstream <template-repo-url>`) or `llz drift --repo-url <url>`.
 
 ## 3. The values contract (what you must set)
 
-Every root ships a `terraform.tfvars.example`. Copy it to `<env>.tfvars` and fill
-the **ADOPTER-MUST-SET** values. **SECRET** values come from `TF_VAR_*` environment
-variables at apply time and are never committed. Everything else is a Linode/apl-core
-default you usually keep.
+> **A `landingzone.yaml` spec is required.** You do not hand-write the per-env
+> tfvars or the `apl-values/<env>/` overlay — `llz env add` / `llz render` generate
+> both from the spec (`environments/<env>.yaml` + instance-wide `landingzone.yaml`).
+> The tfvars are gitignored build artifacts; the overlay (the `manifest/`
+> kustomization and the `apl-overlay/` app+obj toggles) is committed. There is no
+> non-spec path.
+>
+> Note that **apl-core's own `apl-values/values.yaml` is NOT rendered** — on the
+> managed App Platform Linode owns it (ADR
+> [0005](adr/0005-managed-app-platform.md)), and the scaffold CI check fails the
+> build if a render ever emits one. The tables below are the **spec fields** behind each tfvar, for reference; you set
+> them in the spec (§4), not by editing tfvars.
+
+**SECRET** values still come from `TF_VAR_*` environment variables at apply time and
+are never committed. Everything else is a Linode/apl-core default you usually keep.
 
 ### `cluster/` — the LKE-E cluster, VPC, node pool, firewall
 
 | Variable | Class | Notes |
 |---|---|---|
-| `cluster_label`, `region`, `k8s_version` | MUST-SET | Cluster identity + Linode region + an LKE-E version live in your account |
+| `cluster_label`, `region` | MUST-SET | Cluster identity + Linode region |
+| `k8s_version` | derived | The **first** `llz env add` seeds `spec.defaults.cluster.k8sVersion` with the newest LKE-Enterprise version **your account** offers; later deployments inherit it, and `env add` re-checks that inherited pin — if it has rotated out of the catalog it pins a buildable version for the new deployment alone rather than creating it against one the account rejects. Availability is per-account and rotates within hours, so no literal in this repo is right for every reader. `--k8s-version` pins one deployment explicitly and is checked against the account before the spec is written; it does **not** become the shared default |
 | `github_runner_ipv4_cidrs` / `*_ipv6_cidrs` | optional | Static operator/CI/VPN egress CIDRs that seed the bootstrap control-plane ACL + node firewall. Leave empty for github.com-hosted runners (they open their egress IP at runtime via `llz ci runner-acl open`). **Never `0.0.0.0/0`** |
 | `node_type`, `node_count`, `vpc_subnet_cidr`, HA/audit toggles, autoscaler | default | Linode-shaped defaults; keep unless sizing differs |
 
@@ -124,16 +160,20 @@ default you usually keep.
 > cloud-firewall-controller owns the ACL — it resolves EAA/bastion CIDRs from the
 > Linode firewall template via the Linode API and reconciles every cycle.
 
-### `cluster-bootstrap/` — install apl-core + seed GitOps creds
+### apl-core install — `llz ci bootstrap-cluster` (formerly the `cluster-bootstrap/` TF root)
 
-| Variable | Class | Notes |
+| Variable (spec field) | Class | Notes |
 |---|---|---|
-| `region`, `apl_values_env` | MUST-SET | Deployment discriminator; must match the cluster workspace + `apl-values/<env>` dir |
-| `cluster_name`, `cluster_domain` | MUST-SET | → apl-core `cluster.name` / `cluster.domainSuffix` (Istio hosts, certs). Per-env prefix so siblings don't collide |
-| `apl_values_repo_url` | MUST-SET | **HTTPS**, publicly reachable (see §1). apl-core's external values store — the in-cluster Gitea is obsoleted |
-| `apl_chart_version` | MUST-SET | Pin deliberately |
-| `apl_values_repo_revision`, `apps_repo_revision`, `apl_values_repo_username` | default | |
-| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `loki_admin_password`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). `loki_admin_password` optional — generated + stashed if empty |
+| `region`, env name | MUST-SET | Deployment discriminator; must match the cluster deployment + `apl-values/<env>` dir |
+| `cluster.bootstrap.name` | MUST-SET | → apl-core `cluster.name` (Istio hosts, Argo context). → apl-core's own values (Linode-owned on managed) — **not a tfvar, and not rendered by `llz render`** |
+| `cluster.bootstrap.domainSuffix` | **MUST NOT SET** | Linode owns the `lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; the spec validator **rejects** a value outright (a stale one would misroute the Keycloak issuer + Harbor URL). `llz ci resolve-harbor-url` resolves `harbor.<domain>` from the live cluster |
+| `cluster.bootstrap.managedAppPlatform` | MUST-SET (`true`) | LLZ never self-installs apl-core; validated on every env. `llz env add` seeds it into `spec.defaults` for you |
+| `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). → apl-core `otomi.git.repoUrl` (Linode-owned on managed); the tfvar also feeds the Argo CD values-repo credential Secret |
+| `cluster.bootstrap.aplChartVersion` | optional | **Omit it.** By default Linode owns the deployed apl-core version on managed App Platform and a pin deploys nothing — set `manageAplVersion` to change that (row below). It survives only as the version `llz ci assert-apl-version` resolves; omitted, it uses the baseline this llz tracks — and `llz upgrade` REMOVES a pin that names a version llz itself set (unless `manageAplVersion` is on, where the pin is what deploys and the sweep refuses), so the field tracks each release by construction rather than needing a hand edit per bump. A pin llz never set is yours and survives the upgrade untouched — with one honest caveat: a deliberate hold at a version that *happens* to be a past baseline (`v6.2.0`, say) is indistinguishable in the file from an instance that was tracking us and got left behind, so it is dropped and you re-add it. Every drop is printed per file and arrives as a diff in a reviewable upgrade PR, and unless `manageAplVersion` is set, a hold holds nothing that runs — only which version `llz ci assert-apl-version` resolves. What is actually RUNNING is a separate question, answered only by `llz ci assert-apl-deployed-version`, which reads the cluster. (It was also read by an apl-core chart-schema check, retired along with the rendered values.yaml that check took as input.) |
+| `cluster.bootstrap.manageAplVersion` | optional, default **false** | Hands apl-core's own version knob to llz. apl-core reconciles its operator as one of its own releases and takes that release's image tag from `otomi.version` in the values, so after the first install the version is a VALUES field — and on managed App Platform llz owns the values repo. Set true and `llz render` writes `apl-values/<env>/apl-overlay/otomi.yaml` on your own branch carrying `spec.version` = the env pin, else this release's baseline; the in-cluster reconciler then merges that one key into apl-core's `env/settings/otomi.yaml` on the `apl-<env>` branch, and the operator picks it up on its next poll (so the change lands on the reconciler's poll, not on your commit), and its own runtime-upgrade step runs the migrations between the deployed and deploying versions. Left false, no file is written and Linode's version stands. **Turning it back off is not automatic**: `llz render` never deletes, so delete the rendered `apl-values/<env>/apl-overlay/otomi.yaml` as well — the reconciler infers the opt-in from that file's presence and keeps asserting the version while it exists. Verify either way with `llz ci assert-apl-deployed-version`. **Linode installs and versions apl-core on managed — turning this on takes that over, so try it on one deployment before an instance-wide default.** |
+| `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (`revision` defaults to a per-env **`apl-<env>`** branch that apl-core owns and pushes to — kept off `main`, see [apl-core-values-branch-isolation.md](designs/apl-core-values-branch-isolation.md); `username` defaults to `x-access-token`); the values-repo `revision` is **no longer a tfvar** — apl-core owns both on managed |
+| The Loki/Harbor S3 bucket names + endpoint | derived | `llz render` derives them from the env name + `cluster.objectStorage.cluster` into the apl-overlay (`apl-values/<env>/apl-overlay/obj.yaml`) — **not a cluster-bootstrap tfvar** |
+| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). (apl-core 6.x auto-generates the Loki admin password — no `loki_admin_password` input.) |
 
 ### `object-storage/` — registry + logs OBJ buckets
 
@@ -141,7 +181,7 @@ default you usually keep.
 |---|---|---|
 | `region_suffix` | MUST-SET | Must match the cluster workspace deployment |
 | `obj_cluster` | MUST-SET | `linode-cli object-storage clusters-list` |
-| `obj_key_rotation_days` | default | ≤120 per rotation guidelines |
+| `keyRotationDays` | deprecated/ignored | Key rotation is owned by the in-cluster `linodeCredRotator` CronJob (first keys minted at bootstrap by `llz ci mint-bootstrap-objkeys`); the `obj_key_rotation_days` TF variable was removed |
 | `linode_token` | SECRET | `TF_VAR_linode_token` |
 
 OpenBao auth/policy/KV configuration is **not** a Terraform root — `llz ci
@@ -165,12 +205,16 @@ layers, and Copier owns the outer one:
 # Without --trust, Copier skips both — no docs/, and you arm the hook yourself with
 # `llz hooks`. (The bootstrap/operations scripts are NOT copied in — the reusable
 # llz-* workflows run them from a template checkout.)
-copier copy --trust --vcs-ref v0.1.0 -d llz_version=v0.1.0 \
+copier copy --trust --vcs-ref v0.0.38 -d llz_version=v0.0.38 \
   gh:akamai-consulting/lke-landing-zone my-instance
 # Copier asks for:
 #   upstream_org   — the org hosting the LLZ template/modules/charts (default
 #                    akamai-consulting; set to your fork if you publish your own)
 #   instance_repo  — this instance's own <owner>/<name>
+#   openbao_team   — the default team name for scoped, non-root OpenBao writes
+#                    (default `platform` → secret/platform; lowercase kebab).
+#                    Becomes an apl-core team + a <name>-writer policy; see
+#                    landing-zone-spec.md's spec.teams.
 #   llz_version    — the release to pin module/workflow refs to. PASS IT EXPLICITLY
 #                    (`-d llz_version=<vcs-ref>`) so the pins match the version you
 #                    scaffold from; `llz new` sets it automatically. The `main`
@@ -185,23 +229,58 @@ filled in, and writes `.copier-answers.yml` recording the answers + the template
 commit. Later, inside the instance:
 
 ```bash
-llz upgrade --ref v0.2.0   # preferred: copier update + re-pin to v0.2.0 in lockstep
-# or, raw copier (re-pin the version yourself):
-copier update --trust --vcs-ref v0.2.0 -d llz_version=v0.2.0
+llz upgrade --ref v0.0.39   # preferred: copier update + re-pin to v0.0.39 in lockstep
+# or, raw copier (re-pin the version yourself — then `llz render`, see below):
+copier update --trust --vcs-ref v0.0.39 -d llz_version=v0.0.39
 ```
+
+> **Prefer `llz upgrade` over raw `copier update`** for more than the re-pin. The
+> committed `apl-values/<env>/` kustomizations resolve `?ref=` from the pin, so
+> rewriting it invalidates them every time; `llz upgrade` re-runs `llz render`
+> after the update, and raw copier does not. Skip that render and ArgoCD keeps
+> syncing the previous release's shared manifests — a difference in what is
+> *deployed*, not just what is checked in.
+
+> **Re-pin `TF_IMAGE` / `KUBE_IMAGE` after every upgrade.** They are computed
+> from the template pin (`ghcr.io/<org>/ci-tofu:sha-<the commit the pin names>`),
+> so moving the pin leaves both naming the *previous* commit — the same
+> invalidation as the `?ref=` kustomizations above, but the value CI reads is a
+> GitHub repo **variable**, which `llz upgrade` does not push. It prints the two
+> `gh variable set` commands when it detects the skew; `llz tokens --env <env>
+> --yes` applies them for you. Leave it and the next pipeline run fails
+> `llz ci assert-image-fresh` — loudly and with the same fix, but 20 minutes in.
+>
+> **Vendored actions and the image move together.** The `.github/actions/*`
+> bodies an upgrade delivers may depend on behaviour added to `llz` in the same
+> release — the kubeconfig actions do: they hand `llz` a `$HOME/...` path and
+> rely on it to expand, where an older binary treats it as a literal directory
+> name. A new action against an old `TF_IMAGE` is therefore not merely stale, and
+> the current `llz` fails loudly on that path rather than writing somewhere
+> wrong. Re-pin in the same change as the upgrade, not after the next red run.
+>
+> **Only three variables expand in a `kubeconfig-path`.** `$HOME`,
+> `$RUNNER_TEMP` and `$GITHUB_WORKSPACE`. The expansion used to be an accident of
+> shell interpolation, which expanded anything — so if you customised the path to
+> use some other variable (`$GITHUB_ACTION_PATH`, a `${VAR:-default}` form), the
+> step now FAILS with the unresolved text rather than writing to a directory of
+> that literal name. The list is closed on purpose: expanding everything would let
+> a path read arbitrary runner environment, which is where GitHub puts secrets.
 
 Copier re-renders the old and new template versions and applies only the delta,
 so your local edits survive — conflicts appear (as `.rej`/merge markers) **only**
 where you changed a line the template also changed. The same `--trust`-gated task
 re-runs on update, so `docs/` refreshes to the new template version too. What
 gets overwritten vs. merged vs. left alone follows `.template-manifest` (managed /
-merge / owned);
-`terraform/*/.terraform.lock.hcl` files are seeded
-once and never re-touched (`_skip_if_exists` in `copier.yml`). This is the clean
+merge / owned). Provider pins are not on that list at all: the
+`.terraform.lock.hcl` in each root is generated by `llz render` from the same
+embed as the `required_providers` constraint it satisfies, so a release that
+raises a constraint carries the matching pin with it and there is no step you own
+(see [quickstart §5](quickstart.md#5-day-2--upgrading-to-a-newer-upstream-version)).
+This is the clean
 counterpart to the **versioned-artifact** track (Renovate bumps the
 independently-versioned OCI charts + external action digests — §2): `llz upgrade`
-moves the *scaffold and the first-party LLZ pins* (module `?ref=`, workflow
-`uses:@`/`template-ref:`, rendered from `llz_version` in lockstep), while Renovate
+moves the *scaffold and the first-party LLZ pins* (module `?ref=`, rendered from
+`llz_version`, which is also the pin CI reads), while Renovate
 moves the *independently-versioned charts + actions*.
 
 ### Local checks (`llz` + git hooks)
@@ -237,11 +316,35 @@ the `owned` (never-touched) escape hatches:
 - `.githooks/pre-commit.local` — extra pre-commit checks (an executable script,
   run by `llz precommit` after the built-in `llz lint`).
 
+### What `llz` checks before it lets you spend money
+
+Each command validates what it can before doing anything expensive, and the
+refusal carries the fix. The full set, so you know what is and is not covered:
+
+| Command | Checks | Blocks? |
+|---|---|---|
+| `llz new <dir>` | the directory is empty (copier renders *on top* of a populated one) | yes |
+| `llz env add` | the CWD is an instance root; `--region` and `--obj-cluster` exist in your Linode account and belong together; runner CIDRs parse, match their flag's address family, and are not `0.0.0.0/0` | yes |
+| `llz env add` | lists the overlay placeholders left to fill, and names the one command that fixes the rendered ones (`llz spec set instance.repo=…`) | no |
+| `llz doctor --env` | spec valid, committed `apl-values` in sync with it, no unfilled placeholders, every required repo secret/variable set; **whether your Linode account can build the pinned `k8sVersion`** (needs `LINODE_TOKEN`; reported, never fatal — it reads *your* account, and CI builds under the repo's `LINODE_API_TOKEN`, so CI's answer decides); reports an open-world control-plane ACL wherever it came from | yes (advisory for the ACL and the k8sVersion) |
+| `llz build` / `llz up` | `landingzone.yaml` and `environments/<env>.yaml` are on the branch the workflow checks out, and the deployment exists | yes (`--skip-preflight` to override) |
+| `llz build` / `llz up` | your working copy differs from the pushed spec, or the deployment is only on the remote | no — the build uses the pushed tree either way |
+| `llz status` | a kubeconfig exists and the cluster answers, before running any check against it | yes |
+
+Two properties are worth relying on:
+
+- **A check that cannot get an answer does not block you.** Without `gh`, a
+  Linode token, a reachable API or a spec, each check says it is skipping and the
+  command proceeds.
+- **`workflow_dispatch` runs from the repo's default branch.** Pushing a feature
+  branch does not put a deployment where the build reads it; the refusal says so
+  and names your branch.
+
 ### Adding a deployment (environment) inside an instance
 
 Use `llz env add` instead of hand-copying overlays. It declares the env in the
 LandingZone spec and `llz render`s a thin overlay over the shared apl-values base
-(`_shared/` + `components/`) — no per-env clone to keep in sync — swapping its
+(`platform-apl/manifest` + `components/`) — no per-env clone to keep in sync — swapping its
 identity tokens (env name, `cluster.name`, domain suffix, `REGION_SHORT`, Linode
 region, OBJ cluster). The scaffolding is built into the binary, so it works in an
 instance with no scripts/ tree:
@@ -251,16 +354,15 @@ instance with no scripts/ tree:
 llz env add <env> --region us-sea --obj-cluster us-sea-1 --dry-run
 
 # then create the scaffold (must-set values can be passed as flags up front)
-llz env add <env> --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.33.6+lke7 --acl-inventory-repo my-org/ip-inventory
+llz env add <env> --region us-sea --obj-cluster us-sea-1 --promotion-rank 1
 ```
 
-It generates `terraform-iac-bootstrap/{cluster,cluster-bootstrap,object-storage}/<env>.tfvars`
+It generates `terraform-iac-bootstrap/{cluster,object-storage,databases}/<env>.tfvars`
 (**gitignored** build artifacts — regenerated from the spec on every render and in CI, so you
-commit only the spec + overlay) and the `apl-values/<env>/` overlay, then prints the values
-you must still fill (region, `k8s_version`, `apl_values_repo_url`, `obj_cluster`)
-and scans for leftover template tokens to
-review. Validate the overlay renders:
+commit only the spec + overlay) and the `apl-values/<env>/` overlay. `--region` and
+`--obj-cluster` are **required** and the rest fall back to `spec.defaults`, so
+nothing is left half-filled; it then lists any residual `apl-values` placeholders
+for you to fill. Validate the overlay renders:
 
 ```bash
 kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
@@ -271,9 +373,13 @@ kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
 **Everything inside `instance-template/` is repointed by Copier — you don't
 hand-edit it.** `copier copy`/`copier update` fill the two scaffold-level tokens
 for you: `upstream_org` (every `akamai-consulting` in the scaffold — module
-`git::` sources, the OCI charts registry at `cluster-bootstrap/main.tf`, every
-Argo CD Application's `repoURL: ghcr.io/<org>/charts`, CI images, reusable-workflow
-refs) and `instance_repo` (the bootstrap Application repo URL + `gh` targeting).
+`git::` sources, the OCI charts registry pin in the spec, every
+Argo CD Application's `repoURL: ghcr.io/<org>/charts`, and the in-cluster
+`llz` image CronJobs run) and
+`instance_repo` (the bootstrap Application repo URL + `gh` targeting). The
+workflows need no repointing at all: the reusable bodies and composite actions
+are vendored into the instance and referenced with repo-local `./` paths
+(ADR 0003), so they carry no org.
 Copier renders every file in-place, so those resolve to your fork on render.
 
 The only first-party references you repoint by hand live **OUTSIDE** the scaffold,
@@ -287,27 +393,56 @@ in the published `kubernetes-charts/` chart values (which Copier doesn't templat
 These are overridable values/literals, not abstraction seams — the platform stays
 Linode + apl-core shaped by design.
 
+> **`TF_IMAGE` / `KUBE_IMAGE` are NOT repointed by `upstream_org`.** The two images
+> the CI *jobs* run in are computed by `llz tokens` and always name the **upstream**
+> org (`ghcr.io/akamai-consulting/ci-tofu:sha-<commit>`), because that is where they
+> are published and they are public. A fork only needs to care if it publishes its
+> own: the pin is resolved against *your* template repo, so a commit that exists
+> only on your fork has no published image, and `llz tokens` falls back to the
+> floating upstream tags and says so. Publish the pair from your fork
+> (`build-images.yml`) and set the two repo variables by hand if you need them
+> pinned to your own builds.
+
 ## 6. Bootstrap order
 
-The bootstrap is GitHub-Actions-driven (there is no single `bootstrap.sh`). For a
-new env, in order:
+The bootstrap is GitHub-Actions-driven (there is no single `bootstrap.sh`), and
+**one dispatch runs all of it**. `llz build <env> --yes` — or `llz up <env> --yes`,
+which gates it — dispatches `terraform.yml` with `action=apply module=all`, and
+that single run walks the whole sequence below. You do not dispatch the stages
+individually, and you do not dispatch `bootstrap-openbao.yml` afterwards: it is
+chained from the same run.
 
-1. **Provision the cluster** — dispatch the Terraform workflow
-   (`.github/workflows/terraform.yml`) with `action=apply`, `module=cluster`,
-   `region=<env>`. Creates the LKE-E cluster, VPC, firewall, node pool.
-2. **Object storage** — `module=object-storage` for the registry/log buckets.
-3. **Install apl-core** — `module=cluster-bootstrap`. Helm-installs apl-core and
+What that one dispatch does, in order:
+
+1. **Preflights** — image pin, committed-render drift, secret presence, credential
+   validity + scope, apl-core chart floor. All front-loaded into the first job so a
+   misconfigured instance fails in seconds rather than after the cluster apply.
+   `llz doctor --env <env>` runs the same set locally.
+2. **Provision the cluster** — the LKE-E cluster, VPC, firewall, node pool.
+3. **Object storage** — the registry/log buckets.
+4. **Install apl-core** — `llz ci bootstrap-cluster` helm-installs apl-core and
    applies the `apl-values/<env>/manifest` Argo CD Applications.
-4. **Converge** — the workflow polls ``llz ci converge`` (wrapping
-   ``llz ci health``) until the cluster meets the convergence contract.
-5. **Bootstrap OpenBao** — dispatch `.github/workflows/bootstrap-openbao.yml` for
-   the env: seed the static seal key, `bao operator init` (recovery keys; the pods
-   auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
-   engine, auth methods, and policies.
-6. **DNS** — dispatch `bootstrap-dns.yml` once its token is provisioned. (The
-   Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN` PAT,
-   provisioned by `llz tokens`, not a per-run bootstrap workflow.)
+5. **Bootstrap OpenBao** — the chained `bootstrap-openbao` job: seed the static
+   seal key, `bao operator init` (recovery keys; the pods auto-unseal from the
+   static seal key), then `llz ci bao-configure` writes the KV engine, auth
+   methods, and policies.
+6. **Converge** — the same job polls `llz ci converge` (wrapping `llz ci health`)
+   until the cluster meets the convergence contract, then runs the gating
+   `llz ci assert-suite` battery.
+7. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers come from
+   the managed App Platform and sync automatically via Argo CD.
+   DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
+   which holds its own Linode token (`TF_VAR_linode_dns_token` from the
+   `LINODE_DNS_TOKEN` secret, rendered into apl-core's values by `llz ci bootstrap-cluster`) — no
+   OpenBao seed or ExternalSecret is involved. (The Argo CD / apl-core values-repo
+   credential is the `APL_VALUES_REPO_TOKEN` PAT, provisioned by `llz tokens`.)
 
+`bootstrap-openbao.yml` and the per-module `terraform.yml` dispatches
+(`module=cluster` / `module=object-storage`) are still available on their own —
+for a **retry** of one stage, not as the normal path.
+
+If a run fails, [docs/runbooks/first-build-failed.md](runbooks/first-build-failed.md)
+covers what exists at each stage, what is safe to re-run, and what to sweep.
 See [docs/runbooks/](runbooks/) for per-step detail (`bootstrap-openbao.md`,
 `apl-values-propagation.md`) and [docs/playbooks/operator-onboarding.md](playbooks/operator-onboarding.md)
 for day-2 operations.

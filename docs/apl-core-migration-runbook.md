@@ -21,19 +21,47 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       deploys `cert-manager-webhook-linode` as part of its cert-manager
       integration, registering the `acme.slicen.me` API group (the slicen chart
       default) and holding the Linode token from `LINODE_DNS_TOKEN` above. The
-      landing zone no longer ships its own webhook Application; the
-      `llz-letsencrypt-{production,staging}` ClusterIssuers
-      ([`apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml`](../instance-template/apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml))
+      landing zone no longer ships its own webhook Application, nor a
+      `manifest/dns/` base; the `llz-letsencrypt-{production,staging}`
+      ClusterIssuers come from the managed App Platform and
       target that group via `groupName: acme.slicen.me` + `solverName: linode`.
       Just confirm apl-core's `cert-manager-webhook-linode` pod reaches Ready
       (its APIService `v1alpha1.acme.slicen.me` shows `Available=True`) — if it
       doesn't, every Let's Encrypt Certificate sits in Pending and no Istio
       Gateway gets TLS.
-- [ ] **Verify the apl chart version** — run
-      `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
-      and update `apl_chart_version` in each
-      `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` to match.
-      The current pin (`5.0.0`) is provisional.
+- [ ] **Leave the apl chart version alone.** This used to say "update
+      `spec.cluster.bootstrap.aplChartVersion` in each `environments/<env>.yaml`
+      to match", and that instruction is now the wrong move twice over. An omitted
+      pin resolves to `clusterspec.BaselineAplChartVersion`
+      (`tools/internal/shared/clusterspec/aplversion.go`), and `llz upgrade`
+      REMOVES a pin naming a version llz itself set — so writing one back only
+      re-creates the stale field the upgrade just retired. And on managed App
+      Platform the pin reaches no cluster at all: Linode installs apl-core,
+      `apl_enabled` is create-time only, and the Linode API has no version field,
+      so the pin moves nothing but what `llz ci assert-apl-version` resolves.
+      Set it only to hold that assertion at a version of your own choosing. llz
+      then leaves it alone — with one honest exception: a hold at a version that
+      *happens* to be one llz itself once targeted (`v6.2.0`, say) is
+      indistinguishable in the file from a pin that was tracking the baseline and
+      got left behind, so the upgrade drops it and you re-add it. A hold on
+      anything else — including a release candidate — survives untouched.
+      To see what is actually RUNNING — the only version that matters on managed —
+      use `llz ci assert-apl-deployed-version`, which reads the image tag of the
+      `apl-operator` container — apl-core renders it from `otomi.version`, the
+      platform version. (Not the Deployment's chart labels — apl-core relabels them,
+      so a healthy v6.3.0 cluster reads as `0.2.0`.) To see what is
+      published, `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`.
+      Note the `v`: apl-core's published chart version gained the prefix at 6.1.0, and a
+      bare `6.x.y` still resolves but only via helm's "unable to find exact
+      version requested" fallback. The supported FLOOR is `6.0.0`, so an instance
+      mid-rollout warns rather than fails. If you are upgrading
+      an existing 5.x cluster (rather than cutting over a fresh one), read the
+      [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
+      covers the breaking changes (ESO becomes a core app, Gitea→git-server,
+      ingress-nginx→Gateway API) and the in-place upgrade path. For 6.0.0 → 6.1.0
+      read [the 6.1.0 upgrade note](designs/apl-core-v61-upgrade.md) — in
+      particular the **apl-operator annotation that must be applied before the
+      upgrade rolls**.
 - [ ] **Mirror `apl-values/` to an HTTPS-reachable Git host** (the placeholder
       is `https://github.com/<org>/apl-values.git`). apl-core's values
       schema enforces `^https?://.+` on the values-repo URL; SSH is not
@@ -42,40 +70,45 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       to read.
       Recommended: a github.com private repo synced from your primary Git host
       via a CI job, or an internal HTTPS mirror.
-- [ ] Update `apl_values_repo_url` + `apl_values_repo_username` in every
-      `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` if the
+- [ ] Update the values-repo URL + username in the spec
+      (`spec.cluster.bootstrap`) in every `environments/<env>.yaml` if the
       placeholder values don't match your environment.
 - [ ] Note that OpenBao's KV-v2 mount, Kubernetes auth, and policies are
       configured by `llz ci bao-configure` (run from `bootstrap-openbao.yml`
-      after the cluster is up), not by a Terraform root and not by
-      `cluster-bootstrap/`.
+      after the cluster is up), not by a Terraform root.
 
 ## Phase 1 — Lab cutover (the rehearsal)
 
 The lab cluster is disposable. Use it to shake out anything that's still
 hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
-1. **Bump node count** in the cluster tfvars for your lab `<env>`
-   (`instance-template/terraform-iac-bootstrap/cluster/<env>.tfvars`) to 3 — apl-core
-   minimum is 3 × 8GB/4vCPU.
+1. **Bump node count to 3** — apl-core's minimum is 3 × 8GB/4vCPU. Edit it in the
+   SPEC (`environments/<env>.yaml`), not in the tfvars: everything under
+   `terraform-iac-bootstrap/` is a gitignored build artifact that `llz render`
+   rewrites from the spec before every Terraform op, so an edit there survives
+   only until the next run.
 
-2. **Apply cluster + object-storage Terraform**:
+2. **Apply cluster + object-storage Terraform**, from your instance root:
    ```bash
-   cd instance-template/terraform-iac-bootstrap/cluster
-   terraform apply -var-file=<env>.tfvars
+   llz render <env>
+   cd terraform-iac-bootstrap/cluster
+   llz tofu --region <env> -- apply -var-file=<env>.tfvars
    cd ../object-storage
-   terraform apply -var-file=<env>.tfvars
+   llz tofu --region <env> -- apply -var-file=<env>.tfvars
    ```
-   Copy `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY` outputs into the
+   `llz tofu` rather than a bare `tofu`: the roots encrypt state at rest, so an
+   init that configures the backend needs `$TF_ENCRYPTION`, and llz resolves that
+   environment for you.
+   (Historical: earlier releases copied `LOKI_S3_*` outputs into the
    `infra-<env>` GitHub environment secrets.
 
-3. **Apply cluster-bootstrap Terraform** — this is the apl-core install:
+3. **Run the in-cluster bootstrap** — this is the apl-core install:
    ```bash
-   cd ../cluster-bootstrap
-   terraform apply -var-file=<env>.tfvars
+   llz ci bootstrap-cluster --env <env>
    ```
-   The `helm_release.apl` resource installs apl-core. Apply blocks until
-   the `apl-operator` deployment is Ready (timeout 900s).
+   It Helm-installs apl-core and blocks until the `apl-operator` deployment is
+   Ready. There is no `cluster-bootstrap` Terraform root — Terraform owns day-0
+   infrastructure only (ADR 0002).
 
 4. **Watch the helmfile pipeline** in apl-operator logs:
    ```bash
@@ -123,9 +156,19 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
 7. **Bootstrap OpenBao**:
    ```bash
-   gh workflow run bootstrap-openbao.yml -f environment=<env> -f mode=init
+   gh workflow run bootstrap-openbao.yml -f region=<env>
    ```
-   Copy the static seal key (`OPENBAO_SEAL_KEY`) + recovery keys 4-5 + root token to offline storage. See
+
+   `region` is the *deployment* name, not a Linode region, and the workflow
+   detects cluster state itself — there is no `mode` to select. On a FIRST init,
+   pass `-f openbao_escrow_pubkey_b64=<base64 of your RSA public-key PEM>` as
+   well: it is the only way to obtain an offline copy of the recovery shares, and
+   they are minted exactly once.
+
+   Then copy the static seal key (`OPENBAO_SEAL_KEY`, read from the cluster — it
+   is never printed) to offline storage, and decrypt the escrowed shares with
+   your offline private key. **Keep at least 3 of the 5**: the threshold is 3, so
+   a copy of fewer authorizes nothing. See
    [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md).
 
 8. **Verify ESO ClusterSecretStore + downstream ExternalSecrets** are syncing:
@@ -136,7 +179,7 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
 9. **Verify Istio Gateway routes**:
    ```bash
-   kubectl -n observability get gateway,virtualservice
+   kubectl -n istio-system get gateway,virtualservice
    kubectl -n harbor get gateway,virtualservice
    curl -kI https://otel.<env>.<cluster_domain>/v1/metrics    # expect 401 (no auth) or 200 (with token)
    curl -kI https://harbor.<env>.<cluster_domain>/v2/         # expect 401
@@ -191,11 +234,10 @@ If apl-core itself is the problem (not your manifests), the rollback path is
 **recreate the LKE-E cluster** — apl-core has no clean uninstall path because
 it manages 40+ namespaces with finalizers. Restore by:
 
-1. `terraform destroy` in `cluster-bootstrap/` to remove the values-repo Secret.
-2. `terraform destroy` in `cluster/` to remove the LKE-E cluster.
-3. Roll the working tree back to before the migration change.
-4. Re-apply `cluster/` then `cluster-bootstrap/` to rebuild the bootstrap
-   Argo CD install.
+1. `terraform destroy` in `cluster/` to remove the LKE-E cluster.
+2. Roll the working tree back to before the migration change.
+3. Re-apply `cluster/`, then re-run `llz ci bootstrap-cluster` to rebuild the
+   bootstrap Argo CD install.
 
 Production cutover gate: **lab + staging green for at least one full chaos
 cycle** (delete a node, kill the OpenBao leader, force a cert-rebuild

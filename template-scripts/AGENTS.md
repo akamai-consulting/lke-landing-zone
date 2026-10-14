@@ -3,7 +3,8 @@
 Shell + Python helpers for the landing-zone template. The heavy
 per-environment operational logic (bootstrap, cluster health, openbao ops,
 terraform orchestration, app deploy) lives in the llz CLI
-([../tools/cmd/llz/](../tools/cmd/llz/) — the former repo-root
+([../tools/](../tools/) — `cmd/llz` is the entry point, the logic lives under
+`internal/`; the former repo-root
 `instance-scripts/` were assimilated into it). It is template-INTERNAL (like
 `.github/actions`): the reusable `llz-*` workflows check the template out into
 `_llz-template/` and build llz from there (the install-llz action), so
@@ -13,11 +14,6 @@ the template-level scaffold + CI/lint helpers, and never leave the template repo
 ## Layout
 
 ### top-level
-- `stamp-template-version.sh` — write the committed `.template-version` provenance
-  stamp. Still used by release-e2e (which passes explicit --repo/--sha/--ref for
-  the throwaway instance); the operator path stamps natively via `llz`.
-- `check-template-manifest.sh` — validate `.template-manifest` covers every
-  scaffold file (CI gate) + classify a path on demand.
 - `lib-common.sh` — shared helpers (`die`/`step`/`fail` logging, `usage`
   header-comment help printer, `detect_tf` terraform/tofu discovery,
   `install_release_tarball`); sourced via a relative path from the bucket
@@ -33,12 +29,13 @@ GitHub Actions-side helpers + tooling install. Don't run these from a workstatio
 - `install-syft.sh` / `install-trivy.sh` — pinned SBOM/scanner installers
 - `sbom-kubernetes.sh` — extracts images from cluster state and runs `syft` on each
 
-### `linting-and-validation/` — CI lint inputs
-- `cleanup-workflow-runs.sh` — deletes old GitHub Actions runs (maintenance utility)
-
-> Rendered-app and Chart.lock validation moved into the unit-tested `llz` CLI:
+> Rendered-app, Chart.lock, and template-manifest validation moved into the
+> unit-tested `llz` CLI:
 > `llz ci argocd-rendered-apps` (duplicate Helm parameter names) and
-> `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies). The Go
+> `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies), and
+> `llz ci template-manifest` (`.template-manifest` coverage + classification).
+> (Template-version stamping was retired outright — provenance is derived from
+> `.copier-answers.yml`, not stored.) The Go
 > per-package coverage floor (`llz ci check-coverage`) likewise replaced
 > `ci/check-go-coverage.sh`. The PrometheusRule promtool gate moved too:
 > `llz ci check-prom-rules` replaced `check-prometheus-rule-crds.py`, retiring

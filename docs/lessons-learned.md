@@ -31,7 +31,7 @@ to be stale, fix it in place rather than working around it.
 - **CI gates key on path.** Terraform gates include both `terraform-iac-bootstrap/**`
   and `terraform-modules/**`; Helm gates key on `kubernetes-charts/`. Moving a file
   between trees can silently change which gates run.
-- **TF module sibling refs stay relative** (`../lke-node-firewall`) — they resolve
+- **TF module sibling refs stay relative** (`../llz-node-firewall`) — they resolve
   inside the `git::` checkout. Never rewrite an internal sibling reference to a
   `git::` source; that would unpin the two halves from the same tag.
 
@@ -45,6 +45,20 @@ to be stale, fix it in place rather than working around it.
 - **The product is out of scope — only the platform is reusable.** A sibling team's
   application workloads are the product, so they are *not* helmified here; the
   reusable unit is the platform that runs them.
+- **A map-valued default an operator may need to *clear* must be gated by a scalar.**
+  Helm coalescing merges maps **key-by-key** (lists, by contrast, replace wholesale),
+  so an override of `{}` re-inherits every default key, and while an explicit `null`
+  removes a key in a plain `-f` merge it does **not** survive every values pipeline —
+  an Argo `ApplicationSet` that merges per-app values over chart defaults coalesces
+  the key back. Downstream (gsap-apl) burned three iterations on this trying to clear
+  a `nodeSelector: {workload: builds}` that the cluster had no pool for: `{}` failed,
+  then `null` failed, and only a new `build.dedicatedPool: false` **boolean** — which
+  overrides cleanly through coalescing — actually dropped the selector. So when a
+  chart here ships a map default that some instance will legitimately not want
+  (`nodeSelector`, `tolerations`, `resources`, affinity), pair it with a scalar
+  toggle and template the map behind it. "Just override it with `{}`" is not a
+  supported answer, and it fails *silently* — the rendered manifest still carries
+  the default and the pod merely goes unschedulable.
 
 ## LKE-Enterprise constraints
 
@@ -64,12 +78,12 @@ to be stale, fix it in place rather than working around it.
 
 - **The repo is fully on github.com + GitHub-hosted `ubuntu-latest`** — the old
   Linode GitHub Enterprise / self-hosted-runner model (manual `curl` installs to
-  `$HOME/.local/bin`) is **gone**, including `template-scripts/ci/setup-runner.sh`. Both
+  `$HOME/.local/bin`) is **gone**, including `setup-runner.sh`. Both
   `.github/workflows/` and `instance-template/.github/workflows/` follow this.
 - **Install CLI tools with SHA-pinned marketplace setup actions** (version pinned
   from the `env:` block), not `curl | tar`. The real Docker login action is
   `docker/login-action` — `actions/docker-login-action` does **not** exist (it was
-  a GHE-mirror typo). Tools baked into the `ci-terraform`/`ci-kubernetes` images
+  a GHE-mirror typo). Tools baked into the `ci-tofu`/`ci-kubernetes` images
   don't need re-install in `container:` jobs.
 - **GHCR auth** for publish/CI workflows uses the built-in `GITHUB_TOKEN` +
   `permissions: packages: write|read`, namespace from `${GITHUB_REPOSITORY_OWNER,,}`.
@@ -88,6 +102,35 @@ to be stale, fix it in place rather than working around it.
   production-secondary overlay kustomizations). External DNS for these doesn't
   exist yet; when it's created, update the OTel collector `tls.host` value in both
   overlay patches to the real public FQDNs.
+
+## Regressions that stayed green (why gates exist)
+
+Both of these shipped, ran broken for weeks, and passed every check in CI. They
+are the reason for the AGENTS.md rule that new behavior ships with a gate — see
+[e2e-gates.md](e2e-gates.md) for the archetypes and how to write one.
+
+- **Two wrong values that agree with each other look correct.** OpenBao's audit
+  log shipped to `loki-gateway.llz-observability`; apl-core runs Loki in
+  `monitoring` and nothing creates that Service. The egress NetworkPolicy named
+  the *same* wrong namespace, so the allow matched the push URL exactly — correct
+  in shape, wrong in target, complete-looking from every angle. `converge` and
+  `health` saw a Running pod (promtail retries a dead DNS name forever);
+  `assert-loki` proved Loki was up, which is a fact about Loki, not about anything
+  reaching it. **No static check can distinguish a consistent pair from a correct
+  pair** — only the round trip can. Gate: `llz ci assert-openbao-audit`.
+- **A rename on one side of a contract, unchanged on the other.** `llz reap`
+  selected orphan Volumes by the CSI's `pvc-` prefix; the volume-labels reconciler
+  started renaming bound Volumes to `<region>-<ns>-<pvc>`, so the filter excluded
+  100% of its targets and reported "none matched the filter" — which reads exactly
+  like "nothing to do." The commit that introduced the rename edited the reaper's
+  own file, ~19 lines from the check it invalidated. Both sides had passing tests;
+  each tested its own copy of the rule. Guard:
+  `TestReaperRecognisesRelabelerOutput`, which feeds the relabeler's real
+  `desiredVolumeLabel()` into the reaper's real `linode.VolumeIsCandidate()`.
+- **The shared shape:** the failure mode is *silence*. Nothing errored, nothing
+  restarted, nothing alerted. When a change makes one component depend on another's
+  live output — or reformats something a second component parses — assume the
+  broken version will look exactly like the working one and write the gate.
 
 ## Operational scars (observed failure modes)
 
@@ -132,6 +175,26 @@ default against, not something to "clean up." Version-specific notes (apl-core
   `network-policies.yaml`). General rule: any aggregated-APIService webhook behind
   a default-deny needs its own `:443` ingress allow keyed on *its* pod label —
   don't assume the core-webhook policy covers it.
+- **A namespace default-deny polices pods from OTHER trees, and one of ours had
+  zero egress for its whole life.** `llz-openbao-platform` ships
+  `openbao-default-deny` with `podSelector: {}` over Ingress *and* Egress, so it
+  polices every pod in `llz-openbao` — not only OpenBao's own. Its single
+  companion, `openbao-allow`, selects `app.kubernetes.io/name: openbao`;
+  `openbao-cert-watcher` carries `openbao-cert-watcher`, and its own policy
+  declared `policyTypes: [Ingress]` with a comment saying there was "no egress
+  restriction". True of the file, false of the namespace. NetworkPolicies are
+  additive and there is no deny rule, so the watcher could reach nothing at all —
+  not the apiserver, not DNS. Every `kubectl get certificate` was dropped, the
+  loop logged `not readable yet (rbac? not issued?)` once a minute forever
+  (naming the two causes it was *not*), and at renewal nothing restarted OpenBao:
+  the secret-store cascade that Deployment exists to prevent happened exactly as
+  if it were not deployed. **The join is what hid it** — the default-deny is in a
+  *chart* and the pod it stranded is in `platform-apl/`, so neither tree read
+  alone shows anything wrong, and neither kube-linter nor the kind dry-run reads
+  `platform-apl/` at all. Gated by `llz ci default-deny-egress`, which reads both
+  trees and matches them by namespace. General rule: **adding a `podSelector: {}`
+  egress policy silently re-scopes every pod in the namespace, including ones
+  another repo tree owns.**
 - **argo-events v1.9+ relabeled pods.** EventBus/Sensor/EventSource pods now carry
   `controller=*-controller` labels instead of `app.kubernetes.io/component=*`. NPs
   using the old selectors match nothing → JetStream "Waiting for routing" loop.
@@ -180,7 +243,55 @@ default against, not something to "clean up." Version-specific notes (apl-core
   owned by Flux's `workload` HelmRelease, so annotation patches (e.g. demoting it
   from default) revert on Flux's ~10m reconcile. Fall back to per-chart
   `storageClassName:` overrides.
-
+- **A "lost device path" after a successful attach is OUR relabeler, not a CSI
+  flake.** The pod stalls forever in mount with `Unable to find device path out of
+  attempted paths: …/linode-pvc-…`, *after* a **successful** attach, so the Linode
+  API and the `VolumeAttachment` both look healthy and only the kubelet log names
+  the fault. This was recorded here for weeks as an intermittent Linode CSI
+  device-enumeration bug with no fix. It is not. The Linode CSI resolves a volume's
+  device by **label** — `findDevicePath` does `key.GetNormalizedLabel()` →
+  `GetDiskByIdPaths` → `/dev/disk/by-id/{linode-,scsi-0Linode_Volume_}<label>` —
+  and that label comes from the PV's **immutable** `volumeHandle` (`<id>-<label>`,
+  stamped at CreateVolume). LLZ's own volume-labels reconciler renamed every bound
+  Volume to `<REGION_SHORT>-<ns>-<pvc>`, so the in-guest udev symlink moved to the
+  new name while the driver went on hunting the old one. Permanently: there is no
+  retry that fixes it because nothing ever puts the old name back.
+  **Why it looked intermittent.** The rename only breaks a volume whose pod has not
+  mounted it YET, so it hits whatever is rolling out when the reconciler's first
+  pass fires. Before `e2eb26fb` that pass waited for the 1h resync floor — long
+  after everything had mounted — and the hour was an accidental safety margin. The
+  token-arrival kick moved it into the middle of bootstrap, i.e. straight through
+  the mount window of every later-wave chart. On e2e that is `loki-ingester` (3/3
+  reproductions); in the field it showed as "1 of 3 ingesters ready for 16 days",
+  which the only alert watching it could not fire on. **Every volume already
+  renamed is also a latent failure** — it works only because it is already mounted,
+  and its next attach (drain, reschedule, upgrade) will not find it.
+  The volume-labels lane is **retired**, not merely disabled — an inert lane named
+  for a rename invites the next person to switch it back on.
+  `assert-volume-encryption` now flags a live label that has drifted from its
+  `volumeHandle`, which is how you find the already-broken ones.
+  **A drifted Volume is recoverable with its data.** The handle is free-form text
+  after the first dash (`ParseLinodeVolumeKey` does `SplitN(key, "-", 2)`) and
+  nothing validates it against the Linode API at mount time, so either restore the
+  exact original label, or delete and recreate the PV **object** with
+  `volumeHandle: <id>-<current-label>` under `Retain`. Replacing the Volume is the
+  last resort, not the first — see [volume-labels](runbooks/volume-labels.md).
+  Identity lives in **tags**, which no device lookup reads: `lke<id>` stamped by
+  the StorageClass at CreateVolume (so it is never observable untagged, which is
+  what `llz reap`'s liveness gate keys on), plus `ns-<namespace>` and
+  `<namespace>-<pvc>` written by the `volume-tags` lane to carry the per-workload
+  identity the label used to.
+  Readable labels can only be made safe by the CSI setting them at CreateVolume,
+  the one point where label and handle cannot diverge — requested upstream at
+  [csi-driver#603](https://github.com/linode/linode-blockstorage-csi-driver/issues/603)
+  and [apl-core#3607](https://github.com/linode/apl-core/issues/3607).
+  Independently still true: ephemeral data — a build workspace, scratch dir,
+  anything discarded with the pod — belongs in an `emptyDir`, which is node-local,
+  needs no attach, and is faster. Reserve PVCs for state that must outlive the pod.
+  Note this cuts against the cluster default: LLZ promotes the encrypted+tagged
+  `block-storage-retain` to sole default (llz-cluster-foundation
+  `sc-default-patcher`), so an unqualified `volumeClaimTemplate` in a *new* workload
+  silently inherits block storage.
 ### OpenBao / ESO / cert rotation
 
 - **OpenBao raft-join is a chicken-and-egg.** Followers never auto-join (no
@@ -213,6 +324,22 @@ default against, not something to "clean up." Version-specific notes (apl-core
   when `gitea-http` DNS isn't up yet; the operator loops on
   `waitTillGitRepoAvailable` forever and argocd/kyverno/cert-manager stay empty.
   Fix is a stage-0 self-heal restart in `apl_pipeline_ready`.
+- **Argo Workflows silently drops pod-spec fields newer than the k8s types it
+  vendors.** argo-workflows v3.5.11 vendors pre-1.30 API types, so
+  `securityContext.appArmorProfile` (a 1.30+ field) is stripped before the pod is
+  created — no validation error, no warning, and the admitted pod simply has no
+  `appArmorProfile`. Downstream (gsap-apl) this read as "the field had no effect":
+  rootless buildkit kept failing `rootlesskit: failed to share mount point: /:
+  permission denied`, because AppArmor mediates the `mount` that the already-set
+  `seccompProfile: Unconfined` does not cover. The workaround is the **legacy
+  annotation** — `container.apparmor.security.beta.kubernetes.io/<container>:
+  unconfined` on `podMetadata.annotations` — which Argo passes through verbatim and
+  k8s 1.33 still honours (`<container>` is `main` for an Argo step). **General rule:
+  when a pod field set through Argo Workflows appears to do nothing, diff the
+  *admitted* pod against your template before debugging the field's semantics — a
+  vendored-types gap looks exactly like a misconfigured value.** Same class as the
+  `apiVersion` drops the `droppedAPIs` guard covers, but on the writer side, so no
+  lint gate can see it.
 
 ### apl-core 5.0.0 integration quirks
 
@@ -228,6 +355,16 @@ default against, not something to "clean up." Version-specific notes (apl-core
   `curlimages/curl` against the Otomi-signed wildcard cert → exit 60, init loops
   forever. A Kyverno mutation adds `-k`; only surfaces *after* the Gateway NP
   selector is fixed.
+- **Argo CD reports a REFUSED apply as `Synced`.** With `ServerSideDiff=true` the
+  comparison target is a server-side apply dry run. If the API server rejects that
+  apply — adding `volumeClaimTemplates` to a live StatefulSet, changing a Service
+  `clusterIP`, any create-time field on an object that already exists — no diff is
+  produced, so the Application keeps its previous verdict and `selfHeal` never
+  fires. The rejection is per OBJECT, so it also discards every other change to
+  that object, including mutable ones. Greenfield never sees it (each object is
+  created in its final shape), which is why nothing in e2e catches it. Detect with
+  `llz ci assert-overlay-applied`; remedy with `llz ci brownfield-migrate`; the
+  full write-up is [runbooks/overlay-declared-but-not-applied](runbooks/overlay-declared-but-not-applied.md).
 - **Loki S3 wiring** (apl-core): Loki runs in `monitoring` (not grafana); needs
   `_rawValues.loki.schemaConfig.object_store: s3` (the chart won't derive it),
   creds at `singleBinary.extraEnvFrom` (no top-level `extraEnvFrom`), and the

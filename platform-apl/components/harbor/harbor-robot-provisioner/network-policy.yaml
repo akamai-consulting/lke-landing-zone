@@ -1,0 +1,85 @@
+# Egress lockdown for the provisioner pod. It holds the Harbor admin password
+# and a GitHub PAT — unconstrained egress would let a compromised image
+# exfiltrate them. Restrict to DNS + harbor-core (same namespace) + OpenBao
+# (TCP/8200 in llz-openbao) + api.github.com (TCP/443).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-robot-provisioner-egress
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  # Static-label match on the pod template's app.kubernetes.io/name (set on the
+  # CronJob jobTemplate) — linter-visible NP→pod linkage.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: harbor-robot-provisioner
+  policyTypes: [Egress, Ingress]
+  ingress: []
+  egress:
+    # DNS. Match kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns`
+    # podSelector: LKE-Enterprise / managed CoreDNS is labeled differently
+    # (app.kubernetes.io/name=coredns), so a kube-dns podSelector matches nothing
+    # and every lookup times out — surfacing as the OpenBao-login "awaiting headers"
+    # deadline. Only DNS listens on :53 in kube-system, so a namespace-scoped :53
+    # grant is both correct and safe. (This was masked while the pod was in the istio
+    # mesh — istio DNS-capture bypassed the rule — until sidecar injection was disabled.)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # harbor-core, same namespace (the REST API; the registry plane is never
+    # touched — robot creation and the smoke both go through core). Namespace-
+    # scoped rather than pod-label-scoped: apl-core's Harbor chart labels have
+    # drifted across versions and an NP selector that matches nothing fails
+    # SILENTLY (docs/lessons-learned.md). Both ports: Cilium evaluates policy
+    # post-DNAT, so the pod targetPort (8080) must be allowed alongside the
+    # Service port (80) — the apiserver-egress 6443-vs-443 scar.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: harbor
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 80 }
+    # OpenBao (TCP/8200) for the Kubernetes-auth login + KV reads/writes.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }
+    # istiod (xDS + cert signing). REQUIRED now that this pod is meshed
+    # (cronjob.yaml sets sidecar.istio.io/inject: "true"). Without it Envoy's
+    # iptables redirect kills ALL egress from the pod — including DNS and the
+    # OpenBao and GitHub rules above — and the container never gets a working
+    # network at all. This is the exact failure llz-cluster-foundation's
+    # networkPolicies.istiod block documents: "Required in every namespace that
+    # has BOTH default-deny AND sidecar injection."
+    #
+    # 15012 (mTLS xDS + CSR) is the one that matters; 15010 (plaintext xDS) and
+    # 15014 (monitoring) are included to match the foundation's istiod rule
+    # exactly rather than inventing a narrower variant that drifts from it.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              app: istiod
+      ports:
+        - { protocol: TCP, port: 15010 }
+        - { protocol: TCP, port: 15012 }
+        - { protocol: TCP, port: 15014 }
+    # api.github.com (TCP/443) for the repo-secret publication. ipBlock
+    # 0.0.0.0/0 is acceptable here: the port restriction + the scoped tokens
+    # mean only outbound HTTPS is reachable — same posture as the
+    # linode-cred-rotator's Linode API egress.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }

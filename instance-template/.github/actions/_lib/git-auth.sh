@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Shared git auth for `terraform init` against published first-party modules.
+# Shared git auth for `tofu init` against published first-party modules.
 #
 # First-party Terraform modules are consumed as
 #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
 # (the published, SemVer-tagged reuse units — see terraform-modules/RELEASING.md).
 # In CI:
-#   * `terraform init` clones each git:: module source into .terraform/modules/<name>.
+#   * `tofu init` clones each git:: module source into .terraform/modules/<name>.
 #     In container jobs the workspace is bind-mounted with the runner user's
 #     ownership, which differs from the UID git runs as inside the TF container, so
 #     go-getter's clone trips git's "detected dubious ownership" guard

@@ -1,17 +1,23 @@
 name: Terraform Infrastructure
 
-# Thin caller for the reusable LLZ workflow — the full pipeline body (plan /
-# apply / destroy across cluster, cluster-bootstrap,
-# object-storage + OpenBao bootstrap + converge gate), the terraform-init +
-# fetch-kubeconfig composite actions, and the llz CLI all live in the
-# template and are sourced there (see docs/templatization-plan.md §"Keeping
-# instances in sync"). The reusable workflow checks THIS instance back out (its
-# terraform-iac-bootstrap/ TF roots + state), so the instance copies only this
-# stub. The dispatch inputs below are FORWARDED to the reusable as explicit
+# Thin caller for the LOCAL reusable workflow llz-terraform.yml — the full
+# pipeline body (plan / apply / destroy across cluster, cluster-bootstrap,
+# object-storage + OpenBao bootstrap + converge gate) lives in
+# .github/workflows/llz-terraform.yml, which copier delivers into THIS repo
+# alongside this stub. Because that reusable is same-repo, `secrets: inherit`
+# actually delivers this instance's repo + environment secrets — unlike the old
+# cross-org `uses:` form, where inheritance silently arrived empty for any adopter
+# whose org differs from the template's (#200/#201). The reusable runs in the
+# `llz` container image and calls the terraform-init / fetch-kubeconfig composite
+# actions from this repo's own vendored .github/actions/ tree — nothing is
+# fetched from the template repo at runtime (ADR 0003).
+# The dispatch inputs below are FORWARDED to the reusable as explicit
 # workflow_call inputs (`with:`) — a reusable workflow's github.event.inputs is
 # empty across the workflow_call boundary, so it reads them via `inputs`.
-# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# ADOPTERS: no fork needed for secrets — the whole job graph is local.
+# `upstream_org` / `llz_version` still name the template's images + Terraform
+# module sources (re-pinned by `llz upgrade`); fork only if you want to own those
+# artifacts too.
 
 on:
   push:
@@ -19,11 +25,63 @@ on:
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
+      # The PIPELINE ITSELF, which this stub is only the trigger surface for.
+      # Listing this file and not the reusable it calls watched the 90-line caller
+      # and ignored the body that plans and applies — so a `copier update` that
+      # changed the apply logic (or the composite actions it drives) merged with no
+      # plan run against it. The reusable and the actions are `managed`, so they
+      # change on exactly the upgrades an operator most wants a plan for.
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
+      - '.github/actions/**'
   pull_request:
     branches: [main, master]
+    # DEFAULT TYPES (opened / synchronize / reopened), and the omission is the
+    # point. `ready_for_review` used to be listed because llz-terraform.yml's plan
+    # job skipped DRAFT pull requests — it wrote Terraform state (`llz ci
+    # tf-import`) with nothing serializing it against a concurrent apply, so a
+    # draft was how an operator said "do not disturb live state", and taking the PR
+    # out of draft had to fire an event to get the plan. That job is retired (it
+    # could never resolve its environment-scoped credentials; see the note where it
+    # used to be in llz-terraform.yml), no pull-request path writes state any more,
+    # and every job left here runs on drafts and non-drafts alike. Listing a
+    # trigger type nothing acts on only re-runs the same read-only checks.
     paths:
       - 'terraform-iac-bootstrap/**'
       - '.github/workflows/terraform.yml'
+      # The PIPELINE ITSELF, which this stub is only the trigger surface for.
+      # Listing this file and not the reusable it calls watched the 90-line caller
+      # and ignored the body that plans and applies — so a `copier update` that
+      # changed the apply logic (or the composite actions it drives) merged with no
+      # plan run against it. The reusable and the actions are `managed`, so they
+      # change on exactly the upgrades an operator most wants a plan for.
+      # ALL the reusable bodies, not just llz-terraform.yml: this pipeline calls
+      # llz-discover-deployments.yml and llz-bootstrap-openbao.yml too, and naming
+      # them one at a time is what left this filter one file short to begin with.
+      # They are all `managed`, so a `copier update` moves them together anyway.
+      - '.github/workflows/llz-*.yml'
+      - '.github/actions/**'
+      # THE TEMPLATE PIN, and it is here because the reason it could not be has
+      # been removed.
+      #
+      # Listing it puts the repo-readiness job on a pin-only upgrade PR — the bot
+      # bump, the `copier update` that merged to nothing — which is exactly where a
+      # newly-required value goes unnoticed (v0.0.42 and
+      # TF_STATE_ENCRYPTION_PASSPHRASE). It was listed for one commit and then
+      # taken out, because a paths: filter selects the WORKFLOW and not a job, so it
+      # also selected `Plan Cluster (PR)` — a job that ran `llz ci tf-import`, which
+      # WRITES cluster/<deployment>/terraform.tfstate against no lock. Catching a
+      # rare pin-only upgrade was not worth letting a bot write production state.
+      #
+      # That job is retired (see llz-terraform.yml, where its rationale now lives),
+      # so nothing on any pull-request path writes Terraform state and the trade-off
+      # is gone. What this filter now selects on a pin-only PR is repo-readiness,
+      # tf-lint, checkov and promote-pipeline-drift — all read-only, none holding a
+      # cloud credential. `llz ci workflow-secret-scope` is what keeps that true.
+      - '.copier-answers.yml'
   workflow_dispatch:
     inputs:
       action:
@@ -41,6 +99,10 @@ on:
         options:
           - cluster
           - object-storage
+          # 0-n Managed Postgres clusters (spec.cluster.databases). A deployment
+          # that declared none renders `databases = {}` and this applies cleanly
+          # while provisioning nothing, so it is safe to run on any deployment.
+          - databases
           - all
       region:
         # NOTE: input name kept as `region` for backwards compatibility with
@@ -53,26 +115,48 @@ on:
         # list), so a choice input would reject any env an adopter adds (e.g.
         # `myteam-dev`). Must match a deployment you scaffolded
         # (^[a-z][a-z0-9-]{1,30}$) with a tfvars set + infra-<deployment> Environment.
-        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
+        description: 'Deployment name — NOT a Linode region (this field is named `region` for state-key compatibility). e.g. primary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
         required: true
         type: string
       confirm_destroy:
-        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage'
+        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage | destroy:<deployment>:databases'
         required: false
         type: string
+      confirm_replace:
+        description: 'Required only to let an APPLY through that would destroy or replace live infrastructure — a bucket holding Loki/Harbor data, a Managed Postgres cluster, the shared VPC, the LKE cluster itself. Leave EMPTY unless the plan named something and you have decided the recycle is intended: replace:<deployment>:cluster | replace:<deployment>:object-storage | replace:<deployment>:databases | replace:<deployment>:vpc. A node-pool resize does not need it.'
+        required: false
+        type: string
+      drain_data_buckets:
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images.'
+        required: false
+        type: boolean
+        default: false
+      assert_loki:
+        description: 'After converge, assert Loki is S3-backed (llz ci assert-loki). Default false; the release-e2e gate dispatches with this true so the check runs inside the bootstrap converge instead of a separate health pass.'
+        required: false
+        type: boolean
+        default: false
+      assert_no_changes:
+        description: 'On a PLAN, fail if it proposes anything at all. Default false, and only correct straight AFTER an apply of this deployment — a plan you run to preview a pending change is supposed to be non-empty. The release-e2e gate dispatches a plan with this true right after its apply, to catch a resource Terraform cannot bring to rest.'
+        required: false
+        type: boolean
+        default: false
+      openbao_escrow_pubkey_b64:
+        description: 'OPTIONAL, first bootstrap of a deployment only. base64 of your RSA public-key PEM (>= 2048-bit). Set it and OpenBao''s 5 recovery shares come back encrypted to you — job summary + openbao-recovery-keys artifact — which is the only way to get an OFFLINE escrow copy. Empty (default) emits no key material at all and holds all 5 shares as infra-<deployment> environment secrets: break-glass works, but nothing outside GitHub holds the quorum.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    # LOCAL reusable (copier-delivered into this repo), so `secrets: inherit` is
+    # same-repo and resolves this instance's repo + environment secrets (#201).
+    uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
       # Forward the workflow_dispatch selectors so the reusable can read them via
       # `inputs` (github.event.inputs does not cross the workflow_call boundary).
       # Empty on push/PR, which leaves the action-gated jobs skipped.
@@ -80,4 +164,11 @@ jobs:
       module: ${{ inputs.module }}
       region: ${{ inputs.region }}
       confirm_destroy: ${{ inputs.confirm_destroy }}
+      confirm_replace: ${{ inputs.confirm_replace }}
+      drain_data_buckets: ${{ inputs.drain_data_buckets || false }}
+      # Default false via the reusable's input; release-e2e's provision dispatch
+      # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
+      assert_loki: ${{ inputs.assert_loki || false }}
+      assert_no_changes: ${{ inputs.assert_no_changes || false }}
+      openbao_escrow_pubkey_b64: ${{ inputs.openbao_escrow_pubkey_b64 }}
     secrets: inherit

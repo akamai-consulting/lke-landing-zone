@@ -99,8 +99,8 @@ org/cluster identity is variabilized.
 release, with the pre-commit gate armed and CI credentials provisioned.
 
 `llz new` runs the Copier scaffold and sets `llz_version` to the binary's own
-version, so the instance pins module `?ref=`, workflow `uses:@`, and `template-ref:`
-to exactly the release the CLI came from — the lockstep that makes "the CLI is the
+version, so the instance pins module `?ref=` — and every CI consumer that reads
+that answer — to exactly the release the CLI came from — the lockstep that makes "the CLI is the
 version anchor" true from the first commit. `llz tokens` runs the credential wizard
 and seeds the `TF_VAR_*` / GHCR secrets CI will read.
 
@@ -121,34 +121,33 @@ classes — **MUST-SET** (identity: region, k8s version, cluster name/domain),
 **SECRET** (`TF_VAR_*` only, never committed), and **default** (Linode/apl-core
 shapes you keep). Adding a deployment is `llz env add`, which declares the env in
 the LandingZone spec and `llz render`s a thin overlay over the shared apl-values
-base (`_shared/` + `components/`) rather than cloning or hand-copying per-env files.
+base (`platform-apl/manifest` + `components/`) rather than cloning or hand-copying per-env files.
 
 - **Drives it:** `llz env add <env>` (with `--dry-run` to preview), the values
-  contract in [adopter §3](adopter-guide.md), `llz validate --env <env>` to flag
+  contract in [adopter §3](adopter-guide.md), `llz doctor --env <env>` to flag
   unfilled placeholders before any build.
-- **Done is checkable:** `llz validate --env <env>` passes;
+- **Done is checkable:** `llz doctor --env <env>` passes;
   `kubectl kustomize apl-values/<env>/manifest` succeeds.
 - **Tenet:** *reviewable git fact* — tfvars is the single source of truth; identity
   is a diff, secrets are environment-injected.
 
 ### Phase 3 — Bootstrap
 
-**Entry:** a configured deployment. **Done:** the cluster reports
-`bootstrap_application_synced` = `Synced + Healthy` — exit 0 on the convergence
-gate.
+**Entry:** a configured deployment. **Done:** the bootstrap Application reports
+`Synced + Healthy` — exit 0 on the convergence gate.
 
 Bootstrap is **ordered and gated**, not a single button. The Terraform roots apply
-in sequence (`cluster → object-storage → cluster-bootstrap`);
-`cluster-bootstrap` installs apl-core, which stands up Argo CD, which fans out the
-first-party charts in sync-wave order (foundation → OpenBao platform → cert
-automation). The methodology's "convergence over completion" tenet is most visible
-here: TF returns success **only** once the bootstrap Application converges, and the
-poll/stop/fail decision is the three-exit-code contract — never a human eyeballing
-`kubectl get pods`.
+in sequence (`vpc` when shared → `cluster` → `object-storage`), then
+`llz ci bootstrap-cluster` installs apl-core, which stands up Argo CD, which fans
+out the first-party charts in sync-wave order (foundation → OpenBao platform →
+cert automation). The methodology's "convergence over completion" tenet is most
+visible here: bootstrap returns success **only** once the bootstrap Application
+converges, and the poll/stop/fail decision is the convergence contract's exit
+codes — never a human eyeballing `kubectl get pods`.
 
 - **Drives it:** the Terraform workflow dispatched per module (`cluster`,
-  `object-storage`, `cluster-bootstrap`), then `bootstrap-openbao.yml` and
-  `bootstrap-dns.yml`; the polling `llz ci converge` (wrapping `llz ci health`).
+  `object-storage`, or `all`), then `bootstrap-openbao.yml`; the
+  polling `llz ci converge` (wrapping `llz ci health`).
 - **Ordering caveat:** the **first** cluster bootstrapped writes Harbor robot
   credentials later clusters read — bootstrap one fully before the next
   ([bootstrap-openbao](runbooks/bootstrap-openbao.md)).
@@ -204,8 +203,8 @@ tracks upstream without manual diffing and without drift accumulating silently.
 Two tracks keep an instance current, and the methodology keeps them deliberately
 **separate so they never race**:
 
-- **First-party LLZ pins** (module `?ref=`, reusable-workflow `uses:@`,
-  `template-ref:`, and the copied scaffold) move in lockstep via
+- **First-party LLZ pins** (module `?ref=`, the `llz_version` answer CI reads,
+  and the copied scaffold) move in lockstep via
   `llz self-update` (get the new CLI) then `llz upgrade --ref vX.Y.Z` (Copier
   update + re-pin). Copier merges only the delta, so local edits survive and
   conflicts surface only where you edited a line upstream also changed.
@@ -218,8 +217,7 @@ measured: `llz drift` (and the monthly `template-drift` job) reports how far beh
 the template you've fallen.
 
 - **Drives it:** `llz self-update`, `llz upgrade`, Renovate
-  (`instance-template/renovate.json`), `llz drift`,
-  `template-scripts/stamp-template-version.sh`.
+  (`instance-template/renovate.json`), `llz drift`.
 - **Tenet:** *publish/consume* + *defaults with escape hatches* — fixes arrive as
   bumps; the `managed` / `merge` / `owned` manifest decides what an upgrade may
   touch.
@@ -251,7 +249,7 @@ operator exactly what their workstation is missing.
 |---|---|---|---|
 | 0 · Entitle | prerequisites satisfied | `llz doctor` | [adopter §1](adopter-guide.md) · [InfoSec checklist](infosec/linode-account-request-checklist.md) |
 | 1 · Scaffold | instance pinned; hook armed; tokens seeded | `llz new`, `llz tokens` | [adopter §2,§4](adopter-guide.md) |
-| 2 · Configure | `llz validate --env` passes; overlay renders | `llz env add`, `llz validate` | [adopter §3](adopter-guide.md) |
+| 2 · Configure | `llz doctor --env` passes; overlay renders | `llz env add`, `llz doctor` | [adopter §3](adopter-guide.md) |
 | 3 · Bootstrap | convergence gate exit 0 | TF workflow + `llz ci converge` | [overview low-level](architecture/overview.md) · [convergence contract](architecture/convergence-contract.md) |
 | 4 · Operate | scheduled gates stay green | `llz status/health/drift` + day-2 workflows | [playbooks](playbooks/operator-onboarding.md) |
 | 5 · Promote | change walked `dev→staging→prod` on green | `promotion_rank`, `llz env pipeline/next` | [environments-and-promotion](environments-and-promotion.md) |

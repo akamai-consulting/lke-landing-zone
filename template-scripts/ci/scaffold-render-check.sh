@@ -18,9 +18,13 @@
 #   1. Scaffold a throwaway env via llz env add (the real path).
 #   2. Assert no `your-env` placeholder survived in the generated tfvars/overlay.
 #   3. Assert the per-env files cluster-bootstrap reads at plan time exist.
-#   4. Render every apl-values/<env>/values.yaml through templatefile() with the
-#      same variable set cluster-bootstrap passes — catching ${...} parse errors
-#      and references to variables the root does not provide.
+#   4. Assert NO apl-core values.yaml was emitted. Linode owns apl-core's values
+#      on the managed App Platform; a rendered one would be a file shipping to
+#      instances that reaches no cluster, which is what happened to the retired
+#      base for a year. This step used to run validate-apl-values (a
+#      templatefile var-contract plus apl-core's chart schema via
+#      `helm template apl/apl`) — that verb is retired, because the file it took
+#      as input is no longer rendered.
 #
 # It does NOT stand up a cluster or run `terraform plan` (remote_state.cluster
 # and the kubeconfig provider still need a real cluster — that stays Release-E2E
@@ -31,8 +35,7 @@
 #   SCAFFOLD_CHECK_ENV          throwaway env name   (default: scaffoldcheck)
 #   SCAFFOLD_CHECK_REGION       Linode region        (default: us-ord)
 #   SCAFFOLD_CHECK_OBJ_CLUSTER  OBJ cluster id       (default: us-ord-1)
-#   TF                          terraform binary     (default: terraform, then tofu)
-#   SKIP_TF                     set to 1 to skip the templatefile render step
+#   (the schema half of step 4+5 self-skips when `helm` is absent)
 set -euo pipefail
 
 # shellcheck source=template-scripts/lib-common.sh
@@ -42,9 +45,6 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_NAME="${SCAFFOLD_CHECK_ENV:-scaffoldcheck}"
 REGION="${SCAFFOLD_CHECK_REGION:-us-ord}"
 OBJ_CLUSTER="${SCAFFOLD_CHECK_OBJ_CLUSTER:-us-ord-1}"
-
-# Empty when neither terraform nor tofu is present — the render step below skips.
-TF="$(detect_tf)"
 
 # `llz env add` is the scaffolder now (the bash new-deployment.sh was folded into
 # the binary). Prefer a prebuilt bin/llz, an llz on PATH, else build one.
@@ -61,10 +61,19 @@ fi
 FAILED=0
 
 INSTANCE="$ROOT/instance-template"
+# EVERY tfvars `llz env add` writes, or this script both under-checks and LEAKS:
+# the array drives the placeholder scan AND the on-exit cleanup, so a root missing
+# here leaves a scaffoldcheck.tfvars behind in the working tree after each run.
+# That debris is not harmless — the template-manifest gate walks the FILESYSTEM
+# (the CI container has no usable git), so leftover scaffold files make
+# `make template-manifest-check` fail locally while CI, on a clean checkout, passes.
+# Keep in step with instancelayout.Roots in
+# tools/internal/shared/instancelayout/instancelayout.go, plus cluster-bootstrap.
 GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/cluster/$ENV_NAME.tfvars"
-  "$INSTANCE/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars"
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"
+  "$INSTANCE/terraform-iac-bootstrap/databases/$ENV_NAME.tfvars"
+  "$INSTANCE/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars"
 )
 GEN_OVERLAY="$INSTANCE/apl-values/$ENV_NAME"
 ENV_YAML="$INSTANCE/environments/$ENV_NAME.yaml"   # spec ClusterDefinition `llz env add` authors
@@ -86,6 +95,25 @@ LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 
 cleanup() {
   rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"
+  # `llz env add` also materializes each root's *.tf AND its .terraform.lock.hcl
+  # from the embedded tfroots package. They are gitignored, regenerated on demand,
+  # and were NOT being cleaned — so every run left ~6 files per root behind. That
+  # is what makes `make template-manifest-check` fail on a developer's machine
+  # while passing in CI: the gate walks the filesystem (the CI container has no
+  # usable git) and counts this debris as unclassified scaffold.
+  #
+  # THE LOCK JOINED THE *.tf when it stopped being delivered. It used to be
+  # tracked here and had to be spared; now it is generated beside them from the
+  # same embed, so leaving it behind reintroduces exactly the debris this cleanup
+  # exists for — and it is a DOTFILE, which `rm -f "$d"*.tf` would never have
+  # matched even if the suffix had lined up.
+  #
+  # Iterate the root DIRECTORIES, not GEN_TFVARS: `vpc` is a root whose tfvars is
+  # per-NETWORK (vpc/<name>.tfvars), not per-env, so it never appears in
+  # GEN_TFVARS — and its six .tf files leaked from every run even after the
+  # per-root cleanup landed. Globbing the roots also means the next root added is
+  # cleaned without touching this script.
+  for d in "$INSTANCE"/terraform-iac-bootstrap/*/; do rm -f "$d"*.tf "$d".terraform.lock.hcl; done
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
   if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }
@@ -102,7 +130,7 @@ if ! out="$( ( cd "$ROOT" && "$LLZ" env add "$ENV_NAME" --region "$REGION" --obj
   fail "llz env add failed to scaffold '$ENV_NAME'"
   exit 1
 fi
-echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + 3 tfvars"
+echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + ${#GEN_TFVARS[@]} tfvars"
 
 # ── 2. No unfilled placeholders ──────────────────────────────────────────────
 step "Check for leftover 'your-env' placeholders"
@@ -117,38 +145,50 @@ else
   echo "none (comments excluded)."
 fi
 
-# ── 3. Per-env files cluster-bootstrap reads at plan time ─────────────────────
-# Mirrors terraform-iac-bootstrap/cluster-bootstrap/main.tf: templatefile(values.yaml) and
-# data.local_file.env_revision_configmap. Keep in sync if those reads change.
+# ── 3. Per-env files the platform-bootstrap Application syncs ─────────────────
+# LLZ runs on the managed platform: apl-core (Linode) owns its own values.yaml, so
+# `llz render` emits NO apl-core values.yaml — only the manifest/ tree the
+# platform-bootstrap Application syncs. env-revision-configmap.yaml is the one
+# per-env marker the bootstrap flow reads.
 step "Check required per-env files exist"
 REQUIRED=(
-  "$GEN_OVERLAY/values.yaml"
   "$GEN_OVERLAY/manifest/env-revision-configmap.yaml"
 )
 for f in "${REQUIRED[@]}"; do
   if [[ -f "$f" ]]; then echo "ok   ${f#"$ROOT"/}"; else fail "missing required per-env file: ${f#"$ROOT"/}"; fi
 done
+# The apl-core values.yaml must NOT be emitted on the managed platform.
+if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
+  fail "unexpected apl-core values.yaml at ${GEN_OVERLAY#"$ROOT"/}/values.yaml — managed apl-core owns its own values; LLZ must not render one"
+fi
 
-# ── 4. templatefile() render (mirrors cluster-bootstrap locals.apl_rendered_values) ─
-step "Render apl-values/$ENV_NAME/values.yaml via templatefile()"
-if [[ -z "$TF" || "${SKIP_TF:-0}" == "1" ]]; then
-  echo "(no terraform/tofu binary or SKIP_TF=1 — skipping render)"
-elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
-  # Same variable set cluster-bootstrap/main.tf feeds to templatefile(); a
-  # values.yaml that references anything outside this set fails here (correctly).
-  # Keep in sync with the templatefile(...) call in cluster-bootstrap/main.tf.
-  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
-  tmp="$(mktemp -d)"
-  printf 'terraform {}\n' > "$tmp/main.tf"
-  ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true
-  if echo "length(templatefile(\"$GEN_OVERLAY/values.yaml\", $vars))" \
-       | ( cd "$tmp" && "$TF" console ) >/dev/null 2>"$tmp/err"; then
-    echo "rendered ok"
-  else
-    sed 's/^/    /' "$tmp/err" || true
-    fail "templatefile() failed to render apl-values/$ENV_NAME/values.yaml (see above)"
+# ── 4. kustomize-build every rendered overlay (Argo's load-restrictor) ────────
+# The blast-radius decomposition renders per-env apps/<name>/ source roots that pull
+# in the shared kustomize Component three levels up + env patches. The render-golden
+# Go tests assert STRINGS; only an actual kustomize build proves Argo can materialize
+# the result — catching a broken Component ref, a missing/renamed patch file, or a
+# load-restrictor escape BEFORE a ~40-min e2e. Build the manifest overlay + every
+# apps/<name>/ with the SAME load restrictor Argo runs (LoadRestrictionsNone), which
+# is why the ../ cross-dir refs resolve. kubectl ships kustomize; skip when absent
+# (CI's scaffold job installs it).
+step "kustomize-build the rendered overlays (LoadRestrictionsNone)"
+if command -v kubectl >/dev/null 2>&1; then
+  BUILD_DIRS=("$GEN_OVERLAY/manifest")
+  if [[ -d "$GEN_OVERLAY/apps" ]]; then
+    while IFS= read -r d; do BUILD_DIRS+=("$d"); done \
+      < <(find "$GEN_OVERLAY/apps" -mindepth 1 -maxdepth 1 -type d | sort)
   fi
-  rm -rf "$tmp"
+  for d in "${BUILD_DIRS[@]}"; do
+    [[ -f "$d/kustomization.yaml" ]] || continue
+    if err="$(kubectl kustomize "$d" --load-restrictor LoadRestrictionsNone 2>&1 >/dev/null)"; then
+      echo "ok   build ${d#"$ROOT"/}"
+    else
+      printf '%s\n' "$err"
+      fail "kustomize build failed: ${d#"$ROOT"/}"
+    fi
+  done
+else
+  echo "kubectl absent — skipping kustomize-build (CI's scaffold job enforces it)."
 fi
 
 # ── result ───────────────────────────────────────────────────────────────────

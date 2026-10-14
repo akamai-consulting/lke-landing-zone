@@ -16,12 +16,14 @@ landing-zone template. It is a single Go module (`go.mod`).
   `llz credentials` owns the mutating half of the shared Linode credential
   lifecycles (formerly the standalone `linode-pat-rotator` /
   `linode-obj-key-rotator` binaries): `pat create|revoke-old` for the
-  `LINODE_API_TOKEN` PAT (90-day PAT policy, grace-by-age drain) and `obj-key
+  `LINODE_API_TOKEN` PAT (90-day PAT policy, grace-by-supersession drain) and `obj-key
   create|revoke-old` for the 120-day TF-state Object Storage key SLA
   (keep-newest-N drain — the OBJ keys API exposes no `created` time). Built and
   exec'd by the `linode-credentials` composite action. The former standalone
-  `secret-rotation` and `linode-cred-audit` binaries are folded in too, as
-  `llz credentials lke-admin rotate` and `llz ci cred-audit`.
+  `secret-rotation` binary is folded in too, as `llz credentials lke-admin
+  rotate`. (`linode-cred-audit` became `cred-audit` and has since been
+  RETIRED in turn — its measurement lives in `llz ci token-inventory` and its
+  reporting in `llz ci alert-eval`.)
 - `internal/linode/` — the shared, minimal Linode API client (LKE control-plane
   ACL; profile-token / OBJ-key CRUD and the lke-admin delete-kubeconfig
   rotation), plus chrono-free Linode timestamp helpers, used by the rotation
@@ -44,6 +46,19 @@ gofmt -l .            # must print nothing
   (`spf13/cobra` for the CLI, `sigs.k8s.io/yaml` for YAML), reaching the
   Kubernetes API with a hand-rolled in-cluster REST client rather than client-go.
 - Binaries build fully static (`CGO_ENABLED=0`).
+- **`ci assert-*` verbs are the e2e gates** — the layer that catches behavior no
+  static check can see. Structure every new one the same way: the judgement is a
+  **pure function over parsed input** (testable without a cluster), and the
+  transport — `kubectl`, port-forward, an API client — sits behind a **package-var
+  seam** a test replaces (`withPrometheus` / `withLoki` in `prom_query.go` /
+  `loki_query.go`). `ci_assert_scrape.go` and `ci_assert_openbao_audit.go` are the
+  models. Unit-test the pure evaluator *and* the fail-closed arms: empty result,
+  malformed response, unreachable endpoint. A gate must never report success
+  having examined nothing. When two components in this module share a rule (a
+  label format, a path layout, a truncation limit), test the coupling by calling
+  **both sides' real functions** — never by restating the rule in the test, which
+  passes happily while the shipped consumer goes blind. See
+  [docs/e2e-gates.md](../docs/e2e-gates.md).
 - Never add `Co-Authored-By` to commits.
 - Do not commit secrets or keypairs (`*.pem`, `*.der`, `*.key`) — `.gitignore`
   covers these and the pre-commit hook enforces it.

@@ -7,7 +7,7 @@ repos consume. Most contributions touch `terraform-modules/`, `kubernetes-charts
 
 ## Prerequisites
 
-- [Go](https://go.dev/dl/) toolchain (1.23+) — for the `tools/` module
+- [Go](https://go.dev/dl/) toolchain (1.25+, matching `tools/go.mod`) — for the `tools/` module
 - `terraform`/`tofu`, `kubectl`, `helm` — for the modules and charts
 
 `llz doctor` is the authoritative, always-current list of the runtime toolchain
@@ -39,7 +39,7 @@ Native tools (single Go module at `tools/`):
 cd tools && go build ./...
 ```
 
-The commands are `llz`, `firewall-cidrs`, and `firewall-controller`. There is
+The only command is `llz` (`firewall-cidrs` and `firewall-controller` moved to the private lke-landing-zone-internal repo). There is
 no other Go module in this repo.
 
 ## Lint
@@ -67,8 +67,9 @@ same harness with `LLZ_FUNCTIONAL_NET=1`; it runs against a real release in
 To generate an environment for a downstream instance repo:
 
 ```bash
-DRY_RUN=1 template-scripts/new-deployment.sh <env> --region us-sea --obj-cluster us-sea-1
-template-scripts/new-deployment.sh <env> --region us-sea --obj-cluster us-sea-1
+llz env add <env> --region us-sea --obj-cluster us-sea-1
+llz render <env> --diff     # preview what the spec would write
+llz render <env>
 ```
 
 See [docs/adopter-guide.md](docs/adopter-guide.md) for the end-to-end path.

@@ -1,0 +1,140 @@
+name: Release E2E — warm fast path (reuse a live cluster)
+
+# Dispatch-only FAST PATH for iterating on bootstrap/convergence without re-paying
+# the ~14m LKE-Enterprise cluster create (and the ~6m apl-core foundation install)
+# every run. release-e2e.yml stands a cluster up cold (~30m); when you are
+# debugging app/values/bootstrap/converge behaviour and the last run's cluster is
+# still up, most of that ~30m is pure overhead.
+#
+# ── The loop ─────────────────────────────────────────────────────────────────
+#   1. Seed once: run release-e2e.yml with keep_cluster=true (full ~30m). The
+#      LKE-E cluster + its Terraform state (S3, keyed by region=e2e) survive.
+#   2. Iterate: run THIS workflow. It re-instantiates the template at THIS commit
+#      onto the warm E2E instance and re-drives the SAME provision dispatch as the
+#      cold gate (terraform.yml apply, module=all, region=e2e, assert_loki=true).
+#      Because the cluster already exists in state, `terraform apply` REFRESHES it
+#      instead of recreating it (the 14m create is skipped) AND apl-core is already
+#      installed (helm upgrade is a fast no-op; the apl-pipeline gate passes at
+#      once), so the run collapses to: bootstrap re-apply (idempotent) + nudge +
+#      `llz ci converge`. Typical warm run: ~8-12m instead of ~30m.
+#   3. It NEVER tears down — the cluster stays warm for the next iteration (it KEEPS
+#      BILLING; destroy it when done).
+#   4. When done, destroy manually:
+#        gh workflow run terraform.yml -R <instance> -f action=destroy \
+#          -f module=cluster -f region=e2e -f confirm_destroy=destroy:e2e:cluster
+#      (or run release-e2e.yml once with keep_cluster=false).
+#
+# ── Fidelity / scope ─────────────────────────────────────────────────────────
+#   • The provision dispatch is IDENTICAL to the cold gate's (apply, module=all,
+#     region=e2e, assert_loki=true). The ONLY difference from a cold run is that
+#     the cluster pre-exists — nothing about the bootstrap/converge path is skipped
+#     or faked, so a green warm run means the same thing a green cold provision
+#     does, on the code under test. It is NOT a release gate, though: `on:` is
+#     workflow_dispatch only, so it can never gate (or block) a promotion.
+#   • Assumes a warm cluster from a prior keep_cluster=true run. If the e2e state is
+#     empty (never seeded, or already destroyed), the apply CREATES a cluster from
+#     scratch — correct, just no faster than release-e2e (and it then stays up
+#     billing). There is no cheap "is it warm?" precondition, so this is documented,
+#     not enforced.
+#   • Shares release-e2e.yml's `concurrency: release-e2e` group, so it can never
+#     race a full release-e2e run (or another warm run) against the same
+#     cluster/state.
+#   • The `instantiate` job below is the SHARED reusable workflow
+#     (.github/workflows/e2e-instantiate.yml) that release-e2e.yml also calls, so
+#     the safety-critical copier-token render exists exactly once and cannot
+#     drift. The warm path opts out of its two optional steps (see the call site).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One E2E cluster at a time — share release-e2e's group so a warm run can never
+# race a full release-e2e run (or another warm run) against the same state/cluster.
+concurrency:
+  group: release-e2e
+  cancel-in-progress: false
+
+env:
+  E2E_ENV: e2e
+  INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
+  # Region + OBJ cluster default to the canonical lab tier (us-ord); override via
+  # repo vars only to exercise a different region. Must match whatever the warm
+  # cluster was seeded with.
+  E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
+  E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── 1. Instantiate the template into the throwaway E2E instance repo ──────────
+  # Same shared reusable workflow the cold gate calls — the warm path opts OUT of
+  # both optional steps: the image build is normally already published for the
+  # commit being iterated on, and the escape-hatch probe is only asserted by the
+  # cold gate's post-converge assert-instance-custom.
+  instantiate:
+    name: Instantiate
+    uses: ./.github/workflows/e2e-instantiate.yml
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+    secrets:
+      E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+      # Optional. Threaded EXPLICITLY because this caller does not use
+      # `secrets: inherit` the way release-e2e.yml does — an unlisted secret is
+      # simply absent inside the reusable workflow, and absence here degrades
+      # silently to the compiled k8sVersion default rather than erroring.
+      E2E_LINODE_TOKEN: ${{ secrets.E2E_LINODE_TOKEN }}
+
+
+  # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
+  # ── 2. Provision against the WARM cluster — same dispatch as the cold gate ────
+  # Byte-identical to release-e2e.yml's `provision` (apply, module=all, region=e2e,
+  # assert_loki=true), minus the dry-run branch (the warm path always applies). On
+  # a warm cluster the apply refreshes instead of creating and apl-core is already
+  # up, so the chain collapses to bootstrap re-apply + nudge + `llz ci converge`.
+  provision:
+    name: Provision (warm apply + converge)
+    needs: instantiate
+    runs-on: ubuntu-latest
+    # Warm runs are ~8-12m, but a from-empty-state apply (unseeded/destroyed) still
+    # pays the full ~30m create — 120m keeps headroom for that fallback without the
+    # cold gate's 200m (there is no second cluster/teardown to wait on here).
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch terraform.yml (apply) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
+            --field action=apply --field module=all --field region="${E2E_ENV}" \
+            --field assert_loki=true
+
+  # ── 3. Gate — pass only if the warm provision converged ──────────────────────
+  # NO teardown: the cluster is deliberately LEFT RUNNING for the next iteration
+  # (and keeps billing). This is the whole point of the warm path, and the reason
+  # it is dispatch-only and can never gate a promotion.
+  gate:
+    name: Warm E2E gate
+    needs: [provision]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
+    timeout-minutes: 5
+    steps:
+      - name: Require the warm provision to have converged
+        env:
+          P: ${{ needs.provision.result }}
+        run: |
+          set -euo pipefail
+          echo "provision=$P"
+          [[ "$P" == "success" ]] || { echo "::error::warm provision $P — see the dispatched terraform.yml run in ${INSTANCE_REPO}"; exit 1; }
+          echo "::notice::Warm run converged. The E2E cluster is LEFT RUNNING (billing) — re-run this workflow to iterate, or destroy it when done (see the workflow header)."

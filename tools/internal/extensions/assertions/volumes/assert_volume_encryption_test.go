@@ -1,0 +1,311 @@
+package volumes
+
+import (
+	"strings"
+	"testing"
+)
+
+var wantTags = []string{"block-storage", "platform-support-services", "lke637888"}
+
+func encVol(encryption string, tags ...string) map[string]any {
+	t := make([]any, 0, len(tags))
+	for _, s := range tags {
+		t = append(t, s)
+	}
+	return map[string]any{"label": "e2e-harbor-data-harbor-redis-0", "encryption": encryption, "tags": t}
+}
+
+func encPV(ns, claim, id string) pvVolume { return pvVolume{VolumeID: id, Namespace: ns, PVC: claim} }
+
+// encPVHandle is encPV plus the label half of the CSI volumeHandle — the label the
+// Volume was CREATED with, and the only one the Linode CSI will ever look its
+// device up by. On LKE-E that is the CSI default `pvc-<uuid>`, because the managed
+// controller ships no --volume-label-prefix.
+func encPVHandle(ns, claim, id, handleLabel string) pvVolume {
+	v := encPV(ns, claim, id)
+	v.HandleLabel = handleLabel
+	return v
+}
+
+// TestJudgeVolume_Encryption covers the primary gate. `encryption` absent (a Volume
+// predating the feature) must read as NOT encrypted — the safe bias, and the shape
+// the Linode API actually returns for older volumes.
+func TestJudgeVolume_Encryption(t *testing.T) {
+	cases := []struct {
+		name       string
+		encryption string
+		wantOK     bool
+	}{
+		{"enabled passes", "enabled", true},
+		{"disabled fails", "disabled", false},
+		{"absent fails", "", false},
+		{"unknown value fails", "pending", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := judgeVolume(encPV("harbor", "data-harbor-redis-0", "17094415"), encVol(tc.encryption, wantTags...), wantTags, "")
+			if v.ok() != tc.wantOK {
+				t.Fatalf("encryption=%q → ok=%v, want %v (problem: %s)", tc.encryption, v.ok(), tc.wantOK, v.problem())
+			}
+			if !tc.wantOK && !strings.Contains(v.problem(), "NOT ENCRYPTED") {
+				t.Errorf("an unencrypted Volume must report NOT ENCRYPTED, got %q", v.problem())
+			}
+		})
+	}
+}
+
+// TestJudgeVolume_Tagging is the tagging half of the invariant, and it is a
+// SEPARATE failure from encryption on purpose: an encrypted-but-untagged Volume is
+// safe at rest yet un-attributable, so `llz reap`'s cluster-liveness gate cannot
+// sweep it and its fail-safe KEEPS it — an unbounded cost leak. The gate must catch
+// that even though nothing is wrong with the data.
+func TestJudgeVolume_Tagging(t *testing.T) {
+	// The ownership tag is the one reap keys on; losing it is the expensive case.
+	v := judgeVolume(encPV("harbor", "data-harbor-redis-0", "17094415"),
+		encVol("enabled", "block-storage", "platform-support-services"), wantTags, "")
+	if v.ok() {
+		t.Fatal("an encrypted Volume MISSING its lke<id> ownership tag must still fail — reap cannot attribute it")
+	}
+	if !strings.Contains(v.problem(), "lke637888") {
+		t.Errorf("the verdict must name the missing tag, got %q", v.problem())
+	}
+	if strings.Contains(v.problem(), "NOT ENCRYPTED") {
+		t.Errorf("a tagging failure must not be reported as an encryption failure: %q", v.problem())
+	}
+
+	// Every missing tag is named, not just the first.
+	v = judgeVolume(encPV("x", "y", "1"), encVol("enabled"), wantTags, "")
+	for _, want := range wantTags {
+		if !strings.Contains(v.problem(), want) {
+			t.Errorf("verdict should name every missing tag; %q omits %q", v.problem(), want)
+		}
+	}
+
+	// Extra tags an operator added by hand are fine — the invariant is "carries at
+	// least the required set", not "carries exactly it".
+	v = judgeVolume(encPV("x", "y", "1"), encVol("enabled", append(wantTags, "cluster-abcd-test")...), wantTags, "")
+	if !v.ok() {
+		t.Errorf("extra operator tags must not fail the gate: %s", v.problem())
+	}
+}
+
+// TestJudgeVolume_UnreadableFailsClosed: a Volume the API will not return is a
+// FAILURE. Treating it as a pass would let an API outage launder an unencrypted
+// fleet into a green check.
+func TestJudgeVolume_UnreadableFailsClosed(t *testing.T) {
+	v := judgeVolume(encPV("x", "y", "1"), nil, wantTags, "")
+	if v.ok() {
+		t.Fatal("a Volume that could not be read must fail, never pass")
+	}
+	if !strings.Contains(v.problem(), "UNREADABLE") {
+		t.Errorf("problem should say the volume was unreadable, got %q", v.problem())
+	}
+}
+
+func TestReportVolumeEncryption(t *testing.T) {
+	good := judgeVolume(encPV("llz-openbao", "data-platform-openbao-0", "1"), encVol("enabled", wantTags...), wantTags, "")
+
+	t.Run("all compliant passes and writes no summary", func(t *testing.T) {
+		d, sum := capturingDeps()
+		if err := reportVolumeEncryption(d, []volumeVerdict{good}, wantTags, "block-storage-retain"); err != nil {
+			t.Fatalf("a compliant fleet must pass: %v", err)
+		}
+		if len(*sum) != 0 {
+			t.Errorf("clean run must write no step summary, got %q", *sum)
+		}
+	})
+
+	t.Run("any violation fails and names the remedy", func(t *testing.T) {
+		bad := judgeVolume(encPV("harbor", "data-harbor-redis-0", "17094415"), encVol("disabled", wantTags...), wantTags, "")
+		d, sum := capturingDeps()
+		err := reportVolumeEncryption(d, []volumeVerdict{good, bad}, wantTags, "block-storage-retain")
+		if err == nil {
+			t.Fatal("an unencrypted Volume must fail the gate")
+		}
+		if !strings.Contains(err.Error(), "1 of 2") {
+			t.Errorf("error should count violations against the total, got %q", err)
+		}
+		body := strings.Join(*sum, "\n")
+		for _, want := range []string{
+			"data-harbor-redis-0",
+			"17094415",
+			// Re-running cannot fix this; the summary must not imply otherwise.
+			"is immutable once bound",
+			"destroys that volume's data",
+			// And it should point at the actual upstream cause on managed.
+			"cluster.defaultStorageClass",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("summary missing %q:\n%s", want, body)
+			}
+		}
+		if strings.Contains(body, "data-platform-openbao-0") {
+			t.Error("compliant Volumes must not be listed as violations")
+		}
+	})
+}
+
+// labelledVol is an otherwise-compliant Volume carrying a specific Linode label.
+func labelledVol(label string) map[string]any {
+	v := encVol("enabled", wantTags...)
+	v["label"] = label
+	return v
+}
+
+// TestJudgeVolume_Label is the third leg of the invariant, and it now asks the
+// OPPOSITE question it used to.
+//
+// It used to reject `pvc-<uuid>` — the CSI default on LKE-E, where the managed
+// controller ships no --volume-label-prefix — on the grounds that such a Volume is
+// anonymous in the Linode UI, the billing export and the quota census. That
+// attribution argument is real, but it was being bought with an unmountable
+// volume: the CSI resolves the device path from the label in the PV's IMMUTABLE
+// volumeHandle, so renaming a bound Volume guarantees its next attach fails. The
+// attribution is served instead by Volume TAGS (`lke<id>`, stamped by the
+// StorageClass at CreateVolume), which no device lookup depends on.
+//
+// So the CSI default is now the CORRECT state, and the violation is a live label
+// that has DRIFTED from the handle's — which is exactly the unmountable volume.
+func TestJudgeVolume_Label(t *testing.T) {
+	pvc := encPV("harbor", "data-harbor-redis-0", "17094415")
+
+	t.Run("CSI default is now the correct state", func(t *testing.T) {
+		// encPV's volumeHandle is `<id>-<label>`, so a volume still wearing the label
+		// the handle names is precisely the mountable one.
+		born := encPVHandle("harbor", "data-harbor-redis-0", "17094415", "pvc-e2e495ebe1504dff")
+		v := judgeVolume(born, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "")
+		if !v.ok() {
+			t.Fatalf("a Volume still wearing its handle's label is MOUNTABLE and must pass, got %q", v.problem())
+		}
+	})
+
+	t.Run("a label renamed away from the handle is rejected", func(t *testing.T) {
+		born := encPVHandle("harbor", "data-harbor-redis-0", "17094415", "pvc-e2e495ebe1504dff")
+		v := judgeVolume(born, labelledVol("pri-harbor-data-harbor-redis-0"), wantTags, "")
+		if v.ok() {
+			t.Fatal("a Volume renamed off its volumeHandle label cannot be mounted again and must fail")
+		}
+		if !strings.Contains(v.problem(), "RENAMED") {
+			t.Errorf("problem should name the rename, got %q", v.problem())
+		}
+		// FINAL, NOT HEALABLE — and this assertion used to say the opposite.
+		//
+		// It was right when a bad label meant "the volume-labels lane has not
+		// renamed it YET": waiting was the remedy, so the gate polled. Inverting the
+		// verdict above without inverting this left the gate burning its whole heal
+		// budget re-listing the Linode API for a condition nothing can heal, then
+		// warning that a lane which no longer exists "did not heal them in time".
+		// Drift from the volumeHandle is permanent: nothing renames Volumes now, and
+		// the handle cannot change.
+		if v.healable() {
+			t.Error("handle drift is final — polling cannot fix it, and waiting only delays the verdict")
+		}
+	})
+
+	t.Run("readable label passes", func(t *testing.T) {
+		if v := judgeVolume(pvc, labelledVol("e2e-harbor-data-harbor-redis-0"), wantTags, ""); !v.ok() {
+			t.Errorf("a relabelled Volume must pass: %s", v.problem())
+		}
+	})
+
+	t.Run("with REGION_SHORT the exact label is required", func(t *testing.T) {
+		want := desiredVolumeLabel("e2e", "harbor", "data-harbor-redis-0")
+		if v := judgeVolume(pvc, labelledVol(want), wantTags, "e2e"); !v.ok() {
+			t.Errorf("the relabeler's own output must satisfy the gate: %s", v.problem())
+		}
+		// A readable but WRONG label (e.g. left over from another cluster) is caught
+		// only when REGION_SHORT is known — that is the point of the stronger check.
+		v := judgeVolume(pvc, labelledVol("sta-harbor-data-harbor-redis-0"), wantTags, "e2e")
+		if v.ok() {
+			t.Fatal("a label from a different environment must fail when REGION_SHORT is known")
+		}
+	})
+
+	t.Run("released PV is exempt", func(t *testing.T) {
+		// The relabeler derives the label from namespace/pvc and skips PVs with no
+		// claimRef, so demanding one here would assert something nothing ever sets.
+		orphan := pvVolume{VolumeID: "1"}
+		if v := judgeVolume(orphan, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "e2e"); !v.ok() {
+			t.Errorf("a released PV must not be failed for its label: %s", v.problem())
+		}
+	})
+}
+
+// TestVolumeVerdict_HealableSplit pins WHICH violations the gate is allowed to wait
+// on. Waiting on encryption would be pure latency — it is decided inside
+// CreateVolume and storageClassName is immutable once bound, so it can never
+// improve. Tags and labels are applied by reconciler lanes after the fact.
+func TestVolumeVerdict_HealableSplit(t *testing.T) {
+	pvc := encPV("harbor", "data-harbor-redis-0", "1")
+
+	unencrypted := judgeVolume(pvc, encVol("disabled", wantTags...), wantTags, "")
+	if unencrypted.healable() {
+		t.Error("encryption must NOT be healable — waiting on it only wastes the budget")
+	}
+
+	untagged := judgeVolume(pvc, encVol("enabled", "block-storage"), wantTags, "")
+	if !untagged.healable() {
+		t.Error("a tag violation is healable by the volume-tags lane")
+	}
+
+	unreadable := judgeVolume(pvc, nil, wantTags, "")
+	if unreadable.healable() {
+		t.Error("an unreadable Volume is not healable — it is a hard failure")
+	}
+}
+
+// TestJudgeVolume_DryRunReap is the coupling test between naming and reaping —
+// the interaction that broke in production while both subsystems looked healthy
+// in isolation.
+//
+// reap selects Volumes by label prefix. The volume-labels reconciler renames
+// Volumes. When the rename produces a shape reap's prefix list does not accept,
+// destroying a cluster leaks all its renamed Volumes, which then squat their
+// account-unique labels and make relabeling impossible on the next cluster.
+func TestJudgeVolume_DryRunReap(t *testing.T) {
+	pvc := encPV("harbor", "data-harbor-redis-0", "17094415")
+
+	t.Run("relabeled volume stays visible to reap", func(t *testing.T) {
+		v := judgeVolume(pvc, labelledVol(desiredVolumeLabel("e2e", "harbor", "data-harbor-redis-0")), wantTags, "e2e")
+		if v.NotReapable != "" {
+			t.Fatalf("the relabeler's own output must remain reapable, got: %s", v.NotReapable)
+		}
+	})
+
+	t.Run("CSI default stays visible to reap", func(t *testing.T) {
+		// Before the reconciler renames it, reap must still be able to sweep it.
+		v := judgeVolume(pvc, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "e2e")
+		if v.NotReapable != "" {
+			t.Fatalf("an un-renamed Volume must be reapable, got: %s", v.NotReapable)
+		}
+	})
+
+	t.Run("a label reap cannot see is a FINAL failure", func(t *testing.T) {
+		// Simulates someone changing the naming scheme without teaching reap about
+		// it — the exact shape of the production bug.
+		v := judgeVolume(pvc, labelledVol("newscheme-harbor-redis-0"), wantTags, "e2e")
+		if v.ok() {
+			t.Fatal("a Volume invisible to reap must fail — it would survive its own cluster's destroy")
+		}
+		if !strings.Contains(v.problem(), "INVISIBLE to reap") {
+			t.Errorf("verdict should name the reap blind spot, got %q", v.problem())
+		}
+		// Not healable: no reconciler fixes a naming/predicate mismatch, so waiting
+		// on it would only burn the budget.
+		if v.healable() {
+			t.Error("a reap blind spot is a code bug, not a pending reconcile — it must not be waited on")
+		}
+	})
+}
+
+// capturingDeps hands the code under test a Summary sink it can read back.
+//
+// It replaces a helper that set GITHUB_STEP_SUMMARY to a temp file and read the
+// file afterwards. Injecting the sink is both simpler and stricter: the old shape
+// could not distinguish "wrote nothing" from "wrote to a path the test never
+// looked at", which is the failure mode a step-summary assertion is most likely to
+// have.
+func capturingDeps() (Deps, *[]string) {
+	var got []string
+	return Deps{Summary: func(lines ...string) error { got = append(got, lines...); return nil }}, &got
+}

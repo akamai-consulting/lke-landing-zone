@@ -27,5 +27,26 @@
   },
   // Avoids git's "dubious ownership" warning on the bind-mounted workspace, and
   // forwards the host SSH agent / gh login if you've set them up (see the doc).
-  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}"
+  //
+  // The second half makes a BARE `tofu` work in this container. Every Terraform
+  // root carries encryption.tf, which holds only the enforcement posture — the key
+  // material arrives from $TF_ENCRYPTION — so a hand-run `tofu` without it fails on
+  // OpenTofu's own "Invalid expression … A single static variable reference is
+  // required", which names neither the passphrase nor the variable. `llz tofu
+  // --shell-init` defines a `tofu` shell function that routes through `llz tofu`,
+  // which resolves the passphrase and the object-storage credentials from
+  // .llz/secrets.env. Outside an instance checkout it changes nothing, and it falls
+  // through to the real binary when llz is absent, so it is safe to leave in place.
+  //
+  // Evaluated at shell start rather than written out, so it tracks the llz in the
+  // image instead of freezing a copy. The `command -v` guard keeps a container
+  // without llz from printing an error on every prompt.
+  // CREATES the rc file rather than skipping when it is absent. The first cut
+  // guarded with `[ -e "$rc" ] || continue`, which meant an image shipping no
+  // ~/.bashrc got nothing AND SAID NOTHING — the feature this comment advertises
+  // as automatic would simply not exist, discoverable only by noticing that a
+  // bare `tofu` still fails. The zsh arm keeps its guard for a different reason:
+  // it is conditional on zsh being installed, not on the file existing, so an
+  // image without zsh does not acquire a stray ~/.zshrc.
+  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && for rc in ~/.bashrc ~/.zshrc; do case \"$rc\" in *zshrc) command -v zsh >/dev/null 2>&1 || continue;; esac; grep -q 'llz tofu --shell-init' \"$rc\" 2>/dev/null || echo 'command -v llz >/dev/null 2>&1 && eval \"$(llz tofu --shell-init)\"' >> \"$rc\"; done"
 }

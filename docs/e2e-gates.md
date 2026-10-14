@@ -1,0 +1,427 @@
+# E2E gates — proving behavior still works
+
+This is the testing convention for behavior that only exists on a live cluster.
+It is written for AI agents and contributors adding features here, and its rule
+is short:
+
+> **A new behavior ships with a gate that fails when the behavior stops
+> working.** Not a test that the code parses, renders, or is present — a test
+> that the thing it does still happens.
+
+The rest of this file is why that phrasing is so specific, and how to satisfy it
+without writing a gate that passes for the wrong reason.
+
+## The two regressions this convention comes from
+
+Both shipped green. Both had unit tests. Both passed `make lint`, `helm lint
+--strict`, `helm template`, and the whole `assert-*` battery. Neither was found
+by CI — one was found by reading an ADR, the other by noticing an account full of
+leaked volumes.
+
+### 1. The OpenBao audit pipeline shipped nowhere
+
+The promtail sidecar pushed audit records to `loki-gateway.llz-observability`.
+apl-core runs Loki in `monitoring`, and nothing ever creates a Service by that
+name — so every audit record, every request path, operation and
+`auth.display_name`, went to a name that does not resolve.
+
+What made it survive review is the part worth internalizing: the config was
+**internally consistent**. `platform.networkPolicy.observabilityNamespace` was
+`llz-observability` too, so the egress allow matched the push URL exactly. A rule
+granting nothing, pointed at an empty namespace, looking complete from every
+angle. Both sides agreed with each other and neither agreed with the cluster.
+
+Nothing in the gate set could see it. `converge` and `health` saw a Running pod —
+promtail retries a dead DNS name forever and stays up. `assert-loki` proved Loki
+was bootstrapped and S3-backed, which is a fact about Loki, not about anything
+reaching it. And no static guard could have closed it, because *any* URL is
+consistent with a NetworkPolicy naming the same namespace. The only check with
+the power to catch it is the round trip: write from OpenBao, read from Loki.
+
+### 2. Volume relabeling blinded the reaper
+
+`llz reap` selected orphaned Volumes by the `pvc-` label prefix — the Linode CSI
+default. Then the volume-labels reconciler took over relabeling and started
+renaming bound Volumes to `<region>-<namespace>-<pvc>`. One component renamed
+volumes away from `pvc-*`; another still only matched `pvc-*`.
+
+The reaper reported "orphan Volumes: none matched the filter" against an account
+holding ~17 leaked volumes, and had been blind for weeks. The commit that
+introduced the rename **edited the reaper's own file**, adding the call that
+performs it about 19 lines from the prefix check it invalidated. One commit, both
+sides of a contract, one side updated.
+
+Neither subsystem was individually wrong. Their **coupling** was, and no test
+covered the coupling, because each side's tests exercised its own copy of the
+rule.
+
+## The three archetypes
+
+Everything above reduces to three shapes. When you add a behavior, ask which one
+it is — most behaviors worth gating are one of them. The third arrived later than
+the other two and from a different direction: not a delivery that never happened,
+but one the cluster **refused**, in a way that made every status field say it had
+succeeded.
+
+```mermaid
+flowchart TB
+    subgraph UD["① Unverified delivery — A is configured to send to B"]
+        direction LR
+        A1["<b>A</b> producer"] -->|"config names a target"| B1["<b>B</b> consumer"]
+        A1 -.->|"❌ what the naive gate checks:<br/>“is the config well-formed?”"| CFG1["config looks right<br/><i>and always did</i>"]
+        B1 -.->|"❌ “is B healthy?”<br/>assert-loki was green throughout"| H1["B is up"]
+        B1 ==>|"✅ <b>GATE HERE</b><br/>read the data back OUT of B,<br/>bounded to a recent window"| G1["did it ARRIVE,<br/>and is it FRESH?"]
+    end
+
+    subgraph SC["② Split contract — A and B share a rule, each holding its own copy"]
+        direction LR
+        A2["<b>A</b> producer<br/>desiredVolumeLabel()"] --> R1["rule, copy 1"]
+        B2["<b>B</b> consumer<br/>VolumeIsCandidate()"] --> R2["rule, copy 2"]
+        R1 -.->|"both correct on day 1,<br/>drift silently after"| R2
+        A2 ==>|"✅ <b>GATE HERE</b><br/>feed A's REAL output into<br/>B's REAL predicate"| B2
+    end
+
+    subgraph UA["③ Unappliable change — B already exists, and cannot become what A declares"]
+        direction LR
+        A3["<b>A</b> overlay declares<br/>a create-time field"] -->|"rendered, compared"| B3["<b>B</b> live object<br/>that predates it"]
+        B3 -.->|"❌ the API REFUSES the apply;<br/>Argo's diff is that apply,<br/>so no diff is produced"| S3["sync.status: Synced<br/><i>the previous verdict</i>"]
+        B3 ==>|"✅ <b>GATE HERE</b><br/>read the field back off B, and<br/>dry-run the change to learn WHY"| G3["is it there —<br/>and CAN it be?"]
+    end
+
+    classDef good fill:#e6f4ea,stroke:#34a853,stroke-width:2px,color:#111;
+    classDef bad fill:#fce8e6,stroke:#ea4335,color:#111;
+    class G1,G3 good;
+    class CFG1,H1,S3 bad;
+```
+
+The green edges are the gates. Both naive alternatives in ① stay green while the
+behaviour is broken — which is exactly how each of the two regressions above
+shipped.
+
+### Unverified delivery — A is configured to send to B
+
+A push URL, a scrape target, a webhook, a log/metric/event sink, a secret written
+to a store another component reads. The configuration can be perfectly
+well-formed and name something that does not exist.
+
+**Gate at the consumer, on data the producer actually emitted.** Not "is the
+config right" (it looked right) and not "is B healthy" (`assert-loki` was green
+throughout) — *did the thing arrive*. `assert-openbao-audit` reads OpenBao's
+audit records back out of Loki; `assert-scrape-targets` asks Prometheus whether
+each ServiceMonitor yielded a live `up` target.
+
+**Assert freshness, not existence.** Loki retains history. "Some audit line
+exists" stays green for the whole retention period *after* the pipeline breaks —
+the gate would keep passing on the corpse of a working pipeline. Bound the query
+to a recent window and require the newest entry to fall inside it.
+
+### Split contract — A and B share a rule, each holding its own copy
+
+A naming scheme, a label format, a path layout, a serialization, a truncation
+limit. Both copies are correct on the day they are written and drift silently
+after.
+
+**Feed the producer's real output into the consumer's real predicate**, across
+the boundary that let them drift. `TestReaperRecognisesRelabelerOutput` calls the
+relabeler's actual `desiredVolumeLabel()` and hands each result to the reaper's
+actual `linode.VolumeIsCandidate()`. It never restates either rule.
+
+That distinction is the whole value. A test that re-implements the predicate
+passes happily while the real consumer goes blind — it is a test of the test. Use
+the shipped functions, and if that means exporting one across a package boundary,
+export it.
+
+Pin the **exclusions** too. A destructive selector must keep saying no: the
+reaper test asserts that an unrelated volume never matches and that relabeled
+volumes stay out of scope without `--env`. A gate that only proves "matches more"
+is one bad edit away from matching everything.
+
+### Unappliable change — B already exists, and cannot become what A declares
+
+A field the API server fixes at CREATE time: a StatefulSet's
+`volumeClaimTemplates`, `serviceName` or selector; a Service's `clusterIP`; a Job
+spec; a PVC shrink; StorageClass `parameters`. The declaration is correct and the
+apply is impossible.
+
+**What makes it its own archetype is that the impossibility produces the green.**
+Argo CD computes its diff by dry-run-applying the desired state
+(`ServerSideDiff=true` — see `clusterspec.CompareOptions` for why that is on).
+When the apply is refused, no diff is produced; with no diff the Application
+reads `Synced`; with nothing out of sync `selfHeal` never fires. Three checks
+stayed green through a 16-day Loki outage on exactly this: the overlay file held
+the right value, the rendered Helm values held the right value, and Argo said
+Synced.
+
+**And the refusal is per OBJECT, so it is contagious.** One unappliable field
+discards the whole diff for that object, including perfectly mutable fields
+sharing it. Loki's 3Gi memory limit — `spec.template`, applied happily on its own
+— went undelivered for weeks because it shared a StatefulSet with a WAL claim
+template that could not be added in place.
+
+**Gate by reading the field back off the object, then dry-running the change.**
+`llz ci assert-overlay-applied` does both: the read-back says whether the value
+landed, and the server dry run separates *the cluster would take this, nothing
+delivered it* from *the cluster will never take this*. A dry run is a read
+(`capability.Permits` lets `patch --dry-run=server` through a cluster-read
+handle), so the gate is safe to point at production — which matters, because
+production is the only place this archetype exists.
+
+**Greenfield cannot see it, by construction.** A fresh cluster creates each
+object in its final shape, so there is no transition to reject, and every e2e
+lane here force-pushes a fresh instantiation (see "The configuration no lane
+runs", below — this is that blind spot's Kubernetes twin, and it bit first). That
+is why the durable answer is a REPORTING lane on real clusters: the reconciler's
+`overlay-delivery` gauges publish per-field delivery from inside every adopter's
+cluster, which is the older state CI cannot manufacture.
+
+**Declaring the remedy is part of declaring the field.** A mapped field that is
+create-time-only names the brownfield migration that lands it, and a migration is
+pending exactly while the field is undelivered — there is no ledger to disagree
+with the object. A gate that can only say "this will never apply" has kept the
+actionable half to itself.
+
+**And the remedy runs itself.** `llz ci converge` applies pending migrations on
+the platform scope, once per run, beside its two existing self-heals: this is a
+fault no amount of polling clears, because the desired state is correct and the
+cluster is correct to refuse it. Only migrations declared safe to automate run
+unattended — the recreate is `--cascade=orphan`, so the pods keep running — and
+the disruptive half (rolling those pods onto the new spec) is never automated.
+
+## Doctrine every gate follows
+
+These are not new rules; they are what the existing gates already do, collected
+so a new gate can be held to them.
+
+- **Fail closed on vacuity.** A gate that reports success having examined nothing
+  is worse than no gate, because it launders an absence of evidence into a green
+  check — and "examined nothing" is exactly what a broken pipeline looks like.
+  Zero streams, zero targets, zero PVs, an unreachable API: all failures. The
+  storage gate fails deliberately on a cluster with no Linode-CSI PVs at all for
+  this reason.
+- **Separate "could not tell" from "nothing there."** A parse failure or an
+  unreachable endpoint is an error, not an empty result. Collapsing them into
+  `nil` is how a gate passes on a response it never understood.
+- **Never derive the expected set from the thing under test.**
+  `assert-scrape-targets` hardcodes the landing-zone ServiceMonitors rather than
+  listing by the `prometheus: system` label — if that label regresses at the
+  source, a label-filtered query returns an empty expected set and the gate
+  passes green on the very bug it exists to catch.
+- **Prefer ground truth to a proxy.** "Is every PVC on `block-storage-retain`?"
+  infers encryption from a StorageClass *name*. That proxy was in place while 13
+  of 16 PVCs provisioned unencrypted. `encryption: "enabled"` on the Volume object
+  is what survives someone renaming or re-parameterising the class.
+- **Bound the settle budget.** A freshly converged cluster races first scrapes,
+  promtail batching, and reconciler sweeps. Poll for a stated budget, then fail —
+  don't retry forever, and don't assert on the instant converge returns.
+- **Say what to check when it fails.** The gate proves a negative; the operator
+  still has to find out why. `assert-openbao-audit` prints the ordered list —
+  target, egress, shipper, source, tenant — because "no records" alone sends you
+  nowhere.
+- **Classify healable vs final.** A pending reconcile is worth waiting on. A
+  naming/predicate mismatch is a code bug, and waiting on it only burns the heal
+  budget that exists for the former.
+
+## Which layer
+
+| The behavior… | Gate it with |
+|---|---|
+| is decidable from repo contents alone (a chart value, a manifest shape, a mesh policy) | a static guard in `make lint` — fails at PR time |
+| is a contract between two components in this repo | a coupling test calling **both sides' real functions** (`tools/`, `go test`) |
+| only exists once something is running — delivery, admission, discovery, rotation, sweep | an `llz ci assert-*` verb wired into the e2e lane battery |
+
+Prefer the cheapest layer that can actually see the failure — but be honest about
+what each layer *cannot* see. Regression 1 was invisible to layers 1 and 2 by
+construction: two consistent-with-each-other values cannot be told apart from two
+correct values without asking the cluster.
+
+Most gates end up with both a static and a live half. Keep the static half beside
+the gate: `assert-openbao-audit`'s unit test asserts its default target matches
+what the chart actually ships to, so a future divergence fails at PR time instead
+of at e2e time.
+
+## Adding an e2e gate
+
+1. **Write the verb** in the extension that owns the thing being asserted —
+   `tools/internal/extensions/assertions/<ext>/` — and wire its constructor into
+   `tools/internal/cli/ci.go` and into `registry.Commands()`. Keep the judgement
+   in a pure function over parsed input so it is testable without a cluster; keep
+   the transport (kubectl, port-forward, API) in a seam a test can replace.
+   `assertobs/scrape.go` and `assertsecrets/cobra_openbaoaudit.go` are the models.
+
+   It does **not** go in `tools/cmd/llz` — that package is a six-line entry point
+   pinned by an exact budget, and `entrypoint_boundary_test.go` refuses any import
+   there but `internal/cli`.
+2. **Unit-test it** — the pure evaluator, the fail-closed arms (empty, malformed,
+   unreachable), and the static half of the contract.
+3. **Add the lane** to `assertSuiteLanes` in `tools/internal/extensions/assertions/assertsuite/suite.go`.
+   It is ONE list — a lane there is both run and collected — and every field is
+   load-bearing:
+   - `Steps` run in order and short-circuit at the first failure. Order them only
+     when a later step depends on a fact an earlier one just made true
+     (`scrape-reconciler` is the model); otherwise give them their own lane so
+     they run in parallel.
+   - `Gating: true` unless the lane is a diagnostic whose *output* is the
+     deliverable. `Gating: false` discards the exit status.
+   - `Why` — what the lane proves **and what stays green without it**. It prints
+     with the lane's `::group::`, so a failure carries its own rationale.
+
+   Check the table with `llz ci assert-suite --list`; no cluster needed. The
+   battery ships in the binary, not in each instance's vendored YAML, so a new
+   gate reaches every instance on the next release rather than when someone
+   remembers to edit their workflow.
+4. **Document the lane** in `docs/workflows/llz-bootstrap-openbao.md` — one
+   bullet saying what it proves and what stays green without it.
+5. Check lane safety: mutating lanes must touch disjoint namespaces, and anything
+   port-forwarding must bind local port `:0`.
+
+**A gate that isn't in the lane table does not exist.** It is the same vacuous
+pass the doctrine above refuses, one level up — a check nothing runs reports
+nothing wrong.
+
+> This step used to describe a `lane` line plus a separate result-collection loop
+> in the bootstrap workflow, and warned that a lane missing from that loop would
+> run without ever being able to fail the step. That hazard is why the battery
+> moved into tested Go: the list is written once now, so the two halves cannot
+> disagree.
+
+## Honesty about cost
+
+Not every change needs an e2e gate, and pretending otherwise gets the convention
+ignored. A refactor with no behavior change doesn't. A doc change doesn't. A
+statically decidable invariant belongs in `make lint`, where it costs seconds
+rather than a cluster.
+
+What does need one: anything where a component starts depending on another
+component's live output, anything that renames or reformats something a second
+component parses, and anything whose failure mode is *silence*. Those are the
+ones that stay green while broken, and they are the only reason this file exists.
+
+## What release-e2e actually gates
+
+A gating lane's failure reaches an adopter only if someone acts on it, and the
+mechanism here is weaker than it looks. `release-e2e` fires on `release:
+[prereleased]`; `llz-release.yml`, which attaches the binaries, fires on
+`released` — after a **human** promotes. There is no `needs:` between them and the
+e2e is not a required check, so nothing mechanically blocks a promotion over a red
+run. What stands between a wrong assumption in a lane and every adopter's pipeline
+is a person choosing not to promote.
+
+Two consequences worth holding onto:
+
+* A lane that is `Gating: true` gates the *run*, not the *release*. Writing
+  "release-e2e stands between this and the fleet" in a comment overstates it.
+* The GHES leg reports FAILURE on every release independently of any lane (it is
+  unconfigured), so "the e2e is red" is not by itself evidence about the change
+  under test — read the github.com lane's jobs.
+
+## When a lane goes red
+
+A gate's job is not finished when it fails — it is finished when its failure says
+what to do next. Nine of the fourteen gating lanes went red the first time this
+suite met a real cluster, and the ones that were cheap to fix were the ones whose
+output named the specific thing that was missing. The expensive ones said
+something true and unhelpful ("Secret X is absent", "no log lines in the window")
+and sent the reader to a live cluster to find out what *was* there.
+
+So when you write the failure message, answer the reader's next question in it:
+
+- **Name what IS present**, not only what is missing. `assert-obj-roundtrip` lists
+  the Secrets that do exist in the namespace, because the ref it was looking for
+  had been renamed and no amount of staring at the absent name reveals the new one.
+- **Print the parameter you queried with.** `assert-log-ingestion` reports the Loki
+  tenant and whether that tenant holds any labels at all — the difference between
+  "collection stopped" and "we asked the wrong tenant", which are indistinguishable
+  from the bare symptom and have nothing in common as remedies.
+- **Keep the distinction your probe already made.** `llz ci net-probe` classifies
+  every dial as refused / timeout / dns precisely because they point at different
+  subsystems; the gate above it once collapsed all three to "blocked" and then
+  printed a list of things to go check.
+
+And distinguish **absent** from **not applicable**. Several lanes failed on
+clusters that were behaving correctly: a component this deployment shape does not
+install, an opt-in credential nobody seeded, a rollout step deliberately not taken
+yet. A gate that cannot tell those from a regression will be turned off, which
+costs more than the coverage it was protecting. Read the live state and skip on
+it — `assert-network-enforcement` reads the namespace's PeerAuthentication mode
+rather than assuming STRICT, so it starts enforcing by itself the day someone
+flips it.
+
+If every check in a lane skipped, **fail**. "All checks passed" having observed
+nothing is the vacuous pass in its purest form.
+
+For getting kubectl at a cluster a lane failed on, see
+[docs/runbooks/e2e-lane-diagnostics.md](runbooks/e2e-lane-diagnostics.md).
+
+## The configuration no lane runs: an upgrade over existing state
+
+Every lane force-pushes a **fresh instantiation at the commit under test** and
+tears it down afterwards (`e2e-instantiate.yml`). So the only configuration the
+release gate has ever exercised is greenfield — a cluster created by the code
+being tested. Nothing plans or applies a new template against state an **older**
+release created, which is where every adopter lives from their second day on.
+
+The Kubernetes layer has already been bitten by this, which is archetype ③
+above: an overlay field that a live object refuses, reported as Synced, on the
+one configuration no lane runs. The answer there was a gate that dry-runs against
+real clusters plus a reconciler lane that samples them continuously — worth
+knowing before building the Terraform half, because the shape of the fix
+transfers even though the tooling does not.
+
+That is the same blind spot `llz ci assert-adopter-pin` was written for, one
+layer down. That one closed the *pin* half: e2e pins the instance, `TF_IMAGE` and
+the binary all to one commit by construction, so the image-pin chain could not be
+wrong in the only shape ever tested — and it broke in the field. The **state**
+half is still open.
+
+What hides there is not a broken apply. It is an apply that **succeeds and
+recycles infrastructure**: a field added to a module, a resource renamed, an
+attribute Terraform treats as ForceNew. Each reads as a small correct diff and
+each proposes destroying a live cluster. Nothing in the upgrade pull request
+shows it either — the roots are gitignored and generated from the pin, and no
+pull request runs a plan.
+
+`linode_lke_cluster`'s `vpc_id`/`subnet_id` are the worked example, and they are
+worse than the general case: both are create-time only, but the provider schema
+marks them as ordinary optional attributes, so the plan reads as a calm
+`update in-place`. Any instance predating the module's `vpc_id` argument meets it
+on its first plan after upgrading, on a cluster healthy for months. It was caught
+by a hand-written coupling test in `tfroots` — not by any lane, because no lane
+could see it.
+
+### The verb exists; the lane does not
+
+`llz ci assert-upgrade-plan` reads `tofu show -json` and fails on any resource
+whose planned actions include a delete — a bare destroy and both spellings of a
+replace. It is usable by hand today against any plan:
+
+```
+tofu show -json tfplan.bin | llz ci assert-upgrade-plan
+```
+
+What is missing is something that **produces** such a plan against
+older-release state. The shape:
+
+1. stand an instance up at the **previous release tag** and apply it;
+2. `llz upgrade` it to the commit under test;
+3. dispatch `terraform.yml` with `action=plan`;
+4. run the assertion over the resulting plan;
+5. tear down.
+
+**Why it is not in this repo yet, stated rather than left as a gap.** Step 1
+needs `e2e-instantiate.yml` to render `llz_version` to a tag rather than to
+`${GITHUB_SHA}`, which it does not support. Step 3 needs the delivered pipeline
+to emit `tofu show -json` somewhere the lane can read — a change to
+`llz-terraform.yml`, and therefore to every instance. And the lane costs a full
+extra cluster lifecycle.
+
+None of that is hard; all of it is **unproven until someone with e2e credentials
+runs it once**. Shipping an e2e workflow that has never executed would be the
+exact failure this document opens with — a delivered surface nothing exercises,
+indistinguishable from one that works — with a teardown path that leaks billable
+clusters if it is wrong.
+
+The cheaper variant worth considering first: have `llz-terraform.yml`'s existing
+plan step pipe its own plan through `assert-upgrade-plan` as a **reporting**
+step. That gives every adopter a destroy-warning on their own plans, needs no new
+cluster, and would surface the class on real upgrades rather than on a synthetic
+one — at the cost of being advisory rather than gating.

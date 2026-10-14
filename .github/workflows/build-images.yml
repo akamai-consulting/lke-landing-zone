@@ -6,7 +6,7 @@ on:
     # `llz` binary stamped with `dev-<github.sha>` (--build-arg LLZ_VERSION), and
     # `llz ci assert-image-fresh` (run by release-e2e.yml + the instance dispatch
     # preflight) hard-fails when the `:latest` image's baked sha doesn't match the
-    # checked-out template-ref. A path filter on dockerfiles/tools meant any main
+    # checked-out template ref. A path filter on dockerfiles/ and tools/ meant any main
     # merge that DIDN'T touch those paths (a chart-only or docs-only change) left
     # `:latest` stamped at an older sha, so the next e2e tripped the freshness
     # guard ("image/template skew"). Building on every main push keeps `:latest`'s
@@ -24,58 +24,150 @@ on:
         default: all
         type: choice
         options: [terraform, kubernetes, devcontainer, llz, all]
+      sha:
+        description: 'Full commit SHA to build (default: the dispatched ref HEAD). release-e2e passes the exact commit under test so the sha-<> tag it waits on matches even if the branch HEAD has since moved — `gh workflow run --ref` can only name a branch, so without this a build races HEAD.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
+# Serialize builds per ref. Because this runs on EVERY main push (see above), two
+# merges in quick succession otherwise race the same mutable `:latest` tag and the
+# same `--cache-to type=gha,scope=<image>` entry — and the later-FINISHING run wins
+# `:latest`, which may be the OLDER commit. That reintroduces exactly the
+# `:latest`-vs-HEAD skew the no-path-filter design above exists to prevent, just
+# through a different door.
+#
+# cancel-in-progress MUST stay false: cancelling a mid-flight build would leave
+# that commit's `sha-<>` tag unpublished, which `llz ci pin-instance-images
+# --build-if-missing` then has to re-trigger from scratch (and may be actively
+# waiting on). Serialize; never cancel.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
+  # The commit to build: a caller-supplied sha (release-e2e) pins the exact commit
+  # so its sha-<> tag matches even when the branch HEAD moved after dispatch; else
+  # the dispatched ref HEAD / pushed commit. (For a push event `inputs` is empty →
+  # falls back to github.sha.)
+  SHA: ${{ inputs.sha || github.sha }}
+  # Whether this run may publish MUTABLE tags (`:latest`, `:<version>`) — see the
+  # tag-assembly step for what that costs when it is wrong (#451). Two conditions,
+  # and both are load-bearing:
+  #
+  #   the ref is the default branch — `workflow_dispatch` is deliberately NOT
+  #     gated on the ref (release-e2e and e2e-instantiate drive this workflow on
+  #     feature branches and release tags, and must keep being able to), so the
+  #     gate lives on the PUBLISH rather than on the trigger. main/master mirrors
+  #     the `push:` filter above rather than reading
+  #     github.event.repository.default_branch, so the two cannot disagree — and
+  #     an expression that resolves empty here would silently stop republishing
+  #     `:latest` on main, which is failure-open.
+  #   the build is that branch's HEAD — an explicit `sha` input names some other
+  #     commit, and stamping `:latest` with it breaks `:latest` == HEAD just as a
+  #     branch build does. For a push or the schedule `inputs` is empty, so this
+  #     half is vacuously true and only a dispatch can trip it.
+  #
+  # `schedule` runs on the default branch, so the weekly rebuild still refreshes
+  # every mutable tag.
+  PUBLISH_MUTABLE: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (inputs.sha == '' || inputs.sha == github.sha) }}
 
 jobs:
-  build-terraform:
-    name: Build ci-terraform
-    # The Dockerfile builds `llz` from the Go tools module, supplied via
-    # `--build-context tools-src=tools`, so there is no separate builder image to
-    # depend on.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'terraform' ||
-      inputs.image == 'all'
+  # ── Which images to build ────────────────────────────────────────────────────
+  # The four images are built by ONE matrix job below; this computes which rows it
+  # runs. It exists because `matrix` is NOT an available context in a job-level
+  # `if:` (actionlint: "available contexts are github, inputs, needs, vars"), so
+  # the per-image dispatch filter cannot live on the build job itself.
+  plan:
+    name: Plan image matrix
     runs-on: ubuntu-latest
-    # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
+    # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick the images to build
+        id: pick
+        env:
+          # Non-dispatch triggers (push, schedule) always build everything.
+          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.image || 'all' }}
+        run: |
+          set -euo pipefail
+          ALL='[
+            {"key":"terraform","image":"ci-tofu","target":"ci-tofu","version":"1.12.5","alias":"ci-terraform"},
+            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.34.10","alias":""},
+            {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":"","alias":""},
+            {"key":"llz","image":"llz","target":"llz","version":"","alias":""}
+          ]'
+          if [ "${WANT}" = "all" ]; then
+            SEL="${ALL}"
+          else
+            SEL="$(printf '%s' "${ALL}" | jq -c --arg k "${WANT}" '[.[] | select(.key == $k)]')"
+          fi
+          if [ "$(printf '%s' "${SEL}" | jq 'length')" -eq 0 ]; then
+            echo "::error::no image matches '${WANT}' — expected one of terraform|kubernetes|devcontainer|llz|all"
+            exit 1
+          fi
+          printf 'matrix=%s\n' "$(printf '%s' "${SEL}" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
+
+  # ── Build + sign, one row per image ──────────────────────────────────────────
+  # Was four jobs (build-terraform/-kubernetes/-devcontainer/-llz) that a
+  # normalized diff showed to be identical except for THREE things: the dispatch
+  # key, the image name, and an optional version tag. Everything else — platforms,
+  # --provenance/--sbom, the tools-src build context, the gha cache scopes, and the
+  # keyless cosign signature — was duplicated four times, so every change to the
+  # build or signing recipe was four edits with three chances to miss one.
+  build:
+    name: Build ${{ matrix.image }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # Bounded from measured history (max 7.5 (devcontainer, multi-arch+QEMU)); GitHub's default is 6h.
+    # 45, RECOMPUTED FOR THE RETRY. The push step now makes up to three attempts
+    # with 90s + 180s of backoff between them, so a cold-cache multi-arch row that
+    # needs its retries can spend ~4.5 minutes waiting on top of the build. At 30
+    # it would be killed by the runner MID-RETRY — emitting neither the retry
+    # warnings nor the "this is GHCR's secondary rate limit, not a permissions
+    # problem" error — and the image would stay unpublished, which is exactly the
+    # state pin-instance-images' requiredShaImages wait then blocks an e2e on. A
+    # retry budget is only real if the job can outlive it.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
       id-token: write
+    strategy:
+      # One image failing must not cancel the others — they are independent
+      # publishes, and a partial set is more useful than none.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
 
       - name: Resolve GHCR namespace
         id: ns
-        # GHCR paths must be lowercase; derive the namespace from the repo owner so
-        # images always land in this repo's org (akamai-consulting), and in an
-        # adopter's own org after they fork — never a hardcoded personal account.
         run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
-          # All three build jobs run in parallel and each pull the same binfmt
-          # image, which setup-qemu-action otherwise caches under one fixed GHA
-          # key — so the jobs race to reserve it and log a "another job may be
-          # creating this cache" warning. The image is tiny; skip caching it.
+          # All rows run in parallel and each pull the same binfmt image, which
+          # setup-qemu-action otherwise caches under one fixed GHA key — so they
+          # race to reserve it and log "another job may be creating this cache".
+          # The image is tiny; skip caching it.
           cache-image: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -84,263 +176,127 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Build and push ci-terraform
+      # --provenance/--sbom attach SLSA provenance + an SBOM as OCI attestations in
+      # the pushed index; --metadata-file captures the digest so the signature below
+      # binds to the exact manifest that was pushed, not to a tag that could move.
+      # The tools module is supplied via --build-context tools-src=tools so the
+      # Dockerfile's llz stage can build without broadening the primary context.
+      - name: Build and push ${{ matrix.image }}
         id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's `llz` build stage without broadening the primary
-        # build context. The gha cache is wired up by setup-buildx-action above.
-        # --provenance/--sbom attach SLSA provenance + an SBOM as OCI
-        # attestations in the pushed image index; --metadata-file captures the
-        # pushed manifest-list digest so the next step signs by digest (immune to
-        # tag re-pointing).
+        env:
+          REPO:    ${{ steps.ns.outputs.repo }}
+          IMAGE:   ${{ matrix.image }}
+          TARGET:  ${{ matrix.target }}
+          VERSION: ${{ matrix.version }}
+          ALIAS:   ${{ matrix.alias }}
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:1.9.8 \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ github.sha }} \
-            --cache-from type=gha,scope=ci-terraform \
-            --cache-to   type=gha,scope=ci-terraform,mode=max \
-            dockerfiles/terraform
+          set -euo pipefail
+          # DEPRECATION WINDOW: ci-tofu is also published as ci-terraform. The
+          # image was renamed when it stopped containing HashiCorp Terraform, but
+          # instances pin it through vars.TF_IMAGE — an explicit pin nobody's
+          # migration is obliged to update on our schedule. Publishing both names
+          # from one build means an un-updated pin keeps resolving to the CURRENT
+          # image rather than silently rotting on the last ci-terraform push.
+          # Remove the alias (and NAMES) once no instance pins the old name.
+          #
+          # EVERY BUILD PUBLISHES `sha-<commit>`, WHATEVER REF IT RAN ON. That tag
+          # is the one release-e2e and `llz ci pin-instance-images` wait on and pin,
+          # so a branch build still gives an e2e an image whose baked llz matches
+          # the workflow under test. It names one commit and can never be repointed.
+          NAMES=("${IMAGE}"); [ -z "${ALIAS}" ] || NAMES+=("${ALIAS}"); TAGS=()
+          for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:sha-${SHA}"); done
+          # THE MUTABLE TAGS ARE GATED ON THE REF (issue #451), and this is the
+          # whole of that fix. `:latest` and `:<version>` are names main and every
+          # open PR resolve — lint.yml's container fallback floats on `:latest` by
+          # design, `llz ci assert-image-fresh` reads its baked sha expecting main's
+          # HEAD, and instances that never pinned TF_IMAGE get whatever it points
+          # at. Publishing them from a branch was not hypothetical or deliberate:
+          # e2e-instantiate.yml dispatches this workflow ON THE BRANCH automatically
+          # (`pin-instance-images --ref "${GITHUB_REF_NAME}" --build-if-missing`), so
+          # every branch that ran an e2e repointed all three of those readers at its
+          # own content, and `:latest` == main's HEAD — the invariant the
+          # no-path-filter design at the top of this file exists to hold — stopped
+          # being true until the next main push.
+          #
+          # The version tag rides the same gate rather than a rule of its own: it is
+          # per-image and optional (ci-tofu pins the OpenTofu version, ci-kubernetes
+          # the kubectl one; devcontainer and llz carry none), and it is republished
+          # unchanged on every main build, so a branch moves it exactly as it moves
+          # `:latest`.
+          #
+          # `llz ci mutable-tag-guard` holds this shape at PR time: mutable tags only
+          # inside this `if`, the sha- tag only outside it.
+          if [ "${PUBLISH_MUTABLE}" = "true" ]; then
+            for NAME in "${NAMES[@]}"; do TAGS+=(--tag "${REPO}/${NAME}:latest"); [ -z "${VERSION}" ] || TAGS+=(--tag "${REPO}/${NAME}:${VERSION}"); done
+          fi
+          # RETRIED, because the failure this absorbs is not ours and not rare.
+          # GHCR answers a burst of pushes with `403 Forbidden` / 429 — a
+          # SECONDARY rate limit that `gh api rate_limit` does not show, so it
+          # reads as a permissions error and sends people to package settings.
+          # Measured: three build-images runs inside two hours (twelve pushes)
+          # and the `llz` row 403'd on `:latest` while the other three images in
+          # the SAME run pushed fine. That left the commit's llz image
+          # unpublished, Kyverno then refused every workload referencing it, and a
+          # release-e2e spent its whole convergence budget on the consequence.
+          # The build itself is cached, so a retry re-pushes rather than rebuilds.
+          for attempt in 1 2 3; do
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              --provenance=true \
+              --sbom=true \
+              --metadata-file /tmp/build-meta.json \
+              --build-context tools-src=tools \
+              --build-arg "LLZ_VERSION=dev-${SHA}" \
+              "${TAGS[@]}" \
+              --cache-from "type=gha,scope=${IMAGE}" \
+              --cache-to   "type=gha,scope=${IMAGE},mode=max" \
+              --file dockerfiles/Dockerfile --target "${TARGET}" \
+              dockerfiles && break
+            [ "${attempt}" -eq 3 ] && { echo "::error::${IMAGE} failed to push after 3 attempts — if the log says 403/429 this is GHCR's secondary rate limit, not a permissions problem; space the builds out and re-run."; exit 1; }
+            echo "::warning::${IMAGE} push attempt ${attempt} failed — retrying (GHCR's secondary rate limit answers a burst with 403/429)." && sleep $((attempt * 90))
+          done
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Sign ci-terraform (keyless)
-        # Sign the manifest-list by digest. Keyless: cosign uses the job's OIDC
-        # token (id-token: write) + Fulcio/Rekor public-good instances, so no
-        # signing key is stored. The Kyverno verifyImages policy in
-        # instance-template verifies this same identity at admission.
+      # THE STAMP IS CHECKED IN THE IMAGE THAT WAS JUST PUSHED, not in the build
+      # recipe. version_stamp_test.go pins that every stamping site names a symbol
+      # the linker can RESOLVE — which is the half that broke last time (#433) — but
+      # it reads build files, so it cannot see the value: `ARG LLZ_VERSION=dev` is a
+      # silent fallback, `--build-arg` above could be dropped or expand empty, and
+      # every one of those publishes an image whose llz reports "dev" with the test
+      # still green.
+      #
+      # That matters more since #428 made an unusable stamp FATAL for the consumer:
+      # a bad build no longer degrades to an annotation, it reddens the first step of
+      # every job in every adopter's pipeline at once, with no fix they can apply.
+      # This is the check that keeps such an image from being published at all, and
+      # it is the repo's own rule — assert at the CONSUMER on data the producer
+      # really emitted. Run against the registry copy because a multi-platform build
+      # cannot be `--load`ed; --entrypoint covers the distroless `llz` image, whose
+      # own entrypoint is the binary.
+      - name: ${{ matrix.image }}'s baked llz reports this build's version
         env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-  build-kubernetes:
-    name: Build ci-kubernetes
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'kubernetes' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push ci-kubernetes
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage (the image bakes `llz` for the Makefile's
-        # externalsecret-paths-check), exactly like ci-terraform/devcontainer.
-        # --provenance/--sbom + --metadata-file: see ci-terraform above.
+          REPO:  ${{ steps.ns.outputs.repo }}
+          IMAGE: ${{ matrix.image }}
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:1.31.0 \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ github.sha }} \
-            --cache-from type=gha,scope=ci-kubernetes \
-            --cache-to   type=gha,scope=ci-kubernetes,mode=max \
-            dockerfiles/kubernetes
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          GOT="$(docker run --rm --pull=always --entrypoint /usr/local/bin/llz "${REPO}/${IMAGE}:sha-${SHA}" version)"; [ "${GOT}" = "llz dev-${SHA}" ] || { echo "::error::${IMAGE}:sha-${SHA} bakes an llz reporting '${GOT}', want 'llz dev-${SHA}'. The -ldflags -X in dockerfiles/Dockerfile did not reach internal/cli.Version, or LLZ_VERSION arrived empty/malformed — the linker ignores an -X it cannot resolve, silently. Publishing this image would fail 'llz ci assert-image-fresh' in every instance pipeline."; exit 1; }
 
-      - name: Sign ci-kubernetes (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
+      # Signed per REPOSITORY, not per digest: cosign stores the signature as a
+      # `sha256-<digest>.sig` tag inside the repo it was pushed to, so a signature
+      # on ci-tofu does NOT appear under the ci-terraform alias even though both
+      # names resolve to the same manifest. Sign the alias too, or the deprecation
+      # window would quietly publish an unsigned image to anyone still pinning the
+      # old name — the exact population least likely to notice.
+      - name: Sign ${{ matrix.image }} (keyless)
         env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
+          REPO:   ${{ steps.ns.outputs.repo }}
+          IMAGE:  ${{ matrix.image }}
+          ALIAS:  ${{ matrix.alias }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-  build-devcontainer:
-    name: Build devcontainer
-    # The adopter-workstation image consumed by instances' .devcontainer/. Like
-    # ci-terraform it bakes a Go binary from the tools/ module (the `llz` CLI,
-    # supplied via `--build-context tools-src=tools`); every other tool is fetched
-    # by digest at build time.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'devcontainer' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push devcontainer
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage. LLZ_VERSION stamps main.version so the
-        # baked-in `llz version` is traceable to this build. Adopters pin :latest
-        # to a :sha-... tag in .devcontainer/devcontainer.json for reproducibility.
-        # --provenance/--sbom + --metadata-file: see ci-terraform above.
         run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
-            --tag ${{ steps.ns.outputs.repo }}/devcontainer:latest \
-            --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ github.sha }} \
-            --cache-from type=gha,scope=devcontainer \
-            --cache-to   type=gha,scope=devcontainer,mode=max \
-            dockerfiles/devcontainer
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Sign devcontainer (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
-        env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-  build-llz:
-    name: Build llz (slim in-cluster image)
-    # Slim distroless image carrying ONLY the static llz binary, for workloads
-    # that run llz IN the cluster (the Linode credential rotator CronJob, and the
-    # volume-labeler once it moves off the alpine/k8s shell script). Bakes llz from
-    # the tools/ module via `--build-context tools-src=tools`, like the CI images.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'llz' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push llz
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage. In-cluster consumers pin :latest to a
-        # :sha-... tag for reproducibility (same convention as devcontainer).
-        # --provenance/--sbom + --metadata-file: see ci-terraform above. This is
-        # the one image that runs IN the cluster (credential-rotator CronJob),
-        # so its signature is what the Kyverno verifyImages policy enforces.
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
-            --tag ${{ steps.ns.outputs.repo }}/llz:latest \
-            --tag ${{ steps.ns.outputs.repo }}/llz:sha-${{ github.sha }} \
-            --cache-from type=gha,scope=llz \
-            --cache-to   type=gha,scope=llz,mode=max \
-            dockerfiles/llz
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Sign llz (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
-        env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/llz
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+          set -euo pipefail
+          cosign sign --yes --use-signing-config=false --new-bundle-format=false "${REPO}/${IMAGE}@${DIGEST}"
+          if [ -n "${ALIAS}" ]; then
+            cosign sign --yes --use-signing-config=false --new-bundle-format=false "${REPO}/${ALIAS}@${DIGEST}"
+          fi

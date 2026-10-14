@@ -1,0 +1,405 @@
+package linode
+
+// reap.go ports the orphan-reaper suite (instance-scripts/lib-linode.sh + the
+// cleanup-orphan-*.sh + reap-all-orphaned-resources.sh) into the native client.
+// It is split into PURE orphan-identity heuristics (exported + unit-tested here —
+// the fiddly logic that drifted between bash copies) and thin API primitives
+// (list/delete) the `llz reap` orchestrator drives in dependency order.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// ── pure orphan-identity heuristics ──────────────────────────────────────────
+
+var nbTagRe = regexp.MustCompile(`^lke-?([0-9]+)$`)
+
+// LKEIDFromLabel returns the cluster id embedded in an `lke<digits>` VPC label
+// (e.g. "lke613260" -> "613260"); "" if the label is not exactly lke+digits.
+func LKEIDFromLabel(label string) string {
+	if !strings.HasPrefix(label, "lke") {
+		return ""
+	}
+	rest := label[len("lke"):]
+	if rest == "" || !isAllDigits(rest) {
+		return ""
+	}
+	return rest
+}
+
+// LKEIDFromTags returns the cluster id from a NodeBalancer's CCM tag
+// (`lke<id>` or `lke-<id>`); "" if no such tag is present.
+func LKEIDFromTags(tags []string) string {
+	for _, t := range tags {
+		if m := nbTagRe.FindStringSubmatch(t); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// LKEClusterIDFromNB returns the id of the LKE cluster that owns a NodeBalancer,
+// read from its `lke_cluster` object; "" if absent. This is the RELIABLE cluster
+// linkage: LKE-E CCM NodeBalancers are tagged only `kubernetes` (no `lke<id>`
+// tag), so tag-based attribution misses them — but lke_cluster.id always points
+// to the owning cluster, and persists as a dangling ref after that cluster is
+// deleted, making it a definitive orphan signal.
+func LKEClusterIDFromNB(m map[string]any) string {
+	lc, ok := m["lke_cluster"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return mIDString(lc)
+}
+
+// NBDecision is the result of classifying a NodeBalancer's orphan status.
+type NBDecision int
+
+const (
+	NBKeep          NBDecision = iota // not an orphan
+	NBOrphan                          // its CCM cluster-id tag points to a gone cluster
+	NBCheckBackends                   // CCM-identified, no cluster tag — orphan iff 0 backends
+)
+
+// ClassifyNodeBalancer decides a NodeBalancer's orphan status. lkeClusterID is
+// its lke_cluster.id (LKEClusterIDFromNB), the reliable owner link; tags/label
+// are the CCM fallbacks. Resolution order:
+//   - lke_cluster.id present  -> keep iff that cluster is live, else orphan.
+//   - CCM `lke<id>` tag        -> keep iff live, else orphan (older CCMs).
+//   - ccm-* label / kubernetes -> NBCheckBackends (the caller treats 0 backends
+//     as orphan) — last resort for an NB with neither owner field.
+//
+// The lke_cluster.id branch is what catches LKE-E CCM NodeBalancers, which carry
+// only the `kubernetes` tag and so previously fell to the backend check (and were
+// never deleted by the tag-scoped destroy sweep).
+func ClassifyNodeBalancer(lkeClusterID string, tags []string, label string, live map[string]bool) NBDecision {
+	if lkeClusterID != "" {
+		if live[lkeClusterID] {
+			return NBKeep
+		}
+		return NBOrphan
+	}
+	if cid := LKEIDFromTags(tags); cid != "" {
+		if live[cid] {
+			return NBKeep
+		}
+		return NBOrphan
+	}
+	if strings.HasPrefix(label, "ccm-") || containsStr(tags, "kubernetes") {
+		return NBCheckBackends
+	}
+	return NBKeep
+}
+
+// VPCIsOrphan reports whether an `lke<id>` VPC's cluster is gone. (The module's
+// "<label>-vpc" BYO VPCs carry no id and are matched by label by the caller.)
+func VPCIsOrphan(label string, live map[string]bool) bool {
+	cid := LKEIDFromLabel(label)
+	return cid != "" && !live[cid]
+}
+
+// CSIDefaultVolumePrefix is the label the Linode CSI driver assigns a volume it
+// provisions, before anything renames it.
+//
+// IT IS NOT ENOUGH ON ITS OWN. LLZ's volume-labels reconciler (a PV watch in
+// llz-reconciler, the retired `relabel-volumes` verb) renamed every bound volume to
+// <REGION_SHORT>-<namespace>-<pvc>, e.g. `e2e-harbor-harbor-otomi-db-1`. From the
+// moment that reconciler landed (2026-07-05), matching only this prefix matched
+// NOTHING on any converged cluster — the reaper reported "none matched the
+// filter" while ~17 volumes leaked. Callers must pass the relabeled prefix too;
+// see VolumeLabelPrefixes.
+const CSIDefaultVolumePrefix = "pvc-"
+
+// RegionShort derives the relabeler's REGION_SHORT from a deployment name: the
+// first three characters. `llz render` computes it exactly this way when it
+// stamps REGION_SHORT into the reconciler's env patch, and the volume-labels
+// reconciler prefixes every label with it.
+//
+// THIS IS THE HALF THE FIRST FIX MISSED. VolumeLabelPrefixes used to accept
+// `<env>-`, which is only the same string as `<REGION_SHORT>-` when the
+// deployment name is three characters or fewer. On `primary` the relabeler writes
+// `pri-harbor-…` and the reaper looked for `primary-…` — so the sweep stayed
+// blind on every deployment whose name is longer than three characters, i.e. all
+// the real ones. It went unnoticed because the guard that was supposed to prove
+// the two agreed used env "e2e": exactly three characters, the one length at
+// which the bug is invisible.
+//
+// Keep this as the single definition. cmd/llz's first3 delegates here rather than
+// re-deriving it, so the label the relabeler WRITES and the prefix the reaper
+// ACCEPTS cannot drift again.
+func RegionShort(env string) string {
+	if len(env) < 3 {
+		return env
+	}
+	return env[:3]
+}
+
+// VolumeLabelPrefixes returns the label prefixes a reap should accept. env is the
+// deployment name; empty means "only volumes no reconciler has renamed yet".
+//
+// Deliberately NOT prefix-free: dropping the constraint entirely would make every
+// unattached volume in the account a deletion candidate, which for a destructive
+// sweep is far worse than missing some.
+//
+// The relabeled prefix is RegionShort(env), NOT env — see above. `<env>-` is not
+// also accepted: for a name of three characters or fewer the two are the same
+// string, and for a longer one `<env>-` matches nothing the relabeler has ever
+// written, so including it would only widen a destructive sweep for no coverage.
+func VolumeLabelPrefixes(env string) []string {
+	if env == "" {
+		return []string{CSIDefaultVolumePrefix}
+	}
+	return []string{CSIDefaultVolumePrefix, RegionShort(env) + "-"}
+}
+
+// VolumeIsCandidate is the safe filter for a destructive Volume sweep: an
+// unattached Volume whose label carries one of labelPrefixes, optionally
+// constrained by region, an id allowlist, and a required tag. An empty
+// regionFilter / idAllow / tagMustInclude means "no constraint"; empty
+// labelPrefixes means the CSI default only.
+func VolumeIsCandidate(linodeIDNull bool, label, region string, tags []string,
+	regionFilter string, idAllow map[string]bool, id, tagMustInclude string,
+	labelPrefixes ...string) bool {
+	if !linodeIDNull {
+		return false
+	}
+	if len(labelPrefixes) == 0 {
+		labelPrefixes = []string{CSIDefaultVolumePrefix}
+	}
+	if !hasAnyPrefix(label, labelPrefixes) {
+		return false
+	}
+	if regionFilter != "" && region != regionFilter {
+		return false
+	}
+	if len(idAllow) > 0 && !idAllow[id] {
+		return false
+	}
+	if tagMustInclude != "" && !containsStr(tags, tagMustInclude) {
+		return false
+	}
+	return true
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ── API primitives ───────────────────────────────────────────────────────────
+
+// LiveClusterIDs returns the id (as a string) of every live LKE cluster — the
+// set that is NEVER treated as an orphan.
+func (c *Client) LiveClusterIDs(ctx context.Context) (map[string]bool, error) {
+	cl, err := c.listAllPages(ctx, LKEClustersPath)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(cl))
+	for _, m := range cl {
+		if id := mIDString(m); id != "" {
+			live[id] = true
+		}
+	}
+	return live, nil
+}
+
+// ClustersWithLabel returns the ids of LIVE LKE clusters whose label matches.
+func (c *Client) ClustersWithLabel(ctx context.Context, label string) ([]uint64, error) {
+	cl, err := c.listAllPages(ctx, LKEClustersPath)
+	if err != nil {
+		return nil, err
+	}
+	var ids []uint64
+	for _, m := range cl {
+		if mString(m, "label") == label {
+			ids = append(ids, mUint(m, "id"))
+		}
+	}
+	return ids, nil
+}
+
+// NodeBalancerBackendCount sums up+down backend nodes across all of a
+// NodeBalancer's configs. 0 => the CCM has no cluster to register backends from.
+func (c *Client) NodeBalancerBackendCount(ctx context.Context, id uint64) (int, error) {
+	cfgs, err := c.listAllPages(ctx, fmt.Sprintf("/v4/nodebalancers/%d/configs", id))
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, cfg := range cfgs {
+		if ns, ok := cfg["nodes_status"].(map[string]any); ok {
+			total += int(mUint(ns, "up")) + int(mUint(ns, "down"))
+		}
+	}
+	return total, nil
+}
+
+// List helpers return the raw resource maps for a collection.
+func (c *Client) ListNodeBalancers(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/nodebalancers")
+}
+func (c *Client) ListVPCs(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/vpcs")
+}
+func (c *Client) ListVPCSubnets(ctx context.Context, vpcID uint64) ([]map[string]any, error) {
+	return c.listAllPages(ctx, fmt.Sprintf("/v4/vpcs/%d/subnets", vpcID))
+}
+func (c *Client) ListVolumes(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/volumes")
+}
+func (c *Client) ListFirewalls(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/networking/firewalls")
+}
+
+// UpdateVolumeLabel PUTs a new UI label onto a Linode Volume. A 404 — the volume
+// was deleted out-of-band while a PV still references it — is treated as success
+// (nothing to relabel).
+//
+// NO PRODUCTION CALLER, AND DO NOT GIVE IT ONE CASUALLY. This is the primitive
+// the retired volume-labels lane used, and calling it on a Volume that backs a
+// live PV BREAKS THAT VOLUME PERMANENTLY: the Linode CSI resolves the device path
+// from the label baked into the PV's immutable volumeHandle, so a renamed Volume
+// fails MountDevice on its next attach and never recovers.
+//
+// It is kept because it is exactly what the documented REPAIR needs — restoring a
+// drifted Volume's ORIGINAL label, the `<label>` half of its volumeHandle, which
+// `llz ci assert-volume-encryption` prints. That is an operator-run, one-Volume,
+// deliberate act. See docs/runbooks/volume-labels.md.
+func (c *Client) UpdateVolumeLabel(ctx context.Context, id uint64, label string) error {
+	url := fmt.Sprintf("%s/v4/volumes/%d", c.base, id)
+	resp, err := c.put(ctx, url, map[string]string{"label": label})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("PUT /v4/volumes/%d returned %d: %s", id, resp.StatusCode, readBody(resp))
+	}
+	return nil
+}
+
+// DetachVolume POSTs /v4/volumes/<id>/detach, breaking a Volume's attachment to
+// its Linode so it becomes a deletion candidate.
+//
+// A 404 (already deleted) and a 400 (already detached — the API rejects a detach
+// on an unattached Volume) are both success: the caller only cares that the
+// Volume ends up unattached, not who got it there. Every other non-2xx is
+// returned so the caller can log it and fall through to the next poll.
+func (c *Client) DetachVolume(ctx context.Context, id uint64) error {
+	url := fmt.Sprintf("%s/v4/volumes/%d/detach", c.base, id)
+	resp, err := c.post(ctx, url, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 || resp.StatusCode == 400 {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("POST /v4/volumes/%d/detach returned %d: %s", id, resp.StatusCode, readBody(resp))
+	}
+	return nil
+}
+
+// DeleteResourcePath DELETEs an absolute API path (e.g. "/v4/nodebalancers/123").
+// A 2xx or 404 (already gone) is success — matching lib-linode.sh's linode_delete.
+func (c *Client) DeleteResourcePath(ctx context.Context, path string) error {
+	resp, err := c.del(ctx, c.base+path)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == 404 {
+		return nil
+	}
+	return fmt.Errorf("DELETE %s returned %d: %s", path, resp.StatusCode, readBody(resp))
+}
+
+// ── map accessors (json.Number-aware) ────────────────────────────────────────
+
+func mString(m map[string]any, k string) string {
+	s, _ := m[k].(string)
+	return s
+}
+
+func mUint(m map[string]any, k string) uint64 {
+	switch v := m[k].(type) {
+	case json.Number:
+		i, _ := v.Int64()
+		return uint64(i)
+	case float64:
+		return uint64(v)
+	}
+	return 0
+}
+
+func mIDString(m map[string]any) string {
+	if id := mUint(m, "id"); id != 0 {
+		return strconv.FormatUint(id, 10)
+	}
+	return ""
+}
+
+// MapTags extracts a resource's string tags (exported for the orchestrator).
+func MapTags(m map[string]any) []string {
+	raw, _ := m["tags"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		if s, ok := t.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// MapString / MapUint / MapIDString expose the accessors to the orchestrator.
+func MapString(m map[string]any, k string) string { return mString(m, k) }
+func MapUint(m map[string]any, k string) uint64   { return mUint(m, k) }
+func MapIDString(m map[string]any) string         { return mIDString(m) }
+
+// VolumeLinodeIDNull reports whether a Volume map has linode_id == null
+// (unattached) — JSON null decodes to a nil interface value.
+func VolumeLinodeIDNull(m map[string]any) bool {
+	v, present := m["linode_id"]
+	return !present || v == nil
+}
+
+// HasAnyVolumeLabelPrefix reports whether a Volume label carries one of the
+// prefixes VolumeLabelPrefixes returned. Exported so the teardown TRACKING pass
+// applies the same rule as the sweep — they diverged once (tracking hardcoded
+// `pvc-`), and a Volume the tracker cannot see is one the sweep is never asked
+// about, which is how 15 renamed Volumes outlived their cluster.
+func HasAnyVolumeLabelPrefix(label string, prefixes []string) bool {
+	return hasAnyPrefix(label, prefixes)
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if p != "" && strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}

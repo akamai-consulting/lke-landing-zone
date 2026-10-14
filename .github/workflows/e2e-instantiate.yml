@@ -1,0 +1,669 @@
+name: E2E instantiate (reusable)
+
+# Scaffolds the `e2e` environment, lays the template out as an instance, renders
+# the copier tokens, and force-pushes the result to the throwaway E2E instance
+# repo — then pins that instance's CI images and first-party charts to the commit
+# under test.
+#
+# This is the SHARED body behind both e2e entry points:
+#   • release-e2e.yml      — the cold release gate (prereleased / dispatch)
+#   • release-e2e-warm.yml — the dispatch-only warm fast path
+#
+# It exists because those two carried a byte-identical 327-line copy of this job,
+# kept in sync BY HAND. The copier-token render pass below is safety-critical (an
+# unrendered `<@ upstream_org @>` in a workflow `uses:` makes GitHub reject the
+# dispatch outright, and a silent miss pushes a broken instance), so a
+# hand-synced duplicate of it was the wrong shape. One body, two callers, no drift.
+#
+# The two steps the callers differ on are gated on inputs rather than duplicated:
+#   kick_image_build   — fire the ci-image build early so its publish overlaps the
+#                        scaffold work (cold gate only; the warm path iterates on a
+#                        commit whose images normally already exist)
+#   seed_escape_hatch  — seed the kubernetes-custom/ probe the cold gate's
+#                        post-converge `llz ci assert-instance-custom` asserts
+#
+# NOTE on `vars`: the four env values below are NOT inputs. `vars.*` is readable
+# inside a reusable workflow, and all four derive purely from repo vars plus a
+# constant — so they are redefined here identically rather than threaded through
+# the call boundary. Keep them in sync with the callers' own env blocks (which
+# still need them for their provision/teardown/gate jobs).
+
+on:
+  workflow_call:
+    inputs:
+      kick_image_build:
+        description: 'Fire the ci-image build early so its publish overlaps the scaffold/render/push work'
+        required: false
+        type: boolean
+        default: false
+      seed_escape_hatch:
+        description: 'Seed the kubernetes-custom/ escape-hatch probe for assert-instance-custom'
+        required: false
+        type: boolean
+        default: false
+      # ── Forge lane ────────────────────────────────────────────────────────
+      # These WERE derived from `vars.*` inside this workflow, on the grounds
+      # that they were forge-independent and `vars` is readable here. The GHES
+      # lane invalidates that: they now derive from the CALLER's inputs.forge,
+      # which a reusable workflow cannot see. So they are threaded explicitly.
+      # Every default is the github.com lane's exact previous value, so a caller
+      # that passes none of them (release-e2e-warm.yml) is byte-unchanged.
+      forge:
+        description: 'Forge lane: github | github-enterprise-server'
+        required: false
+        type: string
+        default: github
+      e2e_env:
+        description: 'Lane-scoped deployment name — the master isolation discriminator (e2e | e2e-ghes)'
+        required: false
+        type: string
+        default: e2e
+      instance_repo:
+        description: 'owner/name of the throwaway E2E instance repo for this lane (empty = vars.E2E_INSTANCE_REPO)'
+        required: false
+        type: string
+        default: ''
+      gh_host:
+        description: 'Forge host for gh/git writes (github.com, or the GHES appliance)'
+        required: false
+        type: string
+        default: github.com
+      forge_host:
+        description: 'LLZ_FORGE_HOST — empty for github.com, the appliance host for GHES'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      E2E_DISPATCH_TOKEN:
+        description: 'PAT/app token with contents:write + pull-requests:write + actions:read/write + Variables:read/write on the E2E instance repo'
+        required: true
+      E2E_LINODE_TOKEN:
+        # READ-ONLY, AND IT MUST BE FOR THE ACCOUNT THAT BUILDS THE E2E CLUSTER —
+        # i.e. the same account as the instance repo's infra-e2e LINODE_API_TOKEN.
+        # LKE-Enterprise version availability is PER-ACCOUNT (measured: two accounts
+        # offering disjoint versions in the same hour), so a token for a DIFFERENT
+        # account makes the derivation actively harmful: it would seed a version the
+        # building account may not offer, which is the failure this exists to remove,
+        # wearing a green scaffold step.
+        description: 'Read-only Linode PAT for the account that builds the e2e cluster. Optional; without it the scaffold falls back to the compiled k8sVersion default.'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  E2E_ENV: ${{ inputs.e2e_env }}
+  INSTANCE_REPO: ${{ inputs.instance_repo != '' && inputs.instance_repo || vars.E2E_INSTANCE_REPO }}
+  # Forge lane. LLZ_FORGE_STRICT makes every gh/git/llz write fail closed rather
+  # than silently defaulting to github.com and clobbering the other lane's
+  # shared-account / env-scoped state. GH_HOST also steers the gh CLI and git.
+  E2E_FORGE: ${{ inputs.forge }}
+  LLZ_FORGE: ${{ inputs.forge }}
+  LLZ_FORGE_HOST: ${{ inputs.forge_host }}
+  GH_HOST: ${{ inputs.gh_host }}
+  LLZ_FORGE_STRICT: '1'
+  # Region + OBJ cluster default to the canonical `lab` tier (terraform-iac-bootstrap/
+  # {cluster,object-storage}/lab.tfvars on the instance repo's default branch) — lab is the
+  # throwaway tier co-located in us-ord, the right shape for an E2E run. Override via repo
+  # vars only to exercise a different region.
+  E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
+  # THE MANUAL ESCAPE, AND NORMALLY EMPTY. Leave it unset and `llz env add` decides:
+  # it asks the account whether a cluster for this deployment already exists and pins
+  # WHAT THAT CLUSTER RUNS, falling back to the newest the account offers when there
+  # is none. That is what keeps a warm-cluster re-scaffold from planning an LKE-E
+  # CONTROL-PLANE UPGRADE inside a run whose whole point was to skip the 14m create
+  # (#453) — `llz ci assert-k8s-version` cannot catch that, since the derived pin IS
+  # in the catalog, just not the one the cluster runs.
+  #
+  # A PIN LEFT BEHIND IS THE HAZARD NOW. Once the warm cluster is gone, a stale var
+  # HARD-FAILS the next cold run the moment that version rotates out of the account's
+  # catalog — hours, for LKE-E — because an explicit --k8s-version with no cluster to
+  # exempt it is rejected outright.
+  #
+  # SET IT IN ONE CASE ONLY: no E2E_LINODE_TOKEN, where llz reads no catalog and
+  # nothing judges the var. In the three states where llz asked but could not ANSWER
+  # — the cluster read failed, TWO clusters carry this deployment's label (llz
+  # refuses to guess), or the account reports no k8s_version for the cluster it found
+  # — the catalog WAS read, so the pin is judged with no exemption available. Fix the
+  # state rather than pinning around it: re-run the read, delete the duplicate BY ID
+  # (never `llz reap --cluster-label`, which takes both), or find out why the cluster
+  # reports no version. Each says which it is in the log, and the middle two are easy
+  # to miss: the run is otherwise healthy and the only trace is a ::warning inside a
+  # green step.
+  E2E_K8S_VERSION: ${{ vars.E2E_K8S_VERSION }}
+  E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  instantiate:
+    name: Instantiate → ${{ vars.E2E_INSTANCE_REPO }}
+    runs-on: ubuntu-latest
+    # 90, and the arithmetic is worth writing down because it has been wrong twice.
+    # pin-instance-images waits up to 1200s PER IMAGE it must see published — and
+    # that is now THREE (ci-tofu, ci-kubernetes and the in-cluster llz image, whose
+    # absence cost a whole e2e round) — then assert-instance-pr-gates waits up to
+    # 900s for the delivered gates. Worst case is 3x1200 + 900 = 75 minutes before
+    # the scaffold, render, push and chart-publish steps have spent anything.
+    #
+    # In practice the three images publish from ONE build and resolve together, so
+    # the real cost is nearer 1200 + 900. But a per-step budget is only real if the
+    # job can afford the SUM: at 35 (and then at 60) the first genuinely slow build
+    # would be killed by the runner PAST the PR-gate step's own cleanup, producing
+    # an opaque job timeout and a leaked throwaway PR instead of either step's
+    # diagnosis. If another required image is added, raise this with it.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read   # docker login + manifest inspect to confirm this commit's ci images published
+      actions: write   # list THIS repo's Build Container Images runs AND trigger one when an image is missing (--build-if-missing)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Preconditions
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Only two values can't be derived: the throwaway instance repo (must really
+          # exist — its default branch is force-pushed every run) and the dispatch token
+          # (a credential). Region + OBJ cluster default to the canonical lab tier (see
+          # the top-level env block). These are separate from the instance repo's
+          # infra-e2e secrets (LINODE_API_TOKEN, TF_STATE_*, OBJ keys) that terraform.yml
+          # consumes inside the instance. Report EVERY missing one at once, so a
+          # first-time setup needs a single round-trip instead of one fix per re-run.
+          missing=0
+          require() { # name, value, kind ("vars" | "secrets"), description
+            if [[ -z "$2" ]]; then
+              local cmd="variable"; [[ "$3" == "secrets" ]] && cmd="secret"
+              echo "::error::Missing ${3}.${1} — ${4}. Set it on this repo: gh ${cmd} set ${1} (or Settings → Secrets and variables → Actions)."
+              missing=1
+            fi
+          }
+          require E2E_INSTANCE_REPO  "${INSTANCE_REPO}"       vars    "owner/name of the throwaway E2E instance repo (its default branch is force-pushed every run)"
+          # pull-requests:write is NOT optional and is the newest of these: the
+          # PR-gate probe below opens a throwaway PR on the instance. A token
+          # provisioned from the older contents+actions wording passes this
+          # presence check and then dies ~10 minutes in at `gh pr create` with a
+          # bare "Resource not accessible" — so the scope belongs in the sentence
+          # an operator reads while creating the token, not only in a failure.
+          require E2E_DISPATCH_TOKEN "${E2E_DISPATCH_TOKEN}"  secrets "PAT/app token with contents:write + pull-requests:write + actions:read/write on the instance repo"
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "::error::E2E config is incomplete on ${GITHUB_REPOSITORY}. Fix the items above, then re-run. See the header of .github/workflows/release-e2e.yml for the full setup."
+            exit 1
+          fi
+          # NO PRESENCE CHECK FOR E2E_LINODE_TOKEN HERE, deliberately. It is OPTIONAL
+          # — `llz env add` degrades to its compiled k8sVersion default without it,
+          # so requiring it would break every fork's e2e on the very commit that
+          # added it, for an improvement rather than a prerequisite. And the
+          # "this check did not run" annotation is emitted by llz itself
+          # (instanceresolve.reportSkippedAccountCheck, through cigate.Warning), so
+          # it reaches the run summary for EVERY caller instead of three lines of
+          # untestable inline bash covering only this one.
+          echo "E2E config OK — instance=${INSTANCE_REPO} region=${E2E_LINODE_REGION} obj=${E2E_OBJ_CLUSTER}"
+
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: ${{ github.workspace }}/bin/llz
+
+      # PRESENCE IS NOT VALIDITY, and the Preconditions step above can only check
+      # presence — it runs before llz is built, so it has nothing to probe with.
+      #
+      # WHAT THAT COST, measured rather than imagined. A run on 2026-08-23 printed
+      # "E2E config OK" and then died 20 seconds later at "Stamp provenance +
+      # force-push instantiation" with
+      #
+      #   remote: Invalid username or token. Password authentication is not
+      #   supported for Git operations.
+      #   ##[error]Process completed with exit code 128
+      #
+      # An expired PAT, reported as a git exit code at the tenth step, on a run
+      # that had already spent four steps and a Go build getting there. Nothing in
+      # the message names the credential, says it expired, or says which repo to
+      # rotate it on.
+      #
+      # `llz ci validate-tokens` is the verb for exactly this and already existed —
+      # "a set-but-dead token fails FAST with 'rotate it' instead of 401/403-ing
+      # deep inside a 45-minute provision". It was wired into the instance
+      # pipeline and not into the lane that instantiates it, which is the one place
+      # a dead E2E_DISPATCH_TOKEN can stop everything.
+      #
+      # It probes only what is IN THE ENVIRONMENT and skips the rest, so mapping
+      # one secret here probes exactly that one. Vacuity is covered by the
+      # Preconditions step above rather than here: it already fails when the
+      # secret is empty, so by this point there is something to probe.
+      - name: E2E_DISPATCH_TOKEN authenticates (presence was already checked)
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci validate-tokens
+
+      # Fire the ci-image build for this commit NOW (if one is needed) so its
+      # publish overlaps the scaffold/render/push work below instead of the
+      # "Pin instance CI images" step serially waiting out the whole build at the
+      # end of this job (observed: ~4.5m of pure wait on a mid-flight build).
+      # trigger-only: no wait, no pin — the full pin step below finds the run in
+      # flight and completes the wait+pin with whatever publish time remains.
+      - name: Kick the image build early (overlap the publish wait)
+        if: ${{ inputs.kick_image_build }}
+        continue-on-error: true
+        env:
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF_NAME}" --build-if-missing --trigger-only
+
+      - name: Scaffold the e2e environment
+        # The shared, token-free apl-values manifests are fetched from the template
+        # repo at a pinned ref (RenderManifestKustomization's remote refs), not vendored.
+        # A throwaway e2e instance has no .copier-answers.yml for `llz render` to read a
+        # version from, so hand it the SHA under test — ArgoCD then fetches the shared
+        # components from THIS commit (which carries the changes being validated), not a
+        # published tag. See designs/apl-values-remote-refs.md + resolveTemplateRef.
+        env:
+          LLZ_TEMPLATE_REF: ${{ github.sha }}
+          # The reconciler + harbor components ship ghcr.io/…/llz:latest and are retagged
+          # by their carved app's kustomize images: transformer; `llz render` reads the
+          # target tag from here, so point it at the signed sha image for the commit under
+          # test (same image release-e2e's sed renders clusterHealthWorkflow's token to).
+          LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
+          # THE SCAFFOLD ASKS THE ACCOUNT, so this lane stops baking a k8sVersion
+          # literal that is stale by construction. Without it `llz env add` uses its
+          # compiled fallback and release-e2e keeps the exact rot #448 removes for
+          # adopters — a version that was valid when someone last edited it, against
+          # a catalog that rotates within hours.
+          #
+          # IT ALSO ARMS THE OTHER TWO ACCOUNT CHECKS, and that is a real behaviour
+          # change rather than a side effect: with a token in scope `llz env add`
+          # validates E2E_LINODE_REGION and E2E_OBJ_CLUSTER against the account too,
+          # and FAILS this step in seconds when the account cannot serve them. That
+          # trade is taken deliberately — the alternative is finding out ~20 minutes
+          # into the apply, which is the entire reason those checks exist.
+          #
+          # ONE KNOWN WAY THAT BITES, WRITTEN DOWN BECAUSE THE REMEDY IS NOT OBVIOUS.
+          # ResolveOBJCluster asks /v4/object-storage/clusters, and llz has no
+          # endpoint-type lookup — so if a NEWER-GENERATION E2E_OBJ_CLUSTER (us-ord-10
+          # rather than us-ord-1) is not listed by that route, `llz env add` rejects
+          # a perfectly valid id and reds this whole lane for an unrelated reason.
+          # The default us-ord-1 is old-generation and unaffected. If an override
+          # ever trips it: unset E2E_LINODE_TOKEN to fall back (the scaffold then
+          # says so in the run summary), or use a listed id.
+          #
+          # REPRODUCIBILITY IS TRADED FOR CURRENCY, DELIBERATELY. This step `rm`s
+          # landingzone.yaml and re-scaffolds every run, so with a token the e2e
+          # cluster's k8sVersion now tracks the account's catalog rather than a
+          # commit — two runs of the SAME sha can build different versions if the
+          # catalog rotated between them. Taken because a release gate wants to know
+          # the build works on what the account offers TODAY, which is the signal a
+          # frozen literal cannot give. Attribution survives: the derived version is
+          # written into the landingzone.yaml this job force-pushes to the instance
+          # repo, so a red lane can always be traced to the version it ran against.
+          LINODE_TOKEN: ${{ secrets.E2E_LINODE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Re-create the e2e env from scratch each run (idempotent). env add is
+          # spec-first, so also drop the authored spec files — it refuses to
+          # overwrite environments/<env>.yaml, and landingzone.yaml is re-bootstrapped.
+          rm -rf "instance-template/apl-values/${E2E_ENV}" 2>/dev/null || true
+          rm -f instance-template/terraform-iac-bootstrap/*/"${E2E_ENV}.tfvars" 2>/dev/null || true
+          rm -f "instance-template/environments/${E2E_ENV}.yaml" instance-template/landingzone.yaml 2>/dev/null || true
+          # `llz env add` is the spec-first scaffolder (folded into the binary from
+          # the old new-deployment.sh). It is layout-aware: run from
+          # the template root it writes into instance-template/.
+          # --k8s-version with an EMPTY value is treated as unset by `llz env add`
+          # (it trims and tests for empty), so no conditional is needed here — which
+          # matters, because a conditional is inline bash the untestable-loc budget
+          # would charge for.
+          bin/llz env add "${E2E_ENV}" \
+            --region "${E2E_LINODE_REGION}" \
+            --obj-cluster "${E2E_OBJ_CLUSTER}" \
+            --k8s-version "${E2E_K8S_VERSION}"
+          # (linodeCredRotator is default-ON now — Phase 2 of
+          # docs/designs/linode-credential-rotator.md made it the sole rotation
+          # mechanism for the object-storage keys, so no explicit env set is
+          # needed; e2e exercises the mint → OpenBao → ESO → consumer cycle by
+          # construction.)
+          # This env add runs at the TEMPLATE root, where .copier-answers.yml holds
+          # unrendered jinja — so readAnswers fails and spec.instance.repo falls back
+          # to a dirname guess (the scaffold dir name repeated under itself). Fix the IDENTITY
+          # rather than papering over it downstream: it is what the render-time
+          # otomi.git.repoUrl default derives from (apl-operator pushes its values tree
+          # there), what the carved Argo Applications and the AppProject sourceRepos
+          # allowlist are scoped to, and what GH_REPO becomes for the in-cluster
+          # provisioners. Real instances get all of this from their answers-derived
+          # spec.instance.repo; the e2e scaffold has to be told.
+          bin/llz spec set instance.repo="${INSTANCE_REPO}"
+          # And pin the Object Storage label prefix explicitly. Derived, it would be
+          # `instance-template` — a name every fork's e2e lane would claim in the same
+          # region, which is the global bucket-label collision the prefix exists to
+          # remove (spec.instance.objLabelPrefix; clusterspec/objlabels.go).
+          bin/llz spec set instance.objLabelPrefix=llz-e2e
+          # Point the TF-managed platform-bootstrap Application (and, via the
+          # env-revision-configmap it renders, every in-repo child Application) at `main`.
+          # appsRepoRevision is the single knob `llz render` threads into BOTH the
+          # bootstrap App's targetRevision (tfvars apps_repo_revision) and the child Apps'
+          # (env-revision-configmap data.revision), so setting it once keeps
+          # cluster-bootstrap's configmap==apps_repo_revision precondition satisfied. A
+          # dedicated snapshot branch is no longer needed: per-env values-branch isolation
+          # (docs/designs/apl-core-values-branch-isolation.md) keeps apl-core on apl-<env>
+          # (apl-e2e), so the operator never force-pushes main and the LZ app-of-apps reads
+          # the instantiated `main` directly. Set explicitly (not defaulted) so it also
+          # overwrites any stale APPS_REPO_REVISION a prior e2e-apps run left on the repo.
+          # The same env set also enables the in-cluster broad-PAT rotator on the e2e
+          # deployment so e2e exercises its deploy surface (namespace + carved App +
+          # Kyverno keyless admission + the two ESO-synced credentials). DEFAULT-DISABLED
+          # because the broad PAT is ACCOUNT-wide (exactly one deployment), so e2e opts in
+          # explicitly. The label is e2e-UNIQUE so the rotator's mint/revoke can only ever
+          # touch the e2e PAT family — never a real deployment's — and broadPATDeployments
+          # lists only e2e (its infra-e2e LINODE_API_TOKEN is the sole env secret a
+          # rotation would rewrite). The bootstrap seeds secret/linode/broad-pat from
+          # LINODE_API_TOKEN (llz ci seed-broad-pat), so the rotator's ExternalSecret
+          # resolves and its carved App converges.
+          bin/llz env set "${E2E_ENV}" \
+            cluster.bootstrap.appsRepoRevision="main" \
+            components.broadPatRotator.enabled=true \
+            components.broadPatRotator.broadPATLabel="llz-${E2E_ENV}-broad-pat" \
+            components.broadPatRotator.broadPATDeployments="${E2E_ENV}"
+          # Enable the day-2 clusterHealthWorkflow component (+ its argoWorkflows
+          # dependency) for this run — both are DefaultDisabled, so without this the
+          # e2e would never DEPLOY the in-cluster health WorkflowTemplate and its
+          # green would prove nothing about the feature. Enabling it makes the
+          # converge gate validate the DEPLOY path (kyverno admits the WorkflowTemplate/
+          # CronWorkflow/RBAC CRs, Argo reconciles them); the assert-health-workflow
+          # step in bootstrap-openbao's converge (same assert_loki e2e gate) then
+          # submits a Workflow from the template and asserts it Succeeds — validating
+          # the RUN path (image-signature policy on the pod, SA + executor RBAC, the
+          # health-incluster verb). See docs/designs/day2-incluster-health.md.
+          bin/llz env set "${E2E_ENV}" \
+            components.argoWorkflows.enabled=true \
+            components.clusterHealthWorkflow.enabled=true
+
+          # objProxy: the SSE-C gateway that makes Object Storage encrypted at rest
+          # (docs/designs/obj-sse-c-gateway.md). Default-DISABLED, so without this the
+          # e2e cluster runs without it and the obj-encryption assert lane self-skips —
+          # a green run that proved nothing about encryption.
+          #
+          # Enabling it here does NOT flip the switch. The component is inert until
+          # CoreDNS rewrites the endpoint hostname to the proxy Service, and that
+          # rewrite is deliberately outside the kustomization: it can only be applied
+          # once Harbor's registry pods carry the CA, and flipping it early turns an
+          # unencrypted-but-working registry into a broken one. So this run exercises
+          # the DEPLOY path — the DaemonSet comes up, the key is seeded, the Kyverno
+          # mutation lands on restarted registry pods — and the lane reports the DNS
+          # rewrite as the one remaining gap rather than passing.
+          bin/llz env set "${E2E_ENV}" \
+            components.objProxy.enabled=true
+
+      # spec.openbao fixture: a PKI mount with a config write and the scaffold's
+      # default team as operator, a policy, and a kubernetes role bound to the ESO
+      # controller. bao-configure applies it; the openbao-ext lane (the role) and
+      # the team-write lane (the operator) — assertidentity/openbaoext.go — then
+      # log in through each and verify what OpenBao actually enforces. Without it those checks
+      # self-skip and the feature ships ungated.
+      - name: Declare the spec.openbao fixture
+        # `spec set` re-renders — with the same pins as the scaffold step above.
+        env:
+          LLZ_TEMPLATE_REF: ${{ github.sha }}
+          LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
+        run: bin/llz spec set openbao=@.github/e2e/spec-openbao.yaml
+
+      - name: Lay the template out as an instance
+        run: |
+          set -euo pipefail
+          rm -rf .e2e-instance && mkdir -p .e2e-instance
+          # instance-template/* becomes the instance repo root so terraform.yml +
+          # cluster-health.yml sit at .github/workflows/ and are dispatchable there.
+          cp -a instance-template/. .e2e-instance/
+          # The scaffold already names its TF roots terraform-iac-bootstrap/ (what
+          # terraform.yml and the actions chdir into), so no rename is needed.
+          # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
+          # template-INTERNAL: it is baked into the TF_IMAGE the reusable llz-*
+          # workflows run in. A real instance has no scripts/, so
+          # the e2e instance must not either — don't hoist anything here.
+          # docs/ are delivered the same way (copier _tasks): copy the full set in,
+          # then `llz ci deliver-docs` prunes to the operator set + writes the
+          # version-pinned pointer. The keep-set lives ONCE in the verb, so this and
+          # the copier _tasks can't drift — which is what previously leaked
+          # cross-org-reuse-pattern.md (literal `<@ … @>` examples) into the instance
+          # and tripped the unrendered-token guard below.
+          # --root/--template-root additionally repoint the instance ROOT's
+          # Markdown (README.md, AGENTS.md, apl-values/README.md) at paths only the
+          # template carries. Passed here for the same reason the keep-set lives in
+          # the verb: without them the e2e instance would carry dead root links that
+          # a copier-rendered instance does not, and the reference instance would
+          # stop matching what an adopter actually gets.
+          mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
+          bin/llz ci deliver-docs --docs .e2e-instance/docs \
+            --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}" \
+            --root .e2e-instance --template-root .
+          # Composite actions are VENDORED into every instance (.github/actions/ —
+          # the reusable llz-* bodies reference them as `./.github/actions/<name>`),
+          # so the `cp -a instance-template/.` above already put them where the
+          # dispatched workflows resolve them. Do NOT prune them here.
+          # `.copier-answers.yml` carries copier-internal jinja (`<@ _copier_answers
+          # … @>`) that only `copier update` renders — which this throwaway instance
+          # never runs, so the copier-written file can't be kept (its jinja would trip
+          # the render-pass survivor check below). But the DISPATCHED terraform.yml's
+          # `llz render` reads this file to resolve the template ref (llz_version) for
+          # the GENERATED TF roots' module `?ref=` — a real instance has its own answers
+          # file; this throwaway one otherwise has none, so the roots would pin to the
+          # default `main` (where a branch-only module like llz-cluster-bootstrap does
+          # not exist → `terraform init` fails). Replace it with a MINIMAL answers file
+          # carrying only the fields llz render reads, in the standard token forms the
+          # render pass below resolves to the commit under test.
+          printf '%s\n' \
+            'llz_version: <@ llz_version @>' \
+            'instance_repo: <@ instance_repo @>' \
+            'upstream_org: <@ upstream_org @>' \
+            > .e2e-instance/.copier-answers.yml
+          # NOTE: this manual hoist is a raw `cp`, so the copier `<@ token @>`
+          # substitutions are still literal here. The next step renders them — see
+          # there for why that's mandatory, not cosmetic.
+
+      - name: Render copier tokens + pin LLZ refs to the commit under test
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          OWNER="${GITHUB_REPOSITORY%/*}"   # template org (e.g. akamai-consulting)
+          # 1. Resolve the copier <@ … @> tokens the raw `cp` left literal. Mandatory:
+          #    an unrendered `<@ upstream_org @>` in a workflow `uses:` makes GitHub
+          #    reject the dispatch ("too many '@' in workflow reference"), and the same
+          #    token in the terraform/ module sources breaks `terraform init`.
+          #    `<@ llz_version @>` is the version pin (`llz new`/`llz upgrade` would set
+          #    it to the llz binary's version); render it to the SHA under test so e2e
+          #    exercises THIS commit, not a past release — a full SHA is valid both as a
+          #    cross-repo `uses:` ref and as a git `?ref=`. (Rendering it here also
+          #    matters because it embeds spaces, which the ref-rewrite in step 2 below
+          #    can't span.) `<@ llz_image_ref @>` is pinned to the signed sha-tagged
+          #    in-cluster llz image for the same commit, so Kyverno verifies the exact
+          #    artifact this e2e run built instead of a mutable latest tag.
+          #    This sed-render only knows the token FORMS below, so any new copier
+          #    expression in the template must be added here. instance-template's
+          #    README heading uses the jinja `<@ instance_repo.split('/')[-1] @>`
+          #    (the repo name) — render it to ${INSTANCE_REPO##*/}; otherwise it
+          #    survives the check below and fails the run.
+          REPO_NAME="${INSTANCE_REPO##*/}"
+          LLZ_IMAGE_REF="ghcr.io/${OWNER}/llz:sha-${GITHUB_SHA}"
+          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' \
+                    -e '<@ llz_image_ref @>' \
+                    -e '<@ instance_repo\.split' . \
+            | xargs -0 -r sed -i \
+                -e "s#<@ instance_repo\.split('/')\[-1\] @>#${REPO_NAME}#g" \
+                -e "s#<@ upstream_org @>#${OWNER}#g" \
+                -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
+                -e "s#<@ llz_version @>#${GITHUB_SHA}#g" \
+                -e "s#<@ llz_image_ref @>#${LLZ_IMAGE_REF}#g"
+          # 2. Backstop: repin any LLZ ref that is a literal tag (not the llz_version
+          #    placeholder) to the SHA under test too, so e2e never exercises a past
+          #    release. With the placeholder model above this is normally a no-op.
+          grep -rlZ 'lke-landing-zone' . \
+            | xargs -0 -r sed -i -E \
+                -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
+                -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
+          # NOTE: the caller stubs used to carry a `template-ref:` input that needed
+          # repointing here. They no longer do — every consumer reads the pin from
+          # .copier-answers.yml (llz_version, rendered to the SHA under test above),
+          # so the instance is pinned to this commit by that one line.
+          # Fail loudly if any token survived — a silent miss = a broken instance push.
+          if grep -rnE '<@|@>' . ; then
+            echo "::error::unrendered copier token(s) survived the e2e render pass"
+            exit 1
+          fi
+
+      # Seed the operator escape hatch so the provision can PROVE it works, not just
+      # that it renders. kubernetes-custom/ ships empty (README-only) — dropping a
+      # trivial manifest under namespaces/<ns>/ makes the instance-custom ApplicationSet's
+      # git directory generator emit one Application (instance-custom-<ns>), create the
+      # namespace (CreateNamespace=true) and sync the manifest. The post-converge gate
+      # `llz ci assert-instance-custom` (in bootstrap-openbao) then asserts it reaches
+      # Synced+Healthy. Runs AFTER the render pass so the token-survivor grep never sees
+      # this file; a ConfigMap is health-inert, so Synced ⇒ applied and the App goes
+      # Healthy. The name must match the assert step's default (llz-e2e-custom): valid
+      # RFC 1123, not apl-* and not `global`, so custom_layout.go accepts it on the
+      # instance's own `llz render`/doctor — exercising the hatch's happy path too.
+      - name: Seed the escape-hatch custom manifest (kubernetes-custom/namespaces/llz-e2e-custom)
+        if: ${{ inputs.seed_escape_hatch }}
+        run: |
+          set -euo pipefail
+          ns_dir=.e2e-instance/kubernetes-custom/namespaces/llz-e2e-custom
+          mkdir -p "$ns_dir"
+          cat > "$ns_dir/configmap.yaml" <<'YAML'
+          # release-e2e escape-hatch probe: a trivial, health-inert resource the
+          # instance-custom ApplicationSet must generate + sync. Deliberately no
+          # `namespace:` — Argo applies it into the generated App's destination
+          # namespace (the directory basename, llz-e2e-custom).
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: llz-e2e-escape-hatch
+            labels:
+              app.kubernetes.io/managed-by: llz-release-e2e
+          data:
+            probe: "instance-custom escape hatch reached Synced+Healthy"
+          YAML
+          echo "Seeded escape-hatch probe:"
+          ls -la "$ns_dir"
+
+      - name: Stamp provenance + force-push instantiation
+        id: push
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          git init -q
+          git checkout -q -b main
+          git config user.name  "llz-release-e2e[bot]"
+          git config user.email "llz-release-e2e@users.noreply.github.com"
+          # No provenance stamp to write: the minimal .copier-answers.yml hoisted
+          # above already records which template commit this instance came from,
+          # and that is what `llz drift` reads.
+          git add -A
+          git commit -q -m "e2e: instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          # Throwaway fixture repo: overwrite its default branch wholesale.
+          git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@${GH_HOST}/${INSTANCE_REPO}.git"
+          git push -f origin main
+          echo "Pushed instantiation ${HEAD_SHA::8} to ${INSTANCE_REPO}@main"
+          # Drop the operator's per-env values branch from the PREVIOUS run's (now
+          # destroyed) cluster. apl-core's operator self-creates apl-<env> on first
+          # reconcile (values-branch-isolation ADR) but nothing resets it on cluster
+          # recreate: a fresh cluster's operator otherwise consumes the dead cluster's
+          # rendered values + SealedSecrets (sealed by a key that no longer exists) and
+          # wedges before helmfile installs anything — apl_pipeline_ready then times out
+          # at stage 1 (argocd CRD never appears; first seen v0.0.25, run 29446982026).
+          # The branch is machine-owned and force-pushed freely per the ADR, so deleting
+          # it is always safe here; the operator recreates it on first reconcile.
+          git push origin --delete "apl-${E2E_ENV}" 2>/dev/null \
+            && echo "Deleted stale operator branch apl-${E2E_ENV}" \
+            || echo "No stale apl-${E2E_ENV} branch to delete"
+          # platform-bootstrap reads `main` directly now: apl-core's operator no longer
+          # force-pushes main (per-env values-branch isolation keeps it on apl-<env>), so
+          # main stays the instantiated tree for the whole run. Make TF_VAR_apps_repo_revision
+          # (llz-terraform.yml sources it from vars.APPS_REPO_REVISION) resolve to `main`
+          # too, so the bootstrap App's targetRevision matches the env-revision-configmap
+          # `llz render` baked from appsRepoRevision above — cluster-bootstrap's equality
+          # precondition needs both. Set explicitly to overwrite any stale e2e-apps value a
+          # prior run left on the fixture repo.
+          GH_TOKEN="${E2E_DISPATCH_TOKEN}" gh variable set APPS_REPO_REVISION \
+            --repo "${INSTANCE_REPO}" --body "main"
+
+      # ── Pin the instance's CI images to THIS commit ─────────────────────────
+      # The reusable workflows run in vars.TF_IMAGE / vars.KUBE_IMAGE, each baking
+      # the `llz` binary — but those vars are independent of the workflow YAML we
+      # just rendered at GITHUB_SHA. A stale pin makes the baked llz drift from the
+      # workflow (the recurring "llz: unknown flag" / stale-binary e2e failures, e.g.
+      # v0.0.14/v0.0.15). Pin them to this commit's images so they can never drift.
+      # build-images auto-runs only on main pushes, so a branch/dispatch has no
+      # sha- image and a stale `:latest`. --build-if-missing closes that: when this
+      # commit's sha image is absent it triggers Build Container Images on this ref,
+      # waits, and pins the sha — so a branch e2e gets an image whose baked llz
+      # matches the workflow instead of tripping assert-image-fresh.
+      # The logic (build-detection, publish-wait, sha-vs-:latest) lives in unit-tested
+      # Go (llz ci pin-instance-images), not inline bash. Two distinct credentials:
+      # GH_TOKEN_TEMPLATE reads THIS repo's runs + GHCR; GH_TOKEN_INSTANCE writes
+      # the instance repo's variables (needs Variables:read/write).
+      # Runs on BOTH release and workflow_dispatch: a dispatch-only run would
+      # otherwise use whatever stale TF_IMAGE was last set — the exact skew the
+      # image-fresh guard later catches mid-provision.
+      - name: Pin instance CI images to this commit (build them first if missing)
+        env:
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF_NAME}" --build-if-missing
+
+      # ── Actually TRIGGER the instance's pull_request-gated CI ───────────────
+      # The instance's tf-lint and checkov jobs are gated
+      # `if: github.event_name == 'pull_request'` behind a paths: filter. The
+      # fixture repo is driven entirely by force-push to main, workflow_dispatch
+      # and schedule — so those two jobs had never executed, here or in any real
+      # instance, and shipped broken for several releases: they ran `make tf-lint`
+      # against a scaffold that has no Makefile. A gate nothing triggers is
+      # indistinguishable from a gate that passes.
+      #
+      # TestDeliveredWorkflowCommands catches that specific spelling at PR time in
+      # the template repo. This step covers what a static gate structurally cannot:
+      # that the commands RESOLVE AND SUCCEED in the pinned image, on the real
+      # scaffold. It runs after the image pin above so TF_IMAGE is this commit's.
+      #
+      # THE PR IS OPENED AS A DRAFT, which USED to be what kept Plan Cluster off it.
+      # That job ran `llz ci tf-import` — a WRITE to cluster/e2e/terraform.tfstate —
+      # and the provision job dispatches an apply against that same state as soon
+      # as this one returns, under a different concurrency group, over a backend
+      # with no lock. A plan still in flight would race the apply, last write wins,
+      # and closing the PR does not cancel it.
+      #
+      # That job is retired: it could never resolve its environment-scoped
+      # credentials, and could not be given the infra-<env> environment holding
+      # them either, since llz locks that environment to ref=main. No pull-request
+      # path writes Terraform state now — `llz ci workflow-secret-scope` and
+      # TestNoPullRequestPathWritesTerraformState keep it that way — so the draft is
+      # hygiene rather than the mitigation. Every gate this step asserts is local
+      # and read-only.
+      #
+      # The logic lives in unit-tested Go (llz ci assert-instance-pr-gates), not
+      # inline bash: branch-create / PR-open / poll / assert / cleanup is logic, and
+      # the central case is easy to get wrong — `gh pr checks` exits non-zero to
+      # report a FAILING check, so a `|| echo '[]'` fallback reports a broken gate as
+      # one that never ran. See pr_gates.go.
+      - name: Instance PR gates run and pass (tf-lint + checkov)
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-pr-gates --instance "${INSTANCE_REPO}" --sha "${GITHUB_SHA}" --host "${GH_HOST}"
+
+      # Chart analog of the image pin above. The rendered instance pins first-party
+      # llz-* charts at their bumped Chart.yaml versions, but publish-charts only runs
+      # on merge to main — so on a branch/dispatch e2e those versions aren't in GHCR
+      # yet and ArgoCD would 404 the OCI pull (support-plane never syncs → llz-openbao
+      # never created → OpenBao bootstrap dies 15m in). Publish + wait here so the run
+      # never trips that. GITHUB_TOKEN has packages:read (GHCR HEAD) + actions:write
+      # (dispatch publish-charts.yml on THIS repo), so one token covers both.
+      - name: Ensure first-party charts are published (publish + wait if missing)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bin/llz ci chart-publish-check
+          --root .
+          --publish-if-missing
+          --ref "${GITHUB_REF_NAME}"
+          --template-repo "${GITHUB_REPOSITORY}"

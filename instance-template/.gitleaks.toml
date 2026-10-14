@@ -38,3 +38,43 @@ id           = "shell-token-placeholder-region-env"
 description  = "Bash placeholder <token> followed by REGION env var assignment"
 regexTarget  = "match"
 regexes      = ['''token>\s+REGION=''']
+
+# False-positive: generic-api-key matches the `keyRotationDays: DEPRECATED/ignored`
+# note in the landing-zone spec doc (the `key…` word plus following prose). It is
+# documentation in a spec example, not a credential. Narrow to that exact phrase.
+# (Kept in sync with the repo-root .gitleaks.toml; this copy ships to instances.)
+[[allowlists]]
+id           = "spec-keyrotationdays-doc-note"
+description  = "keyRotationDays deprecation note in docs/landing-zone-spec.md"
+regexTarget  = "match"
+regexes      = ['''keyRotationDays:\s+DEPRECATED''']
+
+# False-positive: `openbaoKey:` in a managed-apps app manifest names an OpenBao
+# path (an ESO remoteRef), NOT a secret value — the credential itself is fetched
+# at runtime and never committed. gitleaks' generic-api-key heuristic sees
+# `…Key: <value>` and guesses. Match only the exact `openbaoKey: <path>` shape
+# (regexTarget=match, NOT path-scoped) so a real secret on any other line/file is
+# still caught — a `paths` glob would OR-allowlist the whole file and hide them.
+[[allowlists]]
+id           = "managed-apps-openbao-key-ref"
+description  = "openbaoKey is a vault path reference, not a secret"
+regexTarget  = "match"
+regexes      = ['''openbaoKey:\s*\S+''']
+
+# False-positive, and a blocking one: SealedSecret `encryptedData` values are
+# ciphertext — sealed to the cluster's public key precisely SO THAT they can be
+# committed. gitleaks' generic-api-key heuristic sees `password: <long opaque
+# string>` and flags every one. It matters more than the others because the
+# pre-commit hook runs `gitleaks detect --source .`, which scans ALL history on
+# ALL refs: an instance whose apl-values branch carries sealed secrets (the normal
+# design) has every commit in the repo blocked, on any branch, forever.
+#
+# Scoped to the ciphertext ITSELF (regexTarget=secret), not to a path: kubeseal's
+# envelope is base64 that always starts with `Ag`, and a 200+ char run of it is not
+# a shape a real credential takes. A `paths` glob over sealedsecrets/ would
+# OR-allowlist those whole files and hide a genuine leak pasted alongside.
+[[allowlists]]
+id           = "sealed-secret-ciphertext"
+description  = "SealedSecret encryptedData is asymmetrically encrypted by design"
+regexTarget  = "secret"
+regexes      = ['''^Ag[A-Za-z0-9+/]{200,}={0,2}$''']

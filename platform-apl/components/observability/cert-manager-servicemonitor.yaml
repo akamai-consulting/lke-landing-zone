@@ -1,0 +1,61 @@
+# Scrape cert-manager's controller metrics (:9402) so Prometheus sees
+# certmanager_certificate_expiration_timestamp_seconds — the signal the credential
+# single-pane uses to alert BEFORE a cert expires (LLZCertificateExpiringSoon in
+# prometheus-rules/credential-alerts.yaml). The reconciler's llz_certificates_not_ready
+# only fires once a cert is ALREADY broken; this adds the lead-time.
+#
+# REQUIRED label `prometheus: system`: apl-core's Prometheus serviceMonitorSelector
+# matches it (same as the reconciler/otel ServiceMonitors). The port is jetstack
+# cert-manager's metrics port `tcp-prometheus-servicemonitor` (9402) on the
+# `cert-manager` controller Service; the allow-netpol (cert-manager-allow-metrics.yaml)
+# opens the default-deny cert-manager namespace for the scrape.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  endpoints:
+      # THE PORT NAME, NOT THE PORT. cert-manager renamed its metrics port from
+      # `tcp-prometheus-servicemonitor` to `http-metrics`; the port NUMBER is
+      # still 9402, so cert-manager-allow-metrics.yaml (which allows 9402
+      # numerically) never noticed and stayed correct throughout.
+      #
+      # A ServiceMonitor endpoint naming a port no Service exposes is not an
+      # error anywhere — Prometheus simply discovers no target, the Service is
+      # healthy, cert-manager is healthy, and the only symptom is metrics that
+      # were never collected. It was caught by `llz ci assert-scrape-targets`
+      # reporting NO scrape target on a cold e2e cluster (2026-08-24).
+      #
+      # MEASURED, not inferred, on that cluster:
+      #   $ kubectl -n cert-manager get svc -o jsonpath=…
+      #   cert-manager              http-metrics
+      #   cert-manager-cainjector   http-metrics
+      #   cert-manager-webhook      https metrics
+      # with labels app.kubernetes.io/name=cert-manager,
+      # app.kubernetes.io/component=controller — so the SELECTOR half of this
+      # file was correct all along and only the port name was stale.
+      # cert-manager v1.21.1, as installed by managed apl-core.
+    - port: http-metrics
+      # PLAINTEXT, and out of LLZ's reach — an accepted residual of ADR 0010.
+      # cert-manager is installed and configured by apl-core; its metrics listener
+      # serves HTTP and LLZ cannot give it a serving certificate from here. The
+      # payload is cert-manager's own counters plus certificate expiry timestamps
+      # — no key material. Closing this needs an apl-core change, not a change in
+      # this repo.
+      scheme: http
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s

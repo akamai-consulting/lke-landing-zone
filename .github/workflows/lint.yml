@@ -15,15 +15,51 @@ on:
       - 'instance-template/terraform-iac-bootstrap/**'
       - 'instance-template/.github/workflows/bootstrap-openbao.yml'
       - 'instance-template/.template-manifest'
+      - 'instance-template/.template-managed.lock'
       - 'template-scripts/**'
       - '.kube-linter.yaml'
       - '.checkov.yaml'
       - '.tflintrc.hcl'
       - 'Makefile'
       - 'tools/**'
-      - '.github/workflows/**'
+      # THE WHOLE OF .github, not the two subtrees that used to be listed here.
+      # `.github/workflows/**` and `.github/actions/**` were added one at a time,
+      # each after a PR touching only that tree started no run — and `.github/scripts`
+      # was still uncovered, which `llz ci k8s-minor-coherence` found by asking
+      # whether every tree it READS can start the workflow. Enumerating subtrees
+      # loses that race one directory at a time; the parent cannot.
+      - '.github/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
+      # The GITOPS TREES the gates actually read. platform-apl/ is 91 files of
+      # sync-wave manifests and components, and NO path here matched it — so a PR
+      # touching only that tree started no run of this workflow at all, and with it
+      # none of the 24 gates. wave-health's entire subject is
+      # platform-apl/manifest + platform-apl/components; mesh-egress,
+      # monitoring-labels, guard-manifests, posture-plaintext, credential-coverage,
+      # pin-coherence and cosign-subject all read it too, and `prom-rules-check`
+      # lints platform-apl/components/observability/prometheus-rules by path.
+      # This is the same defect as the Markdown entry below, one tree over: the
+      # Makefile's changed-file lint has named `^platform-apl/` and
+      # `^instance-template/apl-values/` as a change class needing wave-health-guard
+      # all along, so the local mirror knew about a class CI could not be triggered
+      # by. A guard that cannot be invoked is not a guard.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
+      # Markdown ANYWHERE. The `docs` job below runs docs-guard, whose corpus is
+      # every .md file in the repo — but no path here matched one, so the guard
+      # only ever ran when a PR happened to also touch code. A docs-only PR (the
+      # exact change class it was built for) got no CI at all, which is the
+      # vacuous pass docs/e2e-gates.md refuses, one level up: the gate existed,
+      # was tested, was wired into `make lint`, and nothing in CI could invoke it.
+      # Deliberately '**.md' rather than 'docs/**' — chart READMEs, AGENTS.md,
+      # instance-template/ prose and .claude/skills/ are all in the corpus. And
+      # '**.md', NOT '**/*.md': GitHub's matcher treats `**` as "any characters
+      # INCLUDING /", so `**/*.md` requires a separator and silently misses every
+      # ROOT-level file — AGENTS.md and README.md, both of which the guard reads.
+      # An under-matching filter is what this whole entry exists to fix.
+      - '**.md'
   push:
     branches: [main, master]
     paths:
@@ -32,15 +68,28 @@ on:
       - 'instance-template/terraform-iac-bootstrap/**'
       - 'instance-template/.github/workflows/bootstrap-openbao.yml'
       - 'instance-template/.template-manifest'
+      - 'instance-template/.template-managed.lock'
       - 'template-scripts/**'
       - '.kube-linter.yaml'
       - '.checkov.yaml'
       - '.tflintrc.hcl'
       - 'Makefile'
       - 'tools/**'
-      - '.github/workflows/**'
+      # THE WHOLE OF .github, not the two subtrees that used to be listed here.
+      # `.github/workflows/**` and `.github/actions/**` were added one at a time,
+      # each after a PR touching only that tree started no run — and `.github/scripts`
+      # was still uncovered, which `llz ci k8s-minor-coherence` found by asking
+      # whether every tree it READS can start the workflow. Enumerating subtrees
+      # loses that race one directory at a time; the parent cannot.
+      - '.github/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
+      # The gitops trees — see the note on the pull_request copy above.
+      - 'platform-apl/**'
+      - 'instance-template/apl-values/**'
+      # Markdown anywhere — see the note on the pull_request copy above.
+      - '**.md'
   workflow_dispatch:
 
 name: Lint
@@ -53,18 +102,55 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  KIND_VERSION: v0.25.0
+  # kind, and the node image the dry-run's API server actually runs.
+  #
+  # THE NODE IMAGE IS THE PIN THAT MATTERS. Given only `version:`, kind boots ITS
+  # OWN default node image, so this repo's most load-bearing manifest gate —
+  # `kubectl apply --dry-run=server` — would answer "would kind's default server
+  # accept these manifests?" rather than the LKE-E minor we deploy. An API removed
+  # in a later minor, or a field only a newer server validates, then passes here
+  # and fails on a real cluster (#427).
+  #
+  # `llz ci k8s-minor-coherence` now ASSERTS the relation rather than trusting
+  # this comment: the image's minor must equal the LKE-E minor pinned in the
+  # cluster root's terraform.tfvars.example. Bump the two together; the guard
+  # names both sites in its failure.
+  #
+  # KIND_VERSION is a weaker constraint and deliberately unasserted: it only has
+  # to be a kind release that KNOWS this minor (v0.32.0 ships 1.33/1.34/1.35/1.36
+  # node images). No static check can decide that — the mapping lives in kind's
+  # release notes, and a table of it here would be one more copy to rot — but a
+  # kind too old for the image fails loudly at cluster create rather than
+  # silently validating against the wrong server, which is the failure mode that
+  # matters.
+  #
+  # TAG AND DIGEST, BOTH REQUIRED, and they do different jobs. Docker pulls
+  # `name:tag@digest` BY DIGEST, so the digest is what kind actually boots — kind's
+  # release notes publish it because node images are not compatible across kind
+  # releases — while the tag is the only half a static guard can read a minor out
+  # of. Take BOTH from the release notes of the KIND_VERSION above, in one paste:
+  # a bumped tag with a stale digest boots the old server while the guard reads the
+  # new minor and passes, which is why the dry-run job below also asserts the
+  # cluster it actually got. No static check can tell a consistent pair from a
+  # correct pair.
+  KIND_VERSION: v0.32.0
+  KIND_NODE_IMAGE: kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
   HELM_VERSION: "3.17.3"
-  KUBECTL_VERSION: "1.31.0"
+  KUBECTL_VERSION: "1.34.10"
   YQ_VERSION: "4.44.3"
   # Operator versions used only for offline CRD installs in the dry-run job.
   # Apl-core itself owns these in production — match its bundled versions so
   # the dry-run validates against the same CRD schemas the cluster will use.
   ARGOCD_HELM_VERSION: "7.8.0"
   CERT_MANAGER_VERSION: "v1.16.3"
-  ESO_HELM_VERSION: "0.12.1"
+  # apl-core 6.x bundles external-secrets 2.4.1, whose CRDs serve
+  # external-secrets.io/v1 (the old 0.12.1 chart served only v1beta1/v1alpha1).
+  # Our manifests moved to v1 for apl-core 6.x, so the dry-run must install a v1-
+  # serving CRD or every ExternalSecret/ClusterSecretStore fails "no matches for
+  # kind … in version external-secrets.io/v1". Keep this matched to apl-core's bundle.
+  ESO_HELM_VERSION: "2.4.1"
   # Match the chart versions referenced from
-  # apl-values/_shared/manifest/argo-{events,workflows}/argocd/applications/.
+  # platform-apl/manifest/argo-{events,workflows}/argocd/applications/.
   ARGO_WORKFLOWS_HELM_VERSION: "0.42.3"
   ARGO_EVENTS_HELM_VERSION: "2.4.13"
   # Istio Gateway + VirtualService CRDs needed by per-env ingress trees.
@@ -72,6 +158,11 @@ env:
   # kube-prometheus-stack CRDs (PrometheusRule, ServiceMonitor, PodMonitor)
   # used by the rendered OpenBao ServiceMonitor.
   KUBE_PROMETHEUS_STACK_VERSION: "61.7.2"
+  # Full Kyverno install (controller + webhooks, not just CRDs) for the
+  # policy-admission gate in the dry-run job. Version approximates apl-core's
+  # bundle; the check this guards — Kyverno's validate-policy webhook rejecting
+  # a malformed ClusterPolicy — is stable across recent versions.
+  KYVERNO_HELM_VERSION: "3.4.4"
   # Terraform jobs.
   TF_IN_AUTOMATION: 'true'
 
@@ -95,39 +186,57 @@ jobs:
     # private KUBE_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.8 / max 1.0); GitHub's default is 6h.
+    timeout-minutes: 15
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
       packages: read
     container:
       # Fall back to the image build-images.yml publishes under this repo's owner
-      # when KUBE_IMAGE isn't set, so CI works on a fresh fork with no repo
-      # variables. (Owner must be lowercase for GHCR — true for org logins.)
-      image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:1.31.0', github.repository_owner) }}
+      # when KUBE_IMAGE isn't set. (Owner must be lowercase for GHCR — true for
+      # org logins.) This repo sets neither KUBE_IMAGE nor TF_IMAGE, so the
+      # fallback is what every Lint run here actually resolves — not a fresh-fork
+      # edge case.
+      #
+      # :latest, NOT :${KUBECTL_VERSION}, AND `llz ci version-pins` ENFORCES THAT.
+      # Restating the Dockerfile's KUBECTL_VERSION here makes a kubectl bump
+      # self-defeating: version-pins (correctly) requires the two to agree, so the
+      # bump points this job at a tag build-images.yml has not published yet — it
+      # builds on pushes to main, this runs on the bump's own push — and Lint dies
+      # with `manifest unknown` on a reference that looks broken rather than early.
+      # Where no variable pins the image, a moving tag is the honest answer; set
+      # KUBE_IMAGE to a :sha-<commit> tag for a reproducible pin.
+      #
+      # `:latest` IS SAFE TO FOLLOW because build-images.yml publishes the mutable
+      # tags only from the default branch's HEAD (PUBLISH_MUTABLE); every other ref
+      # gets :sha-<commit> and nothing else, and `llz ci mutable-tag-guard` fails
+      # the PR that undoes it.
+      #
+      # WHAT THIS COSTS: on the push that bumps KUBECTL_VERSION this job runs the
+      # PREVIOUS image, so its baked kubectl is one version behind for that run.
+      # `make k8s-validate` passes -kubernetes-version $(KUBECTL_VERSION) from the
+      # Makefile's own pin, so the schema validation that depends on the version
+      # follows the bump immediately.
+      image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:latest', github.repository_owner) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Add /usr/local/bin to PATH
         run: echo "PATH=/usr/local/bin:${PATH}" >> "$GITHUB_ENV"
 
-      # `make lint-k8s` runs `externalsecret-paths-check`, which calls `llz ci
-      # externalsecret-paths`. The published ci-kubernetes image bakes llz
-      # (dockerfiles/kubernetes/Dockerfile), but a PR that changes tools/ runs
+      # `make lint-k8s` runs `llz-gates`, which is `llz ci gates` — the whole
+      # declared gate set in one process, replacing the thirteen individual
+      # `llz ci <verb>` shell-outs this job used to make. The published ci-kubernetes image bakes llz
+      # (dockerfiles/Dockerfile (ci-kubernetes target)), but a PR that changes tools/ runs
       # before that image is rebuilt — and the image carries no Go toolchain, so
       # the Makefile's `go run` fallback can't fire either. Set up Go and build
       # llz onto PATH so the check runs regardless of the image's age; once the
       # rebuilt image carries llz this is a fast, redundant no-op.
-      - name: Set up Go (to build llz)
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - name: Set up Go and build llz onto PATH
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-      - name: Build llz onto PATH
-        # -buildvcs=false: the checkout is owned by a different UID than the
-        # container's root user, so git refuses VCS queries ("dubious
-        # ownership") and stamping would fail. The lint build needs no version
-        # stamp (the released binary is stamped by llz-release.yml).
-        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+          install-path: /usr/local/bin/llz
 
       - name: Render + lint/validate charts, manifests, and scripts
         run: make lint-k8s
@@ -149,13 +258,15 @@ jobs:
   dry-run:
     name: Server-side dry-run (kind)
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 2.4 / max 2.5 (kind boot)); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v${{ env.HELM_VERSION }}
 
@@ -169,6 +280,16 @@ jobs:
         with:
           version: v${{ env.YQ_VERSION }}
 
+      # llz, because the Kyverno gate below applies its policies through
+      # `llz ci apply-kyverno-policy` rather than a bare `kubectl apply` — see that
+      # step. Via ./.github/actions/setup-llz, which is the ONLY sanctioned way to
+      # get a Go toolchain in this repo's workflows (`setup-go-sole-site` fails a
+      # second setup-go pin, and a second pin had already drifted a major version).
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: ${{ github.workspace }}/bin/llz
+
       # helm/kind-action installs kind (KIND_VERSION) and stands up the cluster in
       # one step; the ephemeral runner is torn down afterward, so no explicit
       # delete is needed.
@@ -176,32 +297,71 @@ jobs:
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           version: ${{ env.KIND_VERSION }}
+          # The API server every `--dry-run=server` in this job is answered by.
+          # See KIND_NODE_IMAGE's note above; `llz ci k8s-minor-coherence` holds
+          # it to the LKE-E minor we deploy.
+          node_image: ${{ env.KIND_NODE_IMAGE }}
+          # AND IT INSTALLS ITS OWN KUBECTL. kind-action downloads kubectl into
+          # its cache and appends that directory to GITHUB_PATH, which PREPENDS
+          # it to PATH for every later step — so it shadowed the azure/setup-kubectl
+          # step above and the applies below ran on the action's default (v1.35.0)
+          # rather than on KUBECTL_VERSION. Nothing named the wrong binary; the
+          # steps just used it. Pinning the input to the same env keeps one kubectl
+          # in the job whatever order the two steps end up in.
+          kubectl_version: v${{ env.KUBECTL_VERSION }}
           cluster_name: k8s-ci
           wait: 60s
 
+      # THE LIVE HALF of `llz ci k8s-minor-coherence`. That gate reads the version
+      # off KIND_NODE_IMAGE's TAG; the digest beside it is what docker pulls, so
+      # the two can disagree and no static reader can tell. This asks the cluster.
+      #
+      # KEPT TO ONE LINE, and be honest about why: `untestable-loc`'s
+      # workflow-inline-bash counter reads BLOCK scalars, so a single-line `run:`
+      # is not measured at all rather than measured at zero. This is shell no
+      # budget sees — which is an argument for keeping it to one line and for the
+      # guard asserting the step exists, not for pretending it was counted.
+      #
+      # EXACT, not major.minor. Comparing only the minor left a bumped tag beside a
+      # stale digest passing both halves whenever the two shared a minor — the
+      # commonest way to get it wrong, since bumps within a minor are the frequent
+      # ones. The tag names a patch; the server reports a patch; compare those.
+      - name: The cluster must run the version its tag names
+        run: kubectl version -o json | jq -e --arg t "${KIND_NODE_IMAGE#kindest/node:v}" '.serverVersion.gitVersion == "v" + ($t | split("@")[0])'
+
       - name: Add Helm repos
+        env:
+          R: template-scripts/ci/with-retry.sh
         run: |
           set -euo pipefail
-          make helm-repos
+          # Retry transient upstream index-fetch blips (helm has no native --retry).
+          make helm-repos   # already retries its adds/update internally
           # Istio chart repo isn't in the shared helm-repos target — it's only
           # needed here for Gateway/VirtualService CRD installs in dry-run.
-          helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
-          helm repo update
+          $R helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          # Kyverno: full install (not just CRDs) for the policy-admission gate below.
+          $R helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update
+          $R helm repo update
 
       - name: Install CRDs
+        env:
+          R: template-scripts/ci/with-retry.sh
         run: |
           set -euo pipefail
+          # Retry transient chart-pull blips. with-retry.sh is pipe-safe as a source:
+          # it buffers helm's stdout and emits it only on the successful attempt, so a
+          # failed attempt's partial render never reaches `yq | kubectl`.
 
           echo "ArgoCD CRDs (argo-cd ${ARGOCD_HELM_VERSION})..."
           # argo-cd places CRDs in templates/ not crds/, so helm show crds returns
           # nothing. Use helm template --include-crds and filter with yq.
-          helm template argocd argo/argo-cd --version "$ARGOCD_HELM_VERSION" \
+          $R helm template argocd argo/argo-cd --version "$ARGOCD_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
 
           echo "cert-manager CRDs (${CERT_MANAGER_VERSION})..."
-          helm template cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VERSION#v}" \
+          $R helm template cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VERSION#v}" \
             --include-crds --set crds.enabled=true \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
@@ -209,13 +369,18 @@ jobs:
           echo "External Secrets Operator CRDs (${ESO_HELM_VERSION})..."
           # ESO puts CRDs in templates/ (not crds/) — helm show crds returns nothing.
           # Render with --set crds.create=true to ensure the conditional fires.
-          helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
+          # The 2.4.x clustersecretstores/secretstores CRDs exceed kubectl's
+          # 262144-byte limit on the last-applied-configuration annotation, so a
+          # client-side apply errors "metadata.annotations: Too long". Server-side
+          # apply doesn't use that annotation — required here (same as kube-prometheus
+          # below).
+          $R helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
             --set crds.create=true \
             | yq 'select(.kind == "CustomResourceDefinition")' \
-            | kubectl apply -f -
+            | kubectl apply --server-side=true --force-conflicts -f -
 
           echo "Istio base CRDs (istio/base ${ISTIO_VERSION})..."
-          helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \
+          $R helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
 
@@ -225,9 +390,9 @@ jobs:
           # `helm template --include-crds` and yq filter, same pattern as argocd/eso above.
           # Installs: workflows, workflowtemplates, cronworkflows, clusterworkflowtemplates,
           # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
-          # Referenced from apl-values/_shared/manifest/cert-automation/
+          # Referenced from manifest/cert-automation/
           # haproxy-rebuild-workflowtemplate.yaml.
-          helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
+          $R helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
@@ -237,8 +402,8 @@ jobs:
           # returns nothing — use `helm template --include-crds` and yq filter,
           # same pattern as argocd/eso above.
           # Installs: eventbus, eventsources, sensors. Referenced from
-          # apl-values/_shared/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
-          helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
+          # manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
+          $R helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
@@ -266,6 +431,11 @@ jobs:
       - name: Validate rendered ArgoCD Applications
         # Semantic checks (e.g. duplicate Helm parameters) on the generated
         # Applications; render-charts already ran above so this is a no-op render.
+        #
+        # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and that is not
+        # redundancy to delete: this runs it BEFORE the kind cluster is created, so
+        # a malformed Application fails in seconds instead of after a cluster spin.
+        # The duplicate buys placement, not coverage.
         run: make argocd-rendered-apps-check
 
       - name: Create namespaces
@@ -287,7 +457,233 @@ jobs:
       - name: Server-side dry-run of the rendered charts
         run: kubectl apply --dry-run=server -f rendered/
 
+      # ── overlay appliability ─────────────────────────────────────────────────
+      # THE FAILURE THIS PREVENTS. clusterspec.OverlayField.CreateOnly is a HAND-SET
+      # boolean, and the two Go guards around it only check that it is used
+      # CONSISTENTLY — a CreateOnly field must name a migration, a mutable one must
+      # not. Neither asks an API server whether the classification is TRUE. So an
+      # overlay entry whose field the apiserver fixes at create time ships with
+      # CreateOnly:false by omission, and on every cluster whose object predates it
+      # Argo dry-run-applies, is refused, produces NO DIFF, and reports Synced —
+      # discarding that value and every other change to the same object with it.
+      # That is the 16-day Loki OOM crashloop (PR #537), and nothing static can
+      # catch it: create-time immutability is a property of the apiserver's
+      # validation, not of anything in this repo. So the gate asks one.
+      #
+      # BROWNFIELD-ONLY BY NATURE, which is why no e2e lane sees it — a fresh
+      # cluster CREATES each object in its final shape and never meets the
+      # transition. The fixtures are what supply the "already exists" half.
+      #
+      # Two steps because the verb is declared cluster-READ: it dry-run-patches
+      # (which persists nothing), and the fixtures are applied by kubectl here
+      # rather than by llz, so the grant stays honest.
+      # One command per step, and the emit writes a FILE rather than piping into
+      # kubectl. NOT because a pipe would fail open HERE — `defaults.run.shell: bash`
+      # at the top of this file makes GitHub invoke every `run:` with `-eo pipefail`,
+      # so in THIS workflow a pipeline would carry llz's status correctly. The reason
+      # is that the verb is documented and reproduced by hand, on shells that have no
+      # such default: `llz … | kubectl apply -f -` takes kubectl's status, and kubectl
+      # given empty stdin exits 0, so a verb that refused to emit leaves the lane
+      # probing an absent object and surfaces as a confusing red two steps on. Keeping
+      # the workflow and the runbook on the same shape means the form an operator
+      # copies is the form that is safe everywhere.
+      - name: Emit pre-overlay fixtures
+        run: '"$GITHUB_WORKSPACE/bin/llz" ci assert-overlay-appliability --emit-fixtures --out "$RUNNER_TEMP/overlay-fixtures.json"'
 
+      # THE FIXTURES CARRY NO NAMESPACE OBJECTS, deliberately — the "Create
+      # namespaces" step above owns those. An earlier version emitted one per target
+      # carrying only metadata.name, and applying it three-way-merged every other
+      # field away: verified live, `monitoring` lost `monitoring: enabled` and its
+      # -20 sync-wave — before the VAP and Kyverno admission gates below run in this
+      # same job. (It did NOT lose a PSA label, as this note used to say:
+      # llz-cluster-foundation declares `monitoring` with `restricted: false`, so the
+      # rendered namespace has none.) `--server-side` does not avoid it either
+      # (kubectl migrates the client-side last-applied annotation on takeover).
+      #
+      # WHICH NAMESPACES THE LANE THEN OWES is not left to this comment:
+      # TestEveryFixtureNamespaceIsOneTheLaneActuallyCreates compares
+      # assertplatform.FixtureNamespaces() against the "Create namespaces" step
+      # above, so a new overlay row in a namespace nothing creates fails at `go test`
+      # instead of six minutes into CI in a step named for the apply.
+      - name: Apply pre-overlay fixtures
+        run: kubectl apply -f "$RUNNER_TEMP/overlay-fixtures.json"
+
+      - name: Overlay appliability gate
+        run: '"$GITHUB_WORKSPACE/bin/llz" ci assert-overlay-appliability'
+
+      # ── VAP admission gate (llz-wave-health-guard) ───────────────────────────
+      # Apply the wave-health ValidatingAdmissionPolicy (the kind apiserver COMPILES
+      # its CEL — a syntax error fails here, which kubeconform + the Go allowlist test
+      # can't catch) and assert enforcement with a label-scoped Deny binding: an
+      # unvetted negative-wave kind is denied; allowlisted + argoproj.io (child-App)
+      # kinds pass. Needs the Argo Events CRDs installed above (EventBus probe).
+      # Before the Kyverno gate so no live controller perturbs it.
+      - name: Wave-health VAP admission gate
+        run: template-scripts/ci/vap-admission-check.sh
+
+      # ── Kyverno policy-admission gate ────────────────────────────────────────
+      # A CRD-schema dry-run does NOT catch what Kyverno's validate-policy
+      # webhook rejects: the 2026-07-04 bootstrap wedge #2 was ClusterPolicies
+      # mixing spec.mutateExistingOnPolicyUpdate with target-less admission
+      # rules — schema-valid, webhook-denied — which wedged the platform-
+      # bootstrap sync at wave -15 on a real cluster (PR #142). Install the
+      # REAL Kyverno controller and apply (not dry-run — webhook execution
+      # must be unconditional) the shipped ClusterPolicies against it.
+      # Deliberately LAST: a live admission controller must not perturb the
+      # dry-run steps above (e.g. verifyImages intercepting rendered CronJobs).
+      # VIA `llz ci apply-kyverno-policy`, NOT a bare `kubectl apply`. `helm --wait`
+      # returns when the DEPLOYMENT is Available, which is not the webhook being
+      # reachable — Kyverno registers its policy webhooks separately, so kyverno-svc
+      # can still have no ready endpoint. An apply landing in that window is refused
+      # with `dial tcp …: connect: connection refused` from mutate-policy.kyverno.svc,
+      # which names a webhook and so reads as a policy failure. It reddened a pull
+      # request that touched no Kubernetes at all. The verb polls for a ready
+      # endpoint before applying.
+      #
+      # WEBHOOK_RACE_FATAL: the verb's default is a SOFT skip, which is right for
+      # cluster-bootstrap's re-runnable null_resource and wrong for a gate — a check
+      # that passes having applied nothing is a vacuous pass.
+      - name: Kyverno policy-admission gate (shipped ClusterPolicies)
+        run: |
+          set -euo pipefail
+          helm install kyverno kyverno/kyverno \
+            --namespace kyverno --create-namespace \
+            --version "$KYVERNO_HELM_VERSION" \
+            --wait --timeout 5m
+          kubectl kustomize platform-apl/components/imageSignature > "$RUNNER_TEMP/policies.yaml"
+          KUBECONFIG_RAW="$(cat "$HOME/.kube/config")" POLICY_MANIFEST="$RUNNER_TEMP/policies.yaml" FIELD_MANAGER=lint-kind WEBHOOK_RACE_FATAL=true "$GITHUB_WORKSPACE/bin/llz" ci apply-kyverno-policy
+
+
+
+  # ── Scaffold check ───────────────────────────────────────────────────────────
+  # Reproduces the real per-env scaffold path (`llz env add`) and asserts what it
+  # produces: no `your-env` placeholder survives, the per-env files the bootstrap
+  # reads exist, and — the arm that matters most — NO apl-core values.yaml is
+  # emitted. Linode owns apl-core's values on the managed App Platform, and a
+  # rendered values.yaml would be a file shipping to instances that reaches no
+  # cluster, which is exactly what happened to the retired base for a year.
+  #
+  # This job used to run two more checks, both on a rendered apl-core values.yaml:
+  # a runtime-placeholder var-contract and apl-core's chart schema via
+  # `helm template apl/apl`. The verb behind them (validate-apl-values, now
+  # retired) had no input left once LLZ stopped rendering that file.
+  # Needs Go — build a FRESH llz, since a tools/ PR predates the image rebuild.
+  scaffold:
+    name: Scaffold check
+    runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go (build llz — the scaffolder)
+        uses: ./.github/actions/setup-llz
+      - name: Install Helm (apl-core schema validation)
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v${{ env.HELM_VERSION }}
+      - name: Install kubectl (kustomize-build the rendered overlays)
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: v${{ env.KUBECTL_VERSION }}
+      - name: Scaffold a throwaway env and validate its apl-values
+        run: make scaffold-check
+
+  # ── Docs ─────────────────────────────────────────────────────────────────────
+  # Validates every Markdown file against the repo it documents: `llz` commands +
+  # flags against the live cobra tree, `gh workflow run` inputs against the
+  # workflows' declared inputs, and relative links resolved BOTH here and in the
+  # post-`deliver-docs` keep-set an adopter carries.
+  #
+  # Its own job, and cheap (seconds, no cloud, no Helm): a docs-only PR should not
+  # have to wait on kind, and a docs defect should not be buried in a lint job
+  # whose name gives no hint that the failure is in a runbook.
+  #
+  # Needs Go for the same reason as `scaffold`: it must check the docs against the
+  # CLI IN THIS PR, not against the last released binary. Checking against an old
+  # CLI would miss exactly the rename-shaped drift the guard exists for.
+  docs:
+    name: Docs guard
+    runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.4 / max 0.5); GitHub's default is 6h.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go (build llz — the guard reads its own command tree)
+        uses: ./.github/actions/setup-llz
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job. It keeps its own job
+      # because it must resolve documented invocations against the cobra tree THIS
+      # PR builds, which needs the Go toolchain set up above — the container jobs
+      # have a prebuilt llz from the merge-base.
+      - name: Commands, workflow inputs and links resolve
+        run: make docs-guard
+
+  # ── Instantiate (copier render) ──────────────────────────────────────────────
+  # Renders instance-template/ into a throwaway instance with the REAL copier and
+  # asserts no unrendered `<@ … @>` tokens survived, the required per-instance
+  # structure is present, and the rendered workflows pass actionlint. Copier-
+  # templating bugs — an unrendered `<@ forge_flavor @>` (Jun 17) or a copier
+  # EXPRESSION `<@ instance_repo.split('/')[-1] @>` the raw-cp/sed render can't do
+  # (Jun 24) — burned e2e runs across the early history; release-e2e's Instantiate
+  # only catches them AFTER dispatching a provision. This catches them in seconds,
+  # no cloud. Distinct from `scaffold` (that renders apl-values via `llz render` +
+  # validates the apl-core schema; this renders the whole instance via copier).
+  # SKIP_TF=1: the rendered TF roots' `terraform validate` is already covered by
+  # the `terraform` job (tf-validate-roots).
+  instantiate:
+    name: Instantiate (copier render)
+    runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.7 / max 0.7 (real copier render)); GitHub's default is 6h.
+    # That history PREDATES the depth-3 upgrade-test below, which adds one scaffold
+    # + one real `llz upgrade` per release covered (~2.5 min for all three, measured
+    # locally; CI is slower). 20 still holds with room — recorded here so the next
+    # reader does not size a change against a p50 that no longer describes the job.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # git describe --tags (llz_version) + copier's `--vcs-ref HEAD` need the
+          # full history + tags, not the default shallow clone.
+          fetch-depth: 0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: /usr/local/bin/llz
+      - name: Install copier + actionlint
+        run: |
+          set -euo pipefail
+          pipx install copier
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the template + assert render + structure + actionlint
+        run: SKIP_TF=1 template-scripts/ci/instance-test.sh
+
+      # The day-2 half: instance-test proves `copier copy`, this proves the UPGRADE.
+      #
+      # THE DEFAULT DEPTH IS 3 AND IS NOT PASSED HERE: the gate's own default is
+      # what a maintainer gets from `make upgrade-test`, and pinning a different
+      # number in CI is how the two quietly stop testing the same thing. Three
+      # releases back, because the instance that breaks is the one that SKIPPED
+      # releases — a file whose manifest class changed in vN-2 meeting a file
+      # whose content moved in vN-1 — and one hop only ever covered the adopter
+      # who upgrades every week.
+      #
+      # `llz` here is setup-llz's build of THIS tree, which is the whole point:
+      # the gate now runs the real `llz upgrade`, whose manifest-policy and
+      # removals passes are Go in this repo, so a released binary would answer for
+      # code that is not under test. It is also what copier's `_tasks` resolve as
+      # `llz` — install-path above puts it on PATH, and the gate fails closed
+      # rather than comparing two instances that both took the no-llz fallback.
+      # The checkout above is already fetch-depth: 0, so the release tags this
+      # scaffolds from are present — the gate self-skips rather than fails if they
+      # ever are not.
+      - name: Upgrade the last three releases to this commit
+        run: llz ci upgrade-test --template .
 
   # ── Terraform ────────────────────────────────────────────────────────────────
   # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):
@@ -300,29 +696,45 @@ jobs:
     # private TF_IMAGE and must not run with repo context).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 0.9 / max 1.2); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
       # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
       packages: read
     container:
       # Fall back to the image build-images.yml publishes under this repo's owner
-      # when TF_IMAGE isn't set, so CI works on a fresh fork with no repo
-      # variables. (Owner must be lowercase for GHCR — true for org logins.)
-      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.9.8', github.repository_owner) }}
+      # when TF_IMAGE isn't set — which, on this repo, is always: no TF_IMAGE
+      # variable is set, so this fallback is the live path for every run.
+      # (Owner must be lowercase for GHCR — true for org logins.)
+      #
+      # :latest, NOT :${TOFU_VERSION} — same scar as the Kubernetes lint job
+      # above, and `llz ci version-pins` enforces the floating tag here too.
+      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-tofu:latest', github.repository_owner) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Toolchain only, deliberately: no install-path, so `llz` on PATH stays the
+      # binary baked into ci-tofu. Every LLZ_CI target this job reaches therefore
+      # has to export LLZ_FORCE_SOURCE — at-rest-guard, managed-lock-check and
+      # template-manifest-check all do, and TestContainerJobsRunThePRsLlz pins it.
+      # (This step used to be named "source llz for template-manifest gate", which
+      # asserted an intent the Makefile did not implement: that target was the one
+      # target here NOT forcing source, so it ran the merge-base binary.)
+      - name: Set up Go (the forced-source gates below compile llz from this PR)
+        uses: ./.github/actions/setup-llz
 
       - name: tflint + checkov + validate instance roots
         run: make lint-tf
 
-      - name: Upload Checkov SARIF report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: checkov-results
-          path: results_*.sarif
-          if-no-files-found: ignore
-          retention-days: 14
+      # (An "Upload Checkov SARIF report" step ran here, uploading results_*.sarif.
+      # `make checkov` never passed -o sarif or an output path, so that file was
+      # never produced; if-no-files-found: ignore kept the step permanently green,
+      # and nothing downloaded the artifact or fed it to codeql-action/upload-sarif.
+      # It read as security coverage and was none. Checkov itself still GATES —
+      # the make target exits non-zero on a finding, which is what actually
+      # enforces. Re-add this only together with `-o sarif --output-file-path` and
+      # a real consumer.)
 
   # ── Go tests + coverage ──────────────────────────────────────────────────────
   # `make coverage` runs `go test` across the tools module, then enforces the
@@ -333,31 +745,115 @@ jobs:
   go-tests:
     name: Go tests + coverage
     runs-on: ubuntu-latest
+    # Bounded from measured history (p50 4.1 / max 5.6); GitHub's default is 6h.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+      - name: Set up Go
+        uses: ./.github/actions/setup-llz
+
+      # gofmt + vet. `make lint` runs these, but no CI job invokes plain `make
+      # lint` — the workflows call the decomposed lint-k8s / lint-tf / coverage
+      # entrypoints, none of which reach fmt-check or vet. So both were
+      # unenforced, and four files had already drifted out of gofmt. Runs before
+      # the test step: formatting is the cheapest thing to fail on.
+      - name: gofmt + go vet
+        run: make fmt-check vet
+
+      # staticcheck. `go vet` reports only what is almost certainly a mistake;
+      # staticcheck's SA* checks cover the adjacent ground (impossible conditions,
+      # values assigned and never read, misused stdlib). On introduction it found
+      # a test that re-stubbed its call recorder and never asserted it. Pinned via
+      # STATICCHECK_VERSION so a new upstream check cannot turn an unrelated PR
+      # red. Runs beside vet: both are cheap and fail fast.
+      - name: staticcheck
+        run: make staticcheck
+
+      # actionlint over THIS repo's workflows. It lives here, on a HOST runner,
+      # rather than on the Kubernetes lint job: that job runs in ci-kubernetes,
+      # which ships neither actionlint nor a Go toolchain, so the target exited
+      # 127 there. This job has Go (setup-llz above), so the target's `go run`
+      # fallback resolves at the pinned ACTIONLINT_VERSION.
+      #
+      # Before this, the only actionlint in CI ran inside instance-test over the
+      # RENDERED INSTANCE's workflows — a different tree — so the workflows that
+      # decide what CI does were checked by nothing but a per-clone pre-commit
+      # hook, absent for web edits and for Dependabot's own workflow bumps.
+      - name: actionlint (this repo's workflows)
+        run: make actions-lint
 
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
+
+      # Data-race gate. The tools module runs goroutines in the reconcile
+      # manager, the Prometheus query fan-out, the OpenBao client and the
+      # Keycloak configure retry loop, and reconcile_manager.go is ~97% covered,
+      # so the detector has real concurrency to observe. Nothing ran -race before
+      # this, which is how a node-clock-dependent elector bug reached e2e as an
+      # intermittent "converge never completes" rather than as a test failure.
+      #
+      # Separate step from `make coverage` so a race fails under its own name.
+      # `make test-race` sets LLZ_EXPECT_RACE=1, which arms a canary asserting the
+      # binary really was built with -race — if the flag is ever dropped, that
+      # test fails instead of this step passing while detecting nothing.
+      - name: Data-race gate
+        run: make test-race
 
       # Design-principle gate: fail when inline-bash / shell / python logic
       # exceeds .untestable-budget.yaml — the prompt to convert logic into the
       # unit-tested llz CLI rather than grow untestable CI shell. Runs here (not
       # in the container jobs) because it needs only the Go toolchain, already
       # set up above; `make untestable-loc-check` falls back to `go run`.
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job; here for the reason
+      # above — this job has the Go toolchain and no rendered charts to wait on.
       - name: Untestable-LOC budget gate
         run: make untestable-loc-check
+
+      # Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
+      # destination for converted logic but caps nothing there, so package main
+      # accretes. This budgets the destination — Go logic lines in package main —
+      # and is satisfied by extracting to tools/internal/<pkg> (ADR 0013) or
+      # moving the capability out to an extension (issue #10), never by raising
+      # the budget. Same Go-toolchain-only requirement as the step above.
+      # ALSO RUN BY `llz ci gates`, same reason as the step above.
+      - name: Core-surface budget gate
+        run: make core-surface-check
 
       # Guard: every container-job `run:` step must resolve to bash, not the
       # container's /bin/sh (dash). A missing default silently broke the scheduled
       # discover → auto-unseal / scheduled-checks / secret-rotation workflows
       # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
+      #
+      # ALSO RUN BY `llz ci gates` in the Kubernetes-lint job — and this step is the
+      # OLDER of the two: it landed alone (fa8d5b99, 2026-06-26) and the gates row
+      # followed six weeks later (ca1f731e). Neither site is spare. The row is the
+      # only one a local `make lint` reaches, and this step is the only one a FORK
+      # pull request reaches, because the Kubernetes job that carries the gate set
+      # skips them. Weaker consequence than the guard below — a dash fallback is not
+      # attacker-controlled — but the same two-sites-two-audiences shape.
       - name: Workflow shell-default guard
         working-directory: tools
         run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows
+
+      # Guard: no externally-supplied expression may be interpolated into a run:
+      # script. ALSO RUN BY `llz ci gates` in the Kubernetes-lint job, and THE
+      # SECOND SITE IS DELIBERATE: that job is conditioned on the event not being a
+      # pull request OR the head repository being this one, so it skips every FORK
+      # pull request — exactly the population this guard's threat model is about,
+      # since a fork PR is how an attacker-chosen branch name or PR title reaches a
+      # workflow at all. This job (go-tests) carries no `if:`, so whenever the
+      # workflow runs, the guard runs, fork or not.
+      #
+      # The fork condition is DESCRIBED, not quoted: it already appears verbatim on
+      # the `kubernetes` and `terraform` jobs in this file, and a copy here would be
+      # a third place to keep in step with them.
+      #
+      # TestTheGuardRunsInAJobForkPullRequestsReach holds the job choice. Read it for
+      # what it enforces rather than trusting a list here, which is a second copy
+      # that can only drift.
+      - name: Workflow run-interpolation guard
+        working-directory: tools
+        run: go run ./cmd/llz ci workflow-injection --root ..

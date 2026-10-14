@@ -1,8 +1,10 @@
 # Grafana Access — Playbook
 
-**Applies to:** Grafana (`<release>-grafana` Deployment in the `observability` namespace) on every cluster.
+**Applies to:** Grafana (`<release>-grafana` Deployment in the `grafana` namespace) on every cluster.
 
-**Related:** your observability configuration (dashboards, metrics topology), [`grafana-values.yaml`](../../instance-template/apl-values/_shared/values.yaml).
+**Related:** your observability configuration (dashboards, metrics topology). Grafana's
+chart values are apl-core's own on the managed App Platform — LLZ ships no
+`grafana-values.yaml`.
 
 ---
 
@@ -22,7 +24,7 @@ Auth is the Helm-chart-default local-DB admin user. The password is generated at
 #    same dashboards but different metrics.
 
 # 2. Port-forward Grafana to localhost:3000
-kubectl -n observability port-forward svc/<release>-grafana 3000:80
+kubectl -n grafana port-forward svc/<release>-grafana 3000:80
 
 # 3. Browse to http://localhost:3000
 
@@ -30,7 +32,7 @@ kubectl -n observability port-forward svc/<release>-grafana 3000:80
 llz openbao get active secret/grafana/admin password
 
 # ... or from the in-cluster Secret (already synced by ESO):
-kubectl -n observability get secret <release>-grafana-admin-credentials \
+kubectl -n grafana get secret <release>-grafana-admin-credentials \
   -o jsonpath='{.data.admin-password}' | base64 -d
 
 # 5. Log in as admin / <password>
@@ -55,10 +57,18 @@ These users live in Grafana's local SQLite DB — they survive pod restarts but 
 
 ## Adding a new data source
 
-The two data sources today are Prometheus and Loki, both configured declaratively in [`grafana-values.yaml`](../../instance-template/apl-values/_shared/values.yaml). For a new data source:
+The two data sources today are Prometheus and Loki, both configured declaratively by
+apl-core. **LLZ does not render Grafana's values**: on the managed App Platform Linode
+owns apl-core's `values.yaml` and `llz render` emits none (ADR
+[0005](../adr/0005-managed-app-platform.md)). The one channel LLZ has into an apl-core
+app's chart values is the apl-overlay's `apps.<name>._rawValues`
+(`apl-values/_shared/apl-overlay/appvalues.yaml`, rendered from
+`tools/internal/shared/clusterspec/overlay_appvalues.go`). For a new data source:
 
-1. Add a block under `grafana.datasources['datasources.yaml'].datasources` in `grafana-values.yaml`. Use the existing entries as a template.
-2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.
+1. Add a `grafana.datasources` block under `apps.grafana._rawValues` in that renderer,
+   then `llz render`. Use apl-core's existing entries as a template — read them off the
+   cluster (`kubectl -n grafana get cm grafana -o yaml`), not from this repo.
+2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.
 3. PR + ArgoCD sync — the change applies on the next reconciliation.
 
 Do not add data sources via the Grafana UI for production — they live only in the SQLite DB and disappear on reinstall.
@@ -74,16 +84,24 @@ Drop a `.json` export into your apl-values dashboards directory and commit. Argo
 ## Rotating the admin password
 
 1. In Grafana UI: *Administration → Users → admin → Change Password*.
-2. Re-seed OpenBao so ESO stays in sync:
+2. Re-seed OpenBao so ESO stays in sync. **`--yes` is required** — without it the
+   command prints a plan, writes nothing, and still exits 0, which leaves the
+   password rotated in Grafana and stale in OpenBao:
 
     ```bash
-    llz openbao set secret/grafana/admin password=<new-password>
+    llz openbao set secret/grafana/admin password=<new-password> --yes
     ```
 
-3. Force ESO to refresh (optional — happens within `refreshInterval` otherwise):
+3. Verify the write landed before you close the terminal:
 
     ```bash
-    kubectl -n observability annotate externalsecret grafana-admin-credentials \
+    llz openbao get active secret/grafana/admin password
+    ```
+
+4. Force ESO to refresh (optional — happens within `refreshInterval` otherwise):
+
+    ```bash
+    kubectl -n grafana annotate externalsecret grafana-admin-credentials \
       force-sync=$(date +%s) --overwrite
     ```
 

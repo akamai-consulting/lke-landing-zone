@@ -1,13 +1,38 @@
 version: 2
+
+# No `labels:` on any ecosystem below. Dependabot does not create labels it is
+# asked for — it fails the whole update run with "The following labels could not
+# be found ... Please create them before Dependabot can add them to a pull
+# request", and this repo carries only the GitHub default label set (no
+# `dependencies`, `github-actions` or `go`). Labelling nothing keeps the config
+# valid in any fork of this repo, and nothing consumes the labels: the
+# auto-merge workflow keys off `github.event.pull_request.user.login ==
+# 'dependabot[bot]'` and the commit-message `update-type:` trailer, not labels.
+#
+# NOTHING HERE SCANS `instance-template/`, DELIBERATELY. The delivered
+# `.github/workflows/llz-*.yml` are class `managed` in `.template-manifest`, so
+# their sha256 lives in `instance-template/.template-managed.lock`. A bump to a
+# pin inside one changes that digest, and `managed-lock-check` (which lint.yml
+# runs on `instance-template/.github/**`) then fails until someone re-runs
+# `llz ci managed-fresh --write` — which Dependabot cannot do. Scanning that tree
+# would produce a stream of permanently red PRs, so the delivered pins are bumped
+# by hand alongside the lock. See .github/workflows/AGENTS.md.
 updates:
   # ── GitHub Actions ────────────────────────────────────────────────────────
+  # `directories`, not `directory`: for this ecosystem `/` means
+  # `.github/workflows` plus a root-level action.yml, and NOTHING ELSE. The one
+  # surviving `actions/setup-go` pin lives in `.github/actions/setup-llz/` —
+  # the `setup-go-sole-site` guard put it there — so `/` alone left the repo's
+  # only Go toolchain pin unscanned, and it went a major version stale in
+  # silence. Only `directories` supports globs, hence the shape.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "github-actions"]
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -19,7 +44,56 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "go"]
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+
+  # ── Docker (the CI/toolbox image) ─────────────────────────────────────────
+  # Covers the `FROM` lines only — golang: and debian: bases. The ~15
+  # `ARG *_VERSION` tool pins below them (tofu, helm, kubectl, bao …) are
+  # invisible to Dependabot; `version-pins-check` owns those against the
+  # Dockerfile ARG block as the declared single source of truth.
+  - package-ecosystem: "docker"
+    directory: "/dockerfiles"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+
+  # ── Terraform (reusable modules) ──────────────────────────────────────────
+  # A MAJOR-VERSION TRIPWIRE, NOT A PR STREAM. Dependabot only opens a PR when a
+  # release falls OUTSIDE the declared constraint — so a 4.4 arrives silently at
+  # the next `tofu init` and only a 5.0 raises a PR here. That is the point: the
+  # majors are what need a human. The `.terraform.lock.hcl` files tracked in this
+  # tree live beside the generated roots, NOT here — see below.
+  #
+  # A PR HERE IS ONLY EVER HALF THE BUMP, AND IT LANDS RED ON PURPOSE. The same
+  # provider constraint is restated in the four generated roots under
+  # tools/internal/shared/tfroots/roots/*/versions.tf, which are NOT scanned:
+  # their main.tf carries copier tokens (`<@ upstream_org @>`), so the directory
+  # is not parseable HCL until rendered. Terraform INTERSECTS a root's constraint
+  # with those of the modules it sources, so a bot PR that moves only this tree
+  # leaves an empty intersection and every `tofu init` fails with
+  #
+  #     Could not resolve provider linode/linode: no available releases match
+  #     the given constraints ~> 3.11, ~> 4.3
+  #
+  # That was PR #504. `provider-lock-guard` now fails such a PR with all the
+  # disagreeing sites named, so the remediation is mechanical: set the roots to
+  # the spec the bot chose, then regenerate the `.terraform.lock.hcl` sitting in
+  # each of those root directories — the same gate checks that second half, and
+  # `llz render` is what carries it to every instance. Do NOT add the roots here
+  # to "fix" it — Dependabot cannot parse them.
+  - package-ecosystem: "terraform"
+    directories:
+      - "/terraform-modules/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
     groups:
       all-dependencies:
         patterns: ["*"]

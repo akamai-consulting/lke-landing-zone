@@ -1,25 +1,60 @@
 # Design: in-cluster Linode credential rotator (CronJob)
 
-**Status:** Draft / design-stage (skeleton below is not yet wired into any env).
+**Status:** Shipped — phase 2, DEFAULT-ON fleet-wide, sole owner of the object-storage
+key lifecycle. The llz-object-storage module is buckets-only (keys +
+`time_rotating` + `obj_key_rotation_days` + key outputs removed); the FIRST
+keys are minted at bootstrap by `llz ci mint-bootstrap-objkeys`
+(rotated_at-stamped, skip-if-present) and seeded straight into OpenBao — the
+`stash-env-secret` S3 hop and the `LOKI_S3_*`/`HARBOR_REGISTRY_S3_*` GitHub
+secrets are retired, and the destroy-time bucket drain mints a temporary key
+(`llz ci temp-objkey`). Phase 1 (below) was the e2e-gated wiring pass. The
+rollout-blocking bugs found while wiring are fixed: the Loki table entry now
+mints against the three REAL bucket names (chunks/ruler/admin — an earlier
+revision targeted the nonexistent `platform-loki-<region>` bucket;
+`CreateObjectStorageKeyBuckets` grants multiple buckets per key), and the
+bootstrap dns01 seed is `skip-if-present` so a re-bootstrap can't clobber a
+rotator-minted token with the stale GitHub copy.
+
+> **Terraform key ownership — RESOLVED (Phase 2, as prescribed below).** The
+> llz-object-storage module creates the Loki/Harbor keys with the SAME labels
+> the rotator drains (`platform-loki-<region>`, `platform-harbor-registry-<region>`).
+> With keep-newest-2 the TF-created key is drained on the rotator's SECOND
+> rotation; Terraform's next refresh then sees its tracked key deleted and
+> recreates it — a permanent TF↔rotator tug-of-war (`apply-object-storage` runs
+> on every cluster bootstrap). Deleting only `time_rotating` does not fix this:
+> TF always recreates a deleted tracked resource. Resolution: remove key-minting
+> from Terraform entirely (module shrinks to buckets-only — a MAJOR module bump)
+> and mint the BOOTSTRAP keys from the bootstrap-openbao job via llz (reusing
+> this table's mint path, stamping `rotated_at`, seeding OpenBao directly —
+> which also retires the `stash-env-secret` S3 hop, the
+> `LOKI_S3_*`/`HARBOR_REGISTRY_S3_*` GitHub secrets, and the
+> `seed-harbor-registry-s3` step). The destroy-time bucket drain must then mint
+> a temporary scoped key instead of reading key creds from TF outputs. That
+> follow-up, plus one green e2e cycle of this Phase 1, gated the default flip
+> and the `time_rotating`/`obj_key_rotation_days` deletion — all now landed.
+>
+> Known gap carried into Phase 1: the objkey path has no verify probe before
+> drain (the PAT path verifies via `GET /v4/profile`); an S3 HEAD against the
+> first granted bucket is the intended check.
 **Item:** kube-native cred-hardening #4 (generalized) — move the rotation of every
 long-lived **Linode-issued** credential out of CI and into the cluster.
 **Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob
-(`apl-values/components/volumeLabeler/`), `internal/linode` (rotation primitives),
+(`components/volumeLabeler/`), `internal/linode` (rotation primitives),
 `credentials_pat.go` / `credentials_objkey.go` (existing orchestration), the
-`secret-propagator` OpenBao policy (`tools/cmd/llz/ci_openbao_configure.go`).
+`secret-propagator` OpenBao policy (`tools/internal/extensions/lifecycle/identityconfig/openbao_configure.go`).
 
 ## Problem
 
 Several long-lived credentials in the platform are **minted by the Linode API**
 and rotated **from CI** (`secret-rotation.yml` → `llz credentials …` →
-`llz ci propagate-pat` → OpenBao), with a copy in `infra-<env>` GitHub secrets:
+`propagate-pat` → OpenBao), with a copy in `infra-<env>` GitHub secrets:
 
 | Credential | GitHub secret | OpenBao path | Consumed by | Trust domain |
 |---|---|---|---|---|
 | Linode PAT | `LINODE_API_TOKEN` | `secret/linode/api-token` | `linode-volume-labeler` (in-cluster) **+ Terraform/CI** | **dual** |
 | Loki S3 key | `LOKI_S3_*` | `secret/loki/object-store` | Loki (in-cluster, ESO) | **in-cluster only** |
 | Harbor registry S3 key | `HARBOR_REGISTRY_S3_*` | `secret/harbor/registry-s3` | Harbor registry (in-cluster, ESO) | **in-cluster only** |
-| Gitea backup S3 key | `GITEA_BACKUP_S3_*` | (gitea backup) | Gitea backup job (in-cluster) | **in-cluster only** |
+| ~~Gitea backup S3 key~~ | ~~`GITEA_BACKUP_S3_*`~~ | — | **REMOVED** — the off-cluster gitea-backup bucket/key/outputs were dropped in the apl-core anti-pattern cleanup (see `terraform-modules/llz-object-storage/main.tf`); nothing for the rotator to manage | — |
 | DNS-scoped PAT | `LINODE_DNS_TOKEN` | `secret/certmanager/dns01` | cert-manager DNS-01 (in-cluster, ESO) | **in-cluster only** |
 
 Every one of these is a Linode-minted credential whose in-cluster copy lives in
@@ -113,7 +148,7 @@ create|revoke-old`; the new command reuses that logic, dropping the GitHub-secre
 write (tier-1 creds don't need it) and adding the verify probe + the k8s-auth
 OpenBao write.
 
-### Components (skeleton — `apl-values/components/linodeCredRotator/`)
+### Components (skeleton — `components/linodeCredRotator/`)
 
 Mirror `volumeLabeler/linode-volume-labeler/`:
 
@@ -182,7 +217,7 @@ CI rotation-health.
 
 - The in-cluster credentials' slices of `secret-rotation.yml`
   (`credentials pat` / `credentials obj-key` create+revoke-old) and
-  `llz ci propagate-pat` — the rotator writes OpenBao directly.
+  `propagate-pat` — the rotator writes OpenBao directly.
 - The `infra-<env>` GitHub-secret copies of the **in-cluster-only** credentials
   become bootstrap-only (vestigial after first boot).
 - NOT retired: the broad provisioning PAT's CI rotation and the `TF_STATE_*` key.
@@ -204,8 +239,10 @@ CI rotation-health.
 - **PAT: split vs single token + #3.** Phase 1 sidesteps this entirely (OBJ keys
   + DNS token have no dual-domain). The split is only needed to bring the PAT into
   the rotator without depending on #3.
-- **Gitea-backup S3 key** — confirm it's consumed in-cluster (this repo) vs
-  apl-core before adding it to the table.
+- ~~**Gitea-backup S3 key**~~ — RESOLVED: removed. The off-cluster gitea-backup
+  bucket/key/outputs were dropped in the apl-core anti-pattern cleanup
+  (`terraform-modules/llz-object-storage/main.tf`), so there is no such credential
+  to rotate.
 - **Grace / keep-N / rotateAfter** — align with the existing `credentials`
   defaults (PAT 90-day validity; OBJ keys keep-newest, drain past grace).
 - **CronJob vs operator** — CronJob chosen for simplicity.

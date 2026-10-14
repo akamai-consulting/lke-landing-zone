@@ -17,7 +17,7 @@ permissions:
 ```
 
 ```yaml
-- uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+- uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
   with:
     registry: ghcr.io
     username: ${{ github.actor }}
@@ -40,13 +40,83 @@ container:
     password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+A job's `container.image`, **when it names one of this repo's own CI images**
+(`ci-tofu` / `ci-kubernetes`), uses **`:latest`, never a version** —
+`format('ghcr.io/{0}/ci-kubernetes:latest', github.repository_owner)` — and
+`llz ci version-pins` fails the build if one restates the Dockerfile ARG instead.
+It finds them by YAML position (`jobs.<id>.container.image`, and service
+containers), not by matching the fallback expression, so the rule holds however
+the value is spelled. Third-party images (`postgres:16`, say) are not its
+business and keep their own pins. In `instance-template/` the rule inverts
+again: a delivered workflow must resolve its image from `vars.TF_IMAGE` /
+`vars.KUBE_IMAGE` and hardcode nothing, because an instance's image has to match
+the template ref it is pinned to.
+The fallback used to be version-pinned, which made a `KUBECTL_VERSION` /
+`TOFU_VERSION` bump self-defeating: `build-images.yml` publishes on pushes to
+`main` while Lint runs on the bump's own push, so every bump pointed Lint at a tag
+that did not exist yet and cost one `manifest unknown` red plus a manual re-run.
+The fallback fires whenever the repo variable is unset — which on this repo is
+always, since neither `TF_IMAGE` nor `KUBE_IMAGE` is set here. It is the live
+path for every Lint run, not a fresh-fork edge case, which is why the scar above
+happened here. Where nothing pins the image a moving tag is the honest answer;
+pin `TF_IMAGE`/`KUBE_IMAGE` to a `:sha-<commit>` tag if you need reproducibility
+— a version tag is not it, since that moves too until the next bump freezes it.
+
+That floating tag is only safe because of what publishes it. **`build-images.yml`
+publishes the MUTABLE tags (`:latest`, `:<version>`) from the default branch's
+HEAD only**; every other ref gets `:sha-<commit>` and nothing else. Its
+`workflow_dispatch` is deliberately *not* gated on the ref — `release-e2e` and
+`e2e-instantiate` drive it on feature branches, and `e2e-instantiate` does so
+automatically — so the gate lives on the publish, as the `PUBLISH_MUTABLE` env
+expression. Before that, every branch that ran an e2e repointed `:latest` for
+main and every open PR at once: the fallback above, the baked sha `llz ci
+assert-image-fresh` compares, and any instance that never pinned an image. `llz
+ci mutable-tag-guard` (in the `llz-gates` suite) holds the shape at PR time.
+
 ## Composite actions available
 
 Prefer these over reimplementing their logic inline:
 
 | Action | Purpose |
 |--------|---------|
-| `ghcr.io/<owner>/ci-terraform` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
+| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The only composite action in this repo's own CI — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` must appear nowhere else. (`instance-template/.github/actions/` ships seven more, but those are scaffold content an *instance* runs, not CI for this repo.) |
+| `ghcr.io/<owner>/ci-tofu` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
+
+**This is enforced** — `make setup-go-sole-site` (in the `llz-gates` suite, so
+every `make lint` runs it) fails on any `uses: actions/setup-go` outside the
+composite. It was written because the rule above had already been broken:
+`release-e2e-lane.yml` carried a second pin at **v7.0.0** while the composite sat
+at **v6.5.0**, in a job running the same functional script `llz-release.yml` runs
+*through* the composite. Nothing caught it, because actionlint judges each
+`uses:` in isolation and a correctly SHA-pinned action looks identical whether or
+not it is the right one.
+
+The one deliberate exception is `llz-release.yml`'s **`go build`**, which it
+hand-rolls to stamp the real release version via `-ldflags` — something the
+composite intentionally does not do. Note the exception is the *build* only: that
+job still takes its **toolchain** from `setup-llz`, which is why the sole-site
+rule above holds with no exemptions at all.
+
+## Action pins and Dependabot
+
+Every `uses:` is SHA-pinned with a `# vX.Y.Z` comment, and `.github/dependabot.yml`
+bumps them. It scans **two** directories, `/` and `/.github/actions/*`: for the
+`github-actions` ecosystem `/` covers `.github/workflows` plus a *root-level*
+`action.yml` and nothing else, so when the sole-site rule above moved this repo's
+only `actions/setup-go` pin into a composite action, it moved it out of
+Dependabot's reach at the same time. It sat a major version behind for as long as
+it was invisible, which is the failure mode to watch for whenever a pin moves into
+a new directory.
+
+Dependabot deliberately does **not** scan `instance-template/.github/`. Those
+`llz-*.yml` are class `managed`, so their sha256 lives in
+`instance-template/.template-managed.lock`: a bump changes the digest, and
+`managed-lock-check` then fails until `llz ci managed-fresh --write` regenerates
+the lock — which Dependabot cannot run, so every such PR would land red. The
+delivered pins are therefore bumped **by hand, in the same PR as the lock write**.
+When you take a Dependabot bump for an action both trees use — today
+`actions/checkout` and `actions/upload-artifact` — carry it into
+`instance-template/.github/` yourself.
 
 ## Tool installation pattern
 
@@ -57,9 +127,39 @@ On GitHub-hosted runners, install CLI tools with the official marketplace setup 
 | helm | `azure/setup-helm` |
 | kubectl | `azure/setup-kubectl` |
 | yq | `dcarbone/install-yq-action` |
-| kind (+ cluster) | `helm/kind-action` |
+| kind (+ cluster) | `helm/kind-action` — see the extra inputs below |
 
-Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-terraform` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-terraform` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step. They track the image tag (`vars.TF_IMAGE`), so keep `TF_IMAGE` in step with the template release the instance pins.
+Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-tofu` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-tofu` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step.
+
+**`helm/kind-action` needs two more inputs than `version:`, and `llz ci
+k8s-minor-coherence` enforces both** (#427). `version:` pins *kind*, not the
+cluster: without `node_image:` kind boots its own default node image, which is
+how a server-side dry-run came to validate against Kubernetes 1.31 for three
+minors while we deployed 1.34. And the action installs its own kubectl and
+prepends it to `PATH`, so without `kubectl_version:` it silently shadows the
+`azure/setup-kubectl` step above it.
+
+```yaml
+  version: ${{ env.KIND_VERSION }}
+  node_image: ${{ env.KIND_NODE_IMAGE }}        # tag AND digest, from kind's release notes
+  kubectl_version: v${{ env.KUBECTL_VERSION }}  # or the action's default shadows the job's
+```
+
+There may be **one** such step in the repo — counting `instance-template/`'s
+workflows and both composite trees, all of which the guard reads. It refuses a
+second, because a second cluster is a second answer to "which minor does CI
+validate against". It equally refuses a cluster stood up outside the action
+(`kind create` in a `run:` or in a script under `template-scripts/` or
+`.github/`): that declares no `node_image:` for the guard to hold to anything.
+
+**Carve-out — do not "clean up" `setup-llz` inside a container job.** A PR that
+changes `tools/` runs BEFORE the image carrying that change is rebuilt, and the
+images ship no Go toolchain, so the Makefile's `go run ./cmd/llz` fallback cannot
+fire either. Two jobs in `lint.yml` therefore run `setup-llz` inside the container
+on purpose and are load-bearing: the `ci-kubernetes` guard job, and the
+`template-manifest` gate (`make lint-tf` → `template-manifest-check` → `go run
+./cmd/llz ci template-manifest`). Each carries its own inline justification.
+Once the rebuilt image catches up they are fast, redundant no-ops — not dead steps. They track the image tag (`vars.TF_IMAGE`), so keep `TF_IMAGE` in step with the template release the instance pins.
 
 ## CRD installation
 
@@ -96,22 +196,46 @@ This avoids interactive host-key prompts hanging a job the first time it talks t
 
 ## permissions blocks
 
-Every job must have an explicit `permissions:` block. The safe default for non-publishing jobs is:
+**Every workflow must declare a workflow-level `permissions:` block, and the
+default is the whole of it:**
 
 ```yaml
 permissions:
   contents: read
 ```
 
-Jobs that push to GHCR need `packages: write` (pulling a private GHCR `container:` image needs `packages: read`). Jobs that comment on PRs need `pull-requests: write`. Never omit the block — an absent `permissions:` inherits workflow-level defaults or write-all.
+That is the load-bearing rule, because a job with no block and a workflow with no
+block is what inherits the repository default — up to write-all. With the
+workflow-level block present, a job that omits its own inherits exactly
+`contents: read`, which is the floor, not a risk.
+
+**A job declares its own block when, and only when, it needs MORE than that** —
+`packages: write` to push to GHCR, `packages: read` to pull a private GHCR
+`container:` image, `pull-requests: write` to comment on a PR, `actions: write`
+to trigger or inspect another workflow's runs, `contents: write` to publish a
+release. Job-level permissions REPLACE the workflow-level set rather than adding
+to it, so a job that declares one must list everything it needs — including
+`contents: read` if it checks out. (`llz-release.yml`'s `image-tag` job is the
+instructive counter-example: it declares `packages: write` and nothing else
+because it never checks out, only retags an image.)
+
+> This section used to read "Every job must have an explicit `permissions:`
+> block … never omit the block", and 28 of the 82 jobs across this repo and
+> `instance-template/` omitted it — correctly, because every one of their
+> workflows declares `contents: read` at the top. A rule that most of the tree
+> already violates safely is one people learn to skip past, and it hid the
+> distinction that actually matters: the danger is a missing block at BOTH
+> levels, not a missing block at the job level.
 
 > Per-environment operational workflows (terraform apply, bootstrap, secret
 > rotation, app deploy) are NOT shipped here — they live with the instance
 > scaffolding under [../../instance-template/.github/workflows/](../../instance-template/.github/workflows/).
 > The workflows in this directory build and publish the reusable artifacts: the
-> Helm charts (`publish-charts.yml`), the CI tool images (`build-images.yml`),
-> and the firewall-controller operator image (`firewall-controller.yml`), plus
-> chart/manifest validation (`kubernetes.yml`).
+> Helm charts (`publish-charts.yml`) and the CI tool images (`build-images.yml`,
+> a matrix over terraform / kubernetes / devcontainer / llz — the in-cluster
+> reconciler and Harbor components ship in the `llz` image, so there is no
+> separate operator-image workflow). Chart/manifest validation lives in
+> `lint.yml`, which merged the former `kubernetes.yml` and `terraform.yml`.
 
 ## Release orchestration
 
@@ -130,7 +254,6 @@ A release goes public in **two human steps, gated by e2e** (see
 | Workflow | On `released` |
 |----------|---------------|
 | `llz-release.yml` | builds + attaches the `llz` CLI binaries |
-| `firewall-controller.yml` | pushes the operator image tagged `:vX.Y.Z` |
 
 Keyed off release events (not a tag push) because a release created with the
 built-in `GITHUB_TOKEN` suppresses downstream runs — the human publishing the

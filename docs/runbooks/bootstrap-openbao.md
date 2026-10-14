@@ -1,9 +1,25 @@
 # OpenBao Bootstrap Runbook
 
-**Workflow:** `instance-template/.github/workflows/bootstrap-openbao.yml`  
+**Workflow:** `.github/workflows/bootstrap-openbao.yml` (a thin caller; the body is `.github/workflows/llz-bootstrap-openbao.yml`)  
 **Applies to:** every cluster (one `<env>` per cluster); run once per cluster during provisioning and again for emergency recovery.
 
 ---
+
+<!-- toc -->
+## Contents
+
+- [Modes](#modes)
+- [Required secrets and variables](#required-secrets-and-variables)
+- [First-time bootstrap](#first-time-bootstrap)
+- [Re-seal recovery — automatic](#re-seal-recovery--automatic)
+- [Re-configure (configuration incomplete)](#re-configure-configuration-incomplete)
+- [Post-bootstrap checklist](#post-bootstrap-checklist)
+- [Additional-cluster ordering constraint](#additional-cluster-ordering-constraint)
+- [Relationship to the release workflow](#relationship-to-the-release-workflow)
+- [Break-glass handles (when `bao-ensure-ready` is wedged)](#break-glass-handles-when-bao-ensure-ready-is-wedged)
+- [Break-glass root token (workflow) — `breakglass-openbao.yml`](#break-glass-root-token-workflow--breakglass-openbaoyml)
+
+<!-- /toc -->
 
 ## Modes
 
@@ -40,24 +56,61 @@ The workflow detects cluster state automatically and chooses the right path:
 | `OPENBAO_RECOVERY_KEY_1` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_RECOVERY_KEY_2` | generate-root quorum | Set automatically during first-time bootstrap |
 | `OPENBAO_RECOVERY_KEY_3` | generate-root quorum | Set automatically during first-time bootstrap |
+| `OPENBAO_RECOVERY_KEY_4/5` | Redundancy only | Set automatically during first-time bootstrap **only when no escrow key was supplied**. With one, those two shares exist solely as ciphertext you hold. Either way the quorum is 1–3. |
 | `OPENBAO_ROOT_TOKEN` | Re-configure only | Set manually; delete immediately after the run |
-| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist the OpenBao seal/recovery keys. **Required PAT scopes (classic):** `repo`, `workflow`. **Additionally required:** the PAT owner must be **Environment admin** on every `infra-<env>` GHA Environment whose secrets are written. Missing Environment admin causes `--env`-scoped `gh secret set` calls to 401 even though repo-level writes succeed — the partial state typically surfaces as `bootstrap-openbao.yml` failing its S3 preflight 5 minutes into a run that started 30 minutes earlier. Verify with: `GH_TOKEN=$PAT gh api user` (must succeed and return your username). |
-| `LOKI_S3_ACCESS_KEY` | All configuration runs | Linode Object Storage key for Loki buckets — **marks bootstrap error if absent**; Loki CrashLoopBackOff without it. **Stashed automatically by `terraform.yml` apply-object-storage** (see [terraform.yml](../../instance-template/.github/workflows/terraform.yml) "Store object-storage credentials" step). |
-| `LOKI_S3_SECRET_KEY` | All configuration runs | Linode Object Storage secret for Loki buckets — same as above; auto-stashed. |
-| `HARBOR_REGISTRY_S3_ACCESS_KEY` | All configuration runs | Linode Object Storage key for the Harbor registry bucket — Harbor registry container CrashLoopBackOff without it. Auto-stashed by `terraform.yml`. |
-| `HARBOR_REGISTRY_S3_SECRET_KEY` | All configuration runs | Linode Object Storage secret for Harbor registry — same as above; auto-stashed. |
-| `GITEA_BACKUP_S3_ACCESS_KEY` | All configuration runs | Linode Object Storage key for Gitea backup bucket — Gitea backup CronJob fails silently without it (no PVC fallback exists). Auto-stashed by `terraform.yml`. |
-| `GITEA_BACKUP_S3_SECRET_KEY` | All configuration runs | Linode Object Storage secret for Gitea backup — same as above; auto-stashed. |
-| `LINODE_DNS_TOKEN` | Deferred — used by `instance-template/.github/workflows/bootstrap-dns.yml` | Linode API token scoped to DNS zone write only (narrower than `LINODE_API_TOKEN`). Seeds `secret/certmanager/dns01` for the cert-manager DNS-01 solver. Split out of this workflow so a cluster can reach a functioning state without a DNS-scoped token in hand; run `bootstrap-dns.yml` once the token is provisioned. ACME certificate challenges fail until then. |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist the OpenBao seal/recovery keys. **Permissions — see the box below; getting this wrong is the single most common bootstrap failure.** |
+
+> ### `OPENBAO_SECRETS_WRITE_TOKEN` permissions
+>
+> Either form works:
+>
+> - **Fine-grained PAT** (what `llz tokens`' pre-filled link creates): **Actions:
+>   write + Environments: write + Secrets: write** on the instance repo.
+> - **Classic PAT**: `repo` + `workflow` (carries all three).
+>
+> Three traps, each failing in a different place:
+>
+> - The fine-grained **"Secrets" permission alone is NOT enough.** It governs
+>   *repo-level* secrets; the `infra-<env>` **environment** secrets this workflow
+>   writes are governed by **Environments**.
+> - **"Environments" alone is not enough either.** This same PAT is seeded to
+>   `secret/infra/github-dispatch-token` and handed to the in-cluster
+>   `harbor-robot-provisioner`, which publishes the **repo-level** `HARBOR_*`
+>   secrets — that needs **Secrets: write**. Without it the CronJob logs
+>   `check repo secret HARBOR_ROBOT_NAME: HTTP 403` every five minutes and
+>   `llz ci converge` hard-fails the bootstrap on its failed Jobs.
+> - The PAT owner must **also be Environment admin** on every `infra-<env>`
+>   environment being written.
+>
+> `llz doctor --env <env>` probes each grant separately (read-only, against the
+> endpoint its consumer really calls) and reports them in the **PERMS** column;
+> `llz ci validate-tokens` asks the same questions as a preflight inside the run.
+>
+> Get any of them wrong and the run fails somewhere that does not look like a bad
+> token. Without **Environments**, repo-level writes still succeed while the
+> `--env`-scoped `gh secret set` calls 401 — typically surfacing as
+> `bootstrap-openbao.yml` failing its S3 preflight ~5 minutes into a run you
+> started 30 minutes earlier. Without **Secrets**, everything above passes and the
+> `harbor-robot-provisioner` CronJob 403s every five minutes until `llz ci
+> converge` hard-fails the bootstrap ~35 minutes in.
+>
+> Verify the token authenticates at all with `GH_TOKEN=$PAT gh api user`. (That
+> only proves the token is live — it cannot prove either secret permission, which
+> is why the traps above are worth re-reading, and why `llz doctor` probes each
+> grant against the endpoint its consumer really calls.) Same guidance, adopter-facing:
+> [quickstart §4](../quickstart.md#4-build-it--llz-up).
+| *(retired)* `LOKI_S3_*` / `HARBOR_REGISTRY_S3_*` | — | No longer exist: the workflow's `llz ci mint-bootstrap-objkeys` step mints the object-storage keys via the Linode API and seeds OpenBao directly; the in-cluster `linodeCredRotator` rotates them. The credentials never transit GitHub. |
+| *(retired)* `GITEA_BACKUP_S3_ACCESS_KEY` / `GITEA_BACKUP_S3_SECRET_KEY` | — | No longer exist: Gitea is disabled on apl-core v6 (external BYO Git / git-server), so there is no in-cluster Gitea to back up and no backup CronJob to seed. |
+| `LINODE_DNS_TOKEN` | Consumed by Terraform (`TF_VAR_linode_dns_token`), not this workflow | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`apps.cert-manager.dns.provider.linode.apiToken`) and ExternalDNS. No OpenBao seed is involved. ACME certificate challenges fail until it is provisioned. The `llz-letsencrypt-*` ClusterIssuers that target that webhook sync automatically via Argo CD (the mandatory `manifest/dns` base). |
 
 ### Repository-level secrets set by this workflow
 
 | Secret | Set by | Description |
 |---|---|---|
-| `HARBOR_ROBOT_NAME` | First-cluster bootstrap | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
-| `HARBOR_PASSWORD` | First-cluster bootstrap | Harbor CI robot account secret |
-| `HARBOR_PULL_ROBOT_NAME` | First-cluster bootstrap | Harbor pull-only robot account name (pull-only; distributed as imagePullSecret) |
-| `HARBOR_PULL_PASSWORD` | First-cluster bootstrap | Harbor pull-only robot account secret |
+| `HARBOR_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
+| `HARBOR_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account secret |
+| `HARBOR_PULL_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account name (the credential an imagePullSecret is built from; LLZ does not create one in workload namespaces — see [harbor-accounts.md](../playbooks/harbor-accounts.md)) |
+| `HARBOR_PULL_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account secret |
 
 ---
 
@@ -65,7 +118,7 @@ The workflow detects cluster state automatically and chooses the right path:
 
 ### Single-trigger path (recommended)
 
-`terraform.yml` chains `bootstrap-openbao.yml` automatically as a downstream job after `apply-cluster-bootstrap` + `bootstrap-cluster` complete. A single `module=all` apply walks the whole bootstrap path end-to-end (object-storage → cluster → cluster-bootstrap → firewall-controller → OpenBao). When you run more than one cluster, bootstrap the first cluster fully before the next:
+`terraform.yml` chains OpenBao bootstrap automatically as the downstream `bootstrap-openbao` job after `apply-cluster` completes (it calls `llz-bootstrap-openbao.yml` directly; the former standalone `bootstrap-cluster` job is folded into it). A single `module=all` apply walks the whole bootstrap path end-to-end (vpc → cluster → object-storage → in-cluster bootstrap → OpenBao). When you run more than one cluster, bootstrap the first cluster fully before the next:
 
 ```bash
 # First cluster, end-to-end:
@@ -95,45 +148,101 @@ gh workflow run bootstrap-openbao.yml \
   --field region=<env>
 ```
 
+### Escrowing the recovery shares
+
+`bao operator init` mints 5 recovery shares with a threshold of 3, **exactly
+once**. Shares 1–3 always land in the `infra-<env>` environment as
+`OPENBAO_RECOVERY_KEY_1/2/3`, which is what `bao-regen-root` and
+`breakglass-openbao.yml` use. The question this input answers is whether *you*
+also get a copy that lives outside GitHub.
+
+| `openbao_escrow_pubkey_b64` | You get | GitHub holds |
+|---|---|---|
+| set | all 5 shares RSA-OAEP/SHA-256-encrypted to your key — ciphertext in the job summary **and** the `openbao-recovery-keys-<env>-encrypted` artifact | shares 1–3 |
+| empty (default) | nothing; there is no offline copy | all 5, as `OPENBAO_RECOVERY_KEY_1`–`5` |
+
+Neither path is broken — break-glass works either way, because the quorum is 1–3.
+The difference is blast radius: with no escrow, losing the `infra-<env>`
+environment loses the quorum outright, and the only way to obtain an offline copy
+afterwards is `bao operator rekey`, which mints a new set and invalidates the old.
+
+Generate a keypair before dispatching:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out escrow-priv.pem
+openssl rsa -pubout -in escrow-priv.pem -out escrow-pub.pem
+base64 < escrow-pub.pem | tr -d '\n'      # paste as openbao_escrow_pubkey_b64
+```
+
+Keep `escrow-priv.pem` offline — nothing in CI ever sees it, and it is the only
+thing that can read what comes back. **Keep at least 3 of the 5 decrypted shares**:
+the threshold is 3, so an escrow copy of fewer authorizes nothing. Decrypt with:
+
+```bash
+while read -r b; do printf '%s' "$b" | base64 -d \
+  | openssl pkeyutl -decrypt -inkey escrow-priv.pem \
+      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo; \
+done < openbao-recovery-keys.b64
+```
+
+A malformed key fails **before** `operator init` runs, so a bad paste costs you a
+re-dispatch and never a set of shares you cannot escrow.
+
+> **The job summary carries no key material on either path**, and this is a
+> change. It used to print the raw `operator init` payload — root token and all 5
+> shares. The values were masked one line earlier, which is what made it look
+> reviewed: masking redacts the **log stream**, while a job summary is a Markdown
+> file rendered exactly as written. Actions **read** on this repo — a far wider
+> grant than environment-secret write — was enough to open it and reconstitute a
+> full quorum plus root.
+
 ### What the workflow does
 
 1. Retrieves kubeconfig from the Terraform S3 state (`cluster/<env>/terraform.tfstate`).
-2. Generates a self-signed bootstrap TLS certificate for OpenBao (`openbao-tls` Secret in `openbao` namespace) if it does not already exist. cert-manager replaces it with a properly-issued cert once the mTLS CA is seeded and the platform's app-CA ClusterIssuer is ready.
-3. Generates a self-signed bootstrap TLS certificate for the OTel Collector (`<release>-otel-collector-tls` Secret in `observability` namespace) if it does not already exist. cert-manager replaces it once `otel.<cluster_domain>` DNS-01 validation succeeds. Without this step the OTel Collector pods fail to start (`CreateContainerError`) because the TLS volume mount cannot be satisfied.
-4. Seeds the 32-byte static auto-unseal key as the `openbao-unseal-key` Secret (so the pods can start and unseal themselves) and persists it as `OPENBAO_SEAL_KEY` in the `infra-<env>` environment for disaster recovery. Idempotent: an existing key is left untouched; on a namespace rebuild it is restored from `OPENBAO_SEAL_KEY`.
-5. Waits for the `<release>-openbao` StatefulSet pods to be running.
-6. Runs `bao operator init -recovery-shares=5 -recovery-threshold=3`.
-7. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<env>` environment secrets.
-8. Prints all 5 recovery keys + root token to the job summary (copy to secure offline storage immediately).
-9. Waits for all 3 pods to auto-unseal from the static seal key (followers join the leader via Raft `retry_join`).
-10. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
-11. Seeds the following secrets into OpenBao:
-   - `secret/harbor/robot` (Harbor CI robot, push+pull+delete; creates the robot on the first cluster; used for buildah builds)
-   - `secret/harbor/pull-robot` (Harbor pull-only robot; creates the robot on the first cluster; distributed as imagePullSecret)
+2. (No TLS seeding: `openbao-tls` and `platform-otel-collector-tls` are issued by dedicated cert-manager CAs from first boot — `openbao-ca` and `otel-bootstrap-ca`, both GitOps-synced.)
+3. Seeds the 32-byte static auto-unseal key as the `openbao-unseal-key` Secret (so the pods can start and unseal themselves) and persists it as `OPENBAO_SEAL_KEY` in the `infra-<env>` environment for disaster recovery. Idempotent: an existing key is left untouched; on a namespace rebuild it is restored from `OPENBAO_SEAL_KEY`.
+4. Waits for the `<release>-openbao` StatefulSet pods to be running.
+5. Runs `bao operator init -recovery-shares=5 -recovery-threshold=3`.
+6. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<env>` environment secrets.
+7. Delivers the 5 shares according to the `openbao_escrow_pubkey_b64` dispatch input — see [Escrowing the recovery shares](#escrowing-the-recovery-shares). **No key material is written to the job summary on either path.**
+8. Waits for all 3 pods to auto-unseal from the static seal key (followers join the leader via Raft `retry_join`).
+9. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
+10. Seeds the following secrets into OpenBao:
+   - `secret/harbor/robot` + `secret/harbor/pull-robot` — on an **active/standalone** cluster these are NO LONGER seeded by the workflow: the in-cluster `harbor-robot-provisioner` CronJob (`platform-apl/components/harbor/`, `llz ci harbor-provisioner`) creates the robots, seeds OpenBao through a scoped Kubernetes-auth role, publishes the repo-level `HARBOR_*` GitHub secrets, and smoke-tests every ~5 minutes. On a **standby** peer the workflow's "Seed standby Harbor robot credentials" step replicates the active's published secrets into OpenBao. Robot rotation: delete the robot in Harbor UI; the next CronJob tick recreates and re-publishes it.
    - (`secret/harbor/docker-config` is no longer seeded — the buildah `config.json` is derived in-cluster by the cert-automation chart's `harborDockerConfig` ExternalSecret from the robot creds in `secret/harbor/robot`.)
    - `HARBOR_ROBOT_NAME` + `HARBOR_PASSWORD` GitHub secrets (first cluster only)
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
    - `secret/infra/github-dispatch-token`
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
-   - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
-   - `secret/loki/object-store` (from `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY`)
-   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
-   - Note: `secret/certmanager/dns01` is seeded by the separate `bootstrap-dns.yml` workflow once `LINODE_DNS_TOKEN` is provisioned — not by this workflow.
-12. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
-    lets `llz ci propagate-pat` authenticate to OpenBao via the workflow's
+   - `secret/loki/object-store` + `secret/harbor/registry-s3` (minted + seeded by `llz ci mint-bootstrap-objkeys` — no GitHub secrets involved; skip-if-present so a rotator-minted key is never clobbered)
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `platform-apl/components/harbor/` and `manifest/generated-secrets/`.
+11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
+    lets `llz ci rotate-incluster-pat` authenticate to OpenBao via the workflow's
     GitHub OIDC token and write `secret/linode/api-token` without root (the
     propagator policy grants write only on that single path). No long-lived
     credential is seeded into the environment — the OIDC token is minted
     per-run. See [linode-credential-rotation.md](linode-credential-rotation.md)
     "Why GitHub-OIDC, not root" for the design rationale.
-13. Revokes the root token.
+12. Revokes the root token.
 
 ### After first-time bootstrap — required operator actions
 
 > ⚠️ **These steps are not automated. Do not skip them.**
 >
-> - **Copy the `OPENBAO_SEAL_KEY` (32-byte static seal key) to secure offline storage.** It is the only key that can unseal this cluster's data — the recovery keys authorize `generate-root` but cannot decrypt the root key, so losing the seal key loses the data.
-> - **Copy recovery keys 4 and 5 and the root token from the job summary to secure offline storage.** They are never stored automatically and will not be shown again.
+> - **Copy the `OPENBAO_SEAL_KEY` to secure offline storage.
+
+   **It is never printed.** The bootstrap masks it in the job log and writes it
+   straight into the `infra-<region>` environment secret, which GitHub exposes by
+   name only — there is no read-back API. The only place you can still obtain it is
+   the cluster:
+
+   ```bash
+   kubectl -n llz-openbao get secret openbao-unseal-key -o jsonpath='{.data.unseal\.key}'
+   ```
+
+   That is the same base64 value the GitHub secret holds. Losing it *and* the
+   recovery quorum is unrecoverable.
+> - **Escrow the recovery shares.** If you dispatched with `openbao_escrow_pubkey_b64`, decrypt the ciphertext from the job summary (or the `openbao-recovery-keys-<env>-encrypted` artifact, which expires in 1 day) with your offline private key and store the plaintext outside GitHub — see [Escrowing the recovery shares](#escrowing-the-recovery-shares). If you did not, all 5 shares are in the `infra-<env>` environment and **no offline copy exists**; the only way to create one is `bao operator rekey`, which mints a new set.
 > - **Delete `OPENBAO_ROOT_TOKEN`** from the `infra-<env>` environment secrets if it was set before this run.
 
 ---
@@ -149,9 +258,9 @@ for the pods to self-unseal, then exits without re-configuring or re-seeding.
 
 ### Cold bootstrap: the cert-rotation reseal is auto-healed
 
-On a fresh cluster, OpenBao first comes up serving a self-signed bootstrap TLS cert (generated by `llz ci gen-bootstrap-tls` and seeded into `openbao-tls` Secret by the workflow). After the first workflow run seeds `secret/<release>/mtls-ca` into OpenBao, ESO syncs the CA keypair down, the platform's app-CA ClusterIssuer goes Ready, and cert-manager re-issues `openbao-tls` with the production cert (~5 minutes after the workflow completes).
+On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManagerBootstrapCA/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
 
-The `openbao-cert-watcher` Deployment (`instance-template/apl-values/components/openbao/openbao-cert-watcher.yaml`) detects this rotation and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed. The same is true of the ~80-day cert-renewal reseal.
+The `openbao-cert-watcher` Deployment (`platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
 
 If a pod stays sealed after a restart, the static seal key is the problem: check that the `openbao-unseal-key` Secret exists and is readable in the `llz-openbao` namespace, that it matches `OPENBAO_SEAL_KEY` on the `infra-<env>` environment, and inspect `bao status` + the pod logs (a missing/wrong key, or Raft storage that is unhealthy).
 
@@ -178,30 +287,155 @@ Use this if the cluster is already initialized and unsealed but configuration st
 
 These steps are not automated and must be done manually after the workflow completes:
 
-- [ ] Confirm `kubectl -n openbao get pods` shows all 3 pods `Running`.
+- [ ] Confirm `kubectl -n llz-openbao get pods` shows all 3 pods `Running`.
 - [ ] Verify Argo CD is syncing: `kubectl -n argocd get applications`.
 - [ ] Confirm ESO ClusterSecretStore is healthy: `kubectl -n external-secrets get clustersecretstore`.
 - [ ] Confirm the workflow reached the Harbor seeding steps; the first-cluster bootstrap waits for `harbor/harbor-admin-password`, Harbor deployments, and the Harbor API before seeding credentials.
-- [ ] Confirm `LOKI_S3_ACCESS_KEY` and `LOKI_S3_SECRET_KEY` were set before bootstrap; the workflow fails if they are missing because Loki cannot start without `secret/loki/object-store`.
+- [ ] Confirm the object-storage buckets exist (the `verify-object-storage` preflight checks this) — the workflow mints and seeds the S3 keys itself.
 - [ ] When running more than one cluster, bootstrap additional clusters after the first completes so they get the Harbor robot credentials from the repo-level GitHub secrets.
 
 ---
 
 ## Additional-cluster ordering constraint
 
-When you run more than one cluster, an additional cluster's bootstrap reads `HARBOR_ROBOT_NAME`, `HARBOR_PASSWORD`, `HARBOR_PULL_ROBOT_NAME`, and `HARBOR_PULL_PASSWORD` from repo-level GitHub secrets to seed `secret/harbor/robot` and `secret/harbor/pull-robot` into that cluster's OpenBao. These secrets are set during the first cluster's bootstrap. **Always bootstrap the first cluster before any additional cluster.**
+When you run more than one cluster, an additional (standby) cluster's bootstrap reads `HARBOR_ROBOT_NAME`, `HARBOR_PASSWORD`, `HARBOR_PULL_ROBOT_NAME`, and `HARBOR_PULL_PASSWORD` from repo-level GitHub secrets to seed `secret/harbor/robot` and `secret/harbor/pull-robot` into that cluster's OpenBao. These secrets are published by the **active cluster's in-cluster `harbor-robot-provisioner` CronJob** once Harbor is up there (within ~5 minutes of Harbor becoming healthy). **Always bootstrap the active cluster before any standby.**
 
-If an additional cluster's bootstrap runs before the first (or before Harbor is deployed on the first), the Harbor robot seeding step exits with a warning and is skipped. Re-run the additional cluster's bootstrap after the first completes.
+If a standby's bootstrap runs before the active's provisioner has published the secrets, the standby seeding step exits with a summary note and is skipped. Re-run the standby's bootstrap after the active's provisioner has run.
 
 ---
 
 ## Relationship to the release workflow
 
-A full release workflow calls `bootstrap-openbao.yml` as a reusable workflow (`workflow_call`) after cluster provisioning via Terraform. It bootstraps the first cluster first, then any additional clusters, because additional clusters seed Harbor robot credentials from repo-level secrets written during the first cluster's bootstrap. This covers the first-time bootstrap path during a full release. Emergency re-unseal and re-configure must be run manually via `workflow_dispatch`.
+A full release workflow reaches OpenBao bootstrap through `llz-terraform.yml`'s own `bootstrap-openbao` job, which calls the reusable `llz-bootstrap-openbao.yml`. (The `bootstrap-openbao.yml` stub in the instance is `workflow_dispatch`-only — it is not the path a release takes.) It bootstraps the first cluster first, then any additional clusters, because additional clusters seed Harbor robot credentials from repo-level secrets written during the first cluster's bootstrap. This covers the first-time bootstrap path during a full release. Emergency re-unseal and re-configure must be run manually via `workflow_dispatch`.
+
+---
+
+## Break-glass handles (when `bao-ensure-ready` is wedged)
+
+The bootstrap drives the whole seal/token lifecycle through one verb,
+`llz ci bao-ensure-ready` — probe every pod, init if uninitialized, wait for
+unseal, regenerate the root token if the loaded one was revoked.
+
+When that verb itself is stuck, the three steps it orchestrates are also exposed
+individually. **No workflow calls them, deliberately** — they are manual handles,
+run against a cluster you already have a kubeconfig for:
+
+| verb | what it does | reach for it when |
+|---|---|---|
+| `llz ci bao-status` | probes every OpenBao pod, reports initialized/sealed | you want the seal state without changing anything — always safe, start here |
+| `llz ci bao-init` | first-time `bao operator init`; escrows or persists the recovery shares, persists the root token | the cluster is genuinely uninitialized and the automated branch did not run |
+| `llz ci bao-regen-root` | regenerates the root token by quorum | the loaded root token was revoked (the end-of-run revoke raced a retry) and you need a usable one back |
+
+Two more in the same category, listed so nobody mistakes them for dead code:
+
+- `llz ci fetch-kubeconfig` — the **Linode-API** kubeconfig fetch. The workflows
+  use `fetch-kubeconfig-state` (reads the Terraform state output); this one exists
+  precisely because it needs no `terraform init`, no S3 backend and no git auth —
+  the things most likely to be broken when you need a kubeconfig by hand.
+- `llz ci openbao-login` — obtains a short-lived OpenBao token. The default
+  `--method kubernetes` exchanges the pod's ServiceAccount token (the CI-agnostic
+  path an Argo Workflow, a CronJob or the reconciler uses); `--method oidc`
+  exchanges a GitHub Actions OIDC token via jwt auth, the primitive behind the
+  cross-org thin-caller pattern.
+
+  **Where the token goes depends on `$GITHUB_ENV`.** Inside GitHub Actions it is
+  masked and appended to `$GITHUB_ENV` as `OPENBAO_TOKEN=…` for later steps.
+  Everywhere else — which is the primary case for `--method kubernetes` — it is
+  written **bare to stdout**, so capture it: `T=$(llz ci openbao-login)`. It is
+  deliberately not masked on that path, because `::add-mask::` is itself written
+  to stdout and would land inside the capture.
+
+> These verbs report **zero callers** to any "is this still used?" scan. That is
+> expected: a break-glass tool is used by a human during an incident, not by a
+> workflow. Confirm with the owner before "retiring" any of them.
+
+---
+
+## Break-glass root token (workflow) — `breakglass-openbao.yml`
+
+For the common incident case — "I need a working root token right now" — dispatch
+the `breakglass-openbao.yml` workflow (thin caller for the reusable
+`llz-breakglass-openbao.yml`, both vendored into the instance) instead of running
+the raw verbs by hand. It is the operator front-end to the recovery quorum: it opens
+cluster access and runs `llz ci bao-breakglass`, which regenerates via the quorum and
+returns the token **encrypted to your key** (a root token is full admin, and run logs
+are readable by anyone with Actions access — so it is never printed in the clear).
+Maintainer rationale:
+[`docs/workflows/llz-breakglass-openbao.md`](../workflows/llz-breakglass-openbao.md).
+
+**OpenBao root tokens have no TTL** — they do not self-expire. Lifecycle is manual;
+that is what the `revoke` / `rotate` actions are for.
+
+### Actions
+
+| `action` | Effect |
+|---|---|
+| `generate` | Regenerate a root token from the quorum and return it (encrypted). |
+| `rotate` | Revoke the current root token *first* (so no untracked live root is left behind), then mint and return a fresh one. |
+| `revoke` | Revoke the current root token and delete `infra-<env>::OPENBAO_ROOT_TOKEN`. Cleanup after you are done. |
+
+### One-time: create your break-glass keypair
+
+Keep the private half **offline** (never in GitHub). Any RSA key ≥ 2048-bit works.
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out bg-priv.pem
+openssl rsa -pubout -in bg-priv.pem -out bg-pub.pem
+base64 < bg-pub.pem | tr -d '\n'      # paste THIS as recipient_pubkey_b64
+```
+
+### Get a token
+
+```bash
+gh workflow run breakglass-openbao.yml \
+  --field region=<env> \
+  --field action=generate \
+  --field recipient_pubkey_b64="$(base64 < bg-pub.pem | tr -d '\n')"
+```
+
+The run's **job summary** (and a 1-day `openbao-root-token-<env>-encrypted`
+artifact) contains only ciphertext. **Save that ciphertext to a file first** — the
+decrypt below reads it from disk:
+
+```bash
+# Paste the base64 ciphertext from the job summary, or download the artifact:
+gh run download <run-id> -n openbao-root-token-<env>-encrypted   # -> root-token.b64
+# ...or by hand:  pbpaste > root-token.b64   /   cat > root-token.b64  (then Ctrl-D)
+
+base64 -d root-token.b64 \
+  | openssl pkeyutl -decrypt -inkey bg-priv.pem \
+      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo
+```
+
+> **macOS: use Homebrew's OpenSSL, not the system one.** The system `openssl` is
+> LibreSSL, which does not support `-pkeyopt rsa_oaep_md` and fails here with an
+> unhelpful error — at the worst possible moment. Check with `openssl version`; if
+> it says LibreSSL, run `brew install openssl@3` and use
+> `$(brew --prefix openssl@3)/bin/openssl` for both the keygen and the decrypt.
+
+### When the incident is over
+
+```bash
+gh workflow run breakglass-openbao.yml --field region=<env> --field action=revoke
+```
+
+### Requirements / notes
+
+- The cluster must be **up and auto-unsealed** (`generate-root` requires an unsealed
+  leader). If pods are sealed, fix the seal key first — see *Re-seal recovery* above.
+- Uses the existing `infra-<env>` secrets: `OPENBAO_RECOVERY_KEY_1/2/3` (the quorum),
+  `OPENBAO_SECRETS_WRITE_TOKEN` (writes/deletes the `OPENBAO_ROOT_TOKEN` env secret),
+  `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY`, and `LINODE_API_TOKEN`. No
+  `OPENBAO_SEAL_KEY` is needed (that is only for a namespace/data rebuild).
+- It shares the `openbao-bootstrap-<env>` concurrency group, so it cannot run
+  concurrently with a real bootstrap of the same deployment.
+- The generated token is also live in `infra-<env>::OPENBAO_ROOT_TOKEN` (write-only
+  in the UI). `revoke` removes it; a plain `generate` leaves it in place for a
+  follow-up re-configure run if you want one.
 
 ---
 
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
-- [`instance-template/.github/workflows/bootstrap-openbao.yml`](../../instance-template/.github/workflows/bootstrap-openbao.yml) — workflow source
+- [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — the thin caller in the TEMPLATE repo (in your instance it is `.github/workflows/bootstrap-openbao.yml`); the body is `llz-bootstrap-openbao.yml` beside it

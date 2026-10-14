@@ -50,10 +50,37 @@ variable "control_plane_high_availability" {
   default     = true
 }
 
+# NOT REQUESTED BY DEFAULT, and that is a deliberate downgrade from `true`.
+# LKE-Enterprise control-plane audit logs are an EXPERIMENTAL feature that is not
+# yet rolled out to every account. On an account without it the API accepts the
+# field, the apply reports success, and the cluster keeps reporting
+# `audit_logs_enabled = false` — so the setting never takes and every subsequent
+# plan proposes the same change again:
+#
+#     ~ control_plane {
+#         ~ audit_logs_enabled = false -> true
+#     Plan: 0 to add, 1 to change, 0 to destroy.
+#
+# Defaulting it true therefore bought no audit logging on most accounts and cost
+# two real things: a SECURITY CONTROL BELIEVED ON WHILE OFF, which is worse than
+# one known to be off, and a permanent diff that makes every plan noisy enough to
+# stop being read. Found by `llz ci assert-upgrade-plan --expect-no-changes` on
+# its first run (2026-08-24).
+#
+# TO ENABLE IT on an account that HAS the rollout, set it in the spec — the
+# plumbing is already opt-in and emits the tfvar only when the field is present:
+#
+#     cluster:
+#       controlPlane:
+#         auditLogsEnabled: true
+#
+# Asking for it there is honest: if the account cannot deliver it, the same
+# perpetual diff appears and now names a choice somebody made rather than a
+# default nobody chose.
 variable "control_plane_audit_logs_enabled" {
   description = "Whether to enable control-plane audit logs."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "control_plane_acl_ipv4" {
@@ -88,10 +115,27 @@ variable "github_runner_ipv6_cidrs" {
   default     = []
 }
 
-# ── Kubeconfig ────────────────────────────────────────────────────────────────
-
-variable "kubeconfig_path" {
-  description = "Absolute path to write the generated kubeconfig file (mode 0600). Leave empty to skip writing to disk and consume kubeconfig_raw from outputs instead."
+variable "control_plane_cidr" {
+  description = "Linode private network CIDR the LKE control plane uses to reach worker nodes (kubelet, DNS, Calico, etc.)."
   type        = string
-  default     = ""
+  default     = "192.168.128.0/17"
+}
+
+variable "nodebalancer_cidr" {
+  description = "Linode NodeBalancer source CIDR. NodeBalancers health-check and forward traffic from this range."
+  type        = string
+  default     = "192.168.255.0/24"
+}
+
+variable "apl_enabled" {
+  description = <<-EOT
+    Enable Linode's MANAGED App Platform on this cluster (linode_lke_cluster.apl_enabled,
+    v4beta/enterprise only). When true, Linode installs+manages apl-core AND provisions
+    the lke<clusterID>.akamai-apl.net domain + DNS + wildcard cert. `llz ci bootstrap-cluster`
+    then SKIPS its own apl-core install. Default false = LLZ self-installs apl-core (unchanged).
+    ForceNew: this is fixed at cluster creation; flipping it recreates the cluster.
+    See docs/adr/0005-managed-app-platform.md.
+  EOT
+  type        = bool
+  default     = false
 }

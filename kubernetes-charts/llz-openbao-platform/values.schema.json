@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "llz-openbao-platform values",
+  "description": "Root-strict schema: every top-level key is declared, so a typo (e.g. `openbo:`) is REJECTED AT RENDER instead of silently activating nothing. Nested objects stay permissive on purpose — `openbao` in particular is the upstream subchart's own value tree and must not be constrained from here. Add nested constraints only where a wrong value is as silent as a wrong key.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "platform": {
+      "type": "object",
+      "description": "This chart's own platform wiring (releaseName, ESO/PushSecret glue, policies)."
+    },
+    "openbao": {
+      "type": "object",
+      "description": "Values passed through to the upstream openbao subchart. Deliberately unconstrained — the subchart owns its own schema."
+    },
+    "openbaoPromtail": {
+      "type": "object",
+      "description": "Promtail sidecar shipping OpenBao audit logs to Loki."
+    }
+  }
+}

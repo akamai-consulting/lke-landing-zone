@@ -92,3 +92,49 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 {{- end -}}
+
+{{/*
+baselineNP renders the two NetworkPolicies every apl-core-managed namespace gets
+first: a default-deny (Ingress+Egress) and the allow-dns egress that must
+accompany it — a default-deny with no DNS allowance breaks every pod's name
+resolution, which is why these two are emitted as one unit and never separately.
+
+The four namespaces (cert-manager, harbor, istio-system, observability) had
+byte-identical copies of both, differing only in the name prefix and namespace.
+Called inline at each namespace's own section rather than hoisted into a range
+at the top of the file, so the per-namespace grouping the file documents
+("Pattern per namespace: default-deny + allow-dns + allow-apiserver +
+namespace-specific allows") is preserved and the rendered document order is
+unchanged.
+
+Args (dict): prefix (name prefix), ns (namespace), wave (sync-wave),
+dnsPorts (the .Values.networkPolicies.dnsPorts list).
+*/}}
+{{- define "llz-cluster-foundation.baselineNP" -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .prefix }}-default-deny
+  namespace: {{ .ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .prefix }}-allow-dns
+  namespace: {{ .ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range .dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+{{- end }}

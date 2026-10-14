@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "llz-cluster-foundation values",
+  "description": "Root-strict schema: every top-level key is declared, so a typo (e.g. `storageClassPatchr:`) is REJECTED AT RENDER instead of silently activating nothing. Nested objects stay permissive on purpose — the value here is catching the silent no-op, not freezing every knob. Add nested constraints only where a wrong value is as silent as a wrong key.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "image": {
+      "type": "object",
+      "description": "Image used by this chart's Jobs/CronJobs (coreDNS restart, sc-default-patcher)."
+    },
+    "syncWaves": {
+      "type": "object",
+      "description": "Per-resource Argo sync-wave assignments. Load-bearing ordering — see values.yaml."
+    },
+    "podSecurityStandardsVersion": { "type": "string" },
+    "namespaces": {
+      "type": "array",
+      "description": "Namespaces this chart creates (wave -20, before anything targets them).",
+      "items": { "type": ["object", "string"] }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "description": "Baseline default-deny + allow policies. Each scar here prevents a specific convergence wedge."
+    },
+    "coreDNS": {
+      "type": "object",
+      "description": "The *.internal rewrite + restart Job."
+    },
+    "storageClassPatcher": {
+      "type": "object",
+      "description": "Keeps exactly one default StorageClass (promote desiredDefault, demote LKE's)."
+    }
+  }
+}

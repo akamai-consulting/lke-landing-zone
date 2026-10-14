@@ -1,0 +1,86 @@
+name: 'Assert the saved plan destroys nothing'
+description: >
+  Refuse a plan that would destroy or replace live infrastructure, before the
+  apply that would do it.
+
+# WHY A COMPOSITE AND NOT FOUR COPIES. Every apply lane in llz-terraform.yml asks
+# the same question of its own saved plan, differing only in which directory the
+# plan is in and which resource types that lane treats as routine. Four copies of
+# one pipeline is four places to edit when the check gains a flag, and three
+# places to forget. It was written as four and deduplicated here in the same
+# change.
+#
+# WHAT IT DOES NOT DO: decide anything. The judgement is `llz ci
+# assert-upgrade-plan` — Go, unit-tested, with the allowlist logic and the
+# operator-facing remedy text. This file is the seam that hands it a plan.
+#
+# ON THE BUDGET, said plainly because the number is load-bearing and easy to
+# misread. Measured with `make untestable-loc-check`:
+#
+#   origin/main                                512 / 512   (already AT the cap)
+#   this change, four guard steps inline       513 / 512   OVER
+#   this change, deduplicated into here        512 / 512
+#
+# So the extraction is what pays for the three new guards. Two things follow that
+# a reader should not have to reconstruct. First, .untestable-budget.yaml's
+# workflow-inline-bash glob covers `.github/actions/**/action.yml` but NOT
+# `instance-template/.github/actions/**`, so the run line below is counted
+# nowhere — verified by deleting this file and re-measuring, which moved nothing.
+# The deduplication is worth doing on its own merits, four copies of one pipeline
+# being four places to edit and three to forget; the accounting for it is a glob
+# gap, not a saving. Extending that glob is worth doing separately — it would
+# newly count six existing instance-template composites and needs its own
+# re-baseline.
+#
+# Second, and the part with a shelf life: main has ZERO headroom against a budget
+# whose own comment asks for ~3%. The next workflow change of any size trips it.
+
+inputs:
+  working-directory:
+    description: 'The terraform root holding tfplan.bin (e.g. terraform-iac-bootstrap/cluster).'
+    required: true
+  allow-replace:
+    description: >
+      Comma-separated resource TYPES whose destroy/replace is routine for this
+      lane — an ALLOWLIST, so anything not named here is refused. Empty for every
+      root that holds data or shared network: nothing in those is routinely
+      recycled. The cluster root names linode_lke_node_pool (node_type is
+      ForceNew, so a resize plans as a replace) and time_sleep (a timing helper,
+      not infrastructure).
+    required: false
+    default: ''
+  report-only:
+    description: >
+      When 'true', print the verdict and exit 0 instead of failing the job — for
+      the PLAN half of a lane, where a finding is a preview rather than a refusal.
+      A plan changes nothing, and failing the preview would only teach operators
+      to skip the one dispatch they reach for to look before they leap. The APPLY
+      half of the same lane leaves this false and refuses.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # tofu show -json against the SAVED plan, never a re-plan: these are the same
+    # bytes the lane's plan step printed, so the check and the summary an operator
+    # just read cannot disagree about what is being applied.
+    # THE ALLOWLIST ARRIVES AS ENV, NEVER SPLICED INTO THE COMMAND. An earlier cut
+    # built the flag inline with `${{ inputs.allow-replace && format(...) || '' }}`,
+    # which is the shape run-injection-guard exists to stop and which
+    # TestDeliveredWorkflowCommands rejected outright — the delivered-workflow
+    # scanner reads the first token after the verb as a subcommand and found `${{`.
+    #
+    # ALWAYS PASSED, even when empty, so the command line has one shape. An empty
+    # value allowlists nothing: PartitionAllowed refuses any finding whose type is
+    # not named, and "" is never a resource type.
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ALLOW_REPLACE: ${{ inputs.allow-replace }}
+        # Through `env:` for the same reason as ALLOW_REPLACE, and additionally
+        # because this one descends from env.ACTION, which descends from a
+        # dispatch input — exactly what run-injection-guard forbids reaching a
+        # script.
+        LLZ_ASSERT_PLAN_REPORT_ONLY: ${{ inputs.report-only }}
+      run: tofu show -json tfplan.bin | llz ci assert-upgrade-plan --allow-replace "$ALLOW_REPLACE"

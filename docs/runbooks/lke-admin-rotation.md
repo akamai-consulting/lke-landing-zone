@@ -22,20 +22,27 @@ Your Product Security rotation guidelines recommend a Linode PAT scoped to the *
 
 ## Automated path (target state)
 
-`instance-template/.github/workflows/secret-rotation.yml` — monthly (1st, 04:00 UTC), each environment:
+`.github/workflows/secret-rotation.yml` — monthly (1st, 04:00 UTC), each environment:
 
-```
-per environment, Environment-gated (infra-<env>)
-        │
-        ▼
-fetch kubeconfig (TF state) → resolve cluster_id
-        │
-        ▼  llz credentials lke-admin rotate --apply
-   asserts cluster is LKE-Enterprise (+lke) — refuses otherwise
-   DELETE /v4/lke/clusters/<id>/kubeconfig   (LINODE_API_TOKEN, shared TF token)
-        │
-        ▼  terraform apply -refresh-only      (repopulate kubeconfig_raw)
-        ▼  post-rotation health gate          (kubectl get nodes, bounded)
+```mermaid
+flowchart TB
+    START(["per environment,<br/>Environment-gated <code>infra-&lt;env&gt;</code>"])
+    FETCH["fetch kubeconfig from TF state<br/>→ resolve <code>cluster_id</code>"]
+    GATE{"is the cluster<br/>LKE-<b>Enterprise</b> (+lke)?"}
+    REFUSE(["❌ refuse — rotation does not<br/>apply to standard LKE"])
+    DEL["<code>DELETE /v4/lke/clusters/&lt;id&gt;/kubeconfig</code><br/><i>LINODE_API_TOKEN — the shared TF token</i>"]
+    REFRESH["<code>terraform apply -refresh-only</code><br/>repopulate <code>kubeconfig_raw</code>"]
+    HEALTH["post-rotation health gate<br/><code>kubectl get nodes</code>, bounded"]
+    DONE(["✅ rotated"])
+
+    START --> FETCH --> GATE
+    GATE -->|no| REFUSE
+    GATE -->|yes| DEL --> REFRESH --> HEALTH --> DONE
+
+    classDef bad fill:#fce8e6,stroke:#ea4335,color:#111;
+    classDef ok fill:#e6f4ea,stroke:#34a853,color:#111;
+    class REFUSE bad;
+    class DONE ok;
 ```
 
 The tool is dry-run unless `--apply`. It touches **only** the Linode API — never the Kubernetes API — so it carries no in-cluster RBAC and the PAT never enters a cluster.
@@ -59,7 +66,10 @@ Environment approval on `infra-<env>` still applies. Run every environment for a
 Use the shared `LINODE_API_TOKEN` (the broad Terraform Linode token — see the PAT-scope note above; a separate K8s-scoped PAT is intentionally not maintained):
 
 ```bash
-CID=<cluster_id>          # terraform -chdir=instance-template/terraform-iac-bootstrap/cluster output -raw cluster_id
+# The cluster id, read from the cluster root's Terraform output:
+cd terraform-iac-bootstrap/cluster
+CID=$(llz ci tf-output cluster_id)
+
 curl -fsSL -X DELETE \
   -H "Authorization: Bearer $LINODE_API_TOKEN" \
   "https://api.linode.com/v4/lke/clusters/${CID}/kubeconfig"
@@ -68,9 +78,19 @@ curl -fsSL -X DELETE \
 Then refresh Terraform state so downstream CI gets the new kubeconfig:
 
 ```bash
-cd instance-template/terraform-iac-bootstrap/cluster
-terraform apply -refresh-only -auto-approve -var-file="<env>.tfvars"
+cd terraform-iac-bootstrap/cluster
+llz tofu --region <env> -- init
+llz --yes tofu -- apply -refresh-only -auto-approve -var-file="<env>.tfvars"
 ```
+
+> **Run both steps through `llz tofu`.** Every root carries `encryption.tf`, so a
+> bare `tofu` fails with OpenTofu's own unhelpful *"Invalid expression … A single
+> static variable reference is required"* — the state-encryption tripwire, not a
+> broken checkout. `llz tofu` builds `TF_ENCRYPTION` from the
+> `TF_STATE_ENCRYPTION_PASSPHRASE` in `.llz/secrets.env`, the same value the
+> `tf-encryption-env` composite action gives CI, and passes everything after `--`
+> through untouched. `llz ci tf-output` resolves it for itself. See
+> [ADR 0007 (state encryption)](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0007-terraform-state-encryption.md).
 
 Do **not** `kubectl delete` the `lke-admin-token` Secret.
 

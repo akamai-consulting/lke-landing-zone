@@ -45,10 +45,13 @@ for attempt in 1 2 3 4 5 6; do
 done
 [[ "$dispatched" -eq 1 ]] || { log "could not dispatch ${WORKFLOW} on ${REPO}"; exit 1; }
 
-# Find the run id (gh workflow run does not return it). Poll for up to 90s.
+# Find the run id (gh workflow run does not return it). Probe immediately, then
+# every 2s for up to ~90s — the run usually exists within seconds, and the old
+# lead-with-sleep 3s cadence paid a flat 3s+ on every dispatch.
 RUN_ID=""
-for _ in $(seq 1 30); do
-  sleep 3
+first=1
+for _ in $(seq 1 45); do
+  if [[ "$first" -eq 1 ]]; then first=0; else sleep 2; fi
   # Newest dispatch run; compare its createdAt to our pre-dispatch timestamp.
   read -r RID CREATED < <(gh run list --repo "$REPO" --workflow "$WORKFLOW" \
       --event workflow_dispatch --limit 1 \
@@ -62,22 +65,49 @@ done
 [[ -n "$RUN_ID" ]] || { log "could not locate the dispatched run within 90s"; exit 1; }
 log "watching run ${RUN_ID}: $(gh run view "$RUN_ID" --repo "$REPO" --json url --jq .url 2>/dev/null || echo "")"
 
-# Block until done. Guard the whole wait with an overall timeout so a hung run
-# can't pin this job.
-set +e
-timeout "$TIMEOUT" gh run watch "$RUN_ID" --repo "$REPO" --interval 30 --exit-status >&2
-watch_rc=$?
-set -e
-if [[ $watch_rc -eq 124 ]]; then
-  log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
-  gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
-  exit 124
-fi
+# Block until the run is genuinely COMPLETED. `gh run watch --exit-status` can exit
+# non-zero WITHOUT the run having finished — most commonly an HTTP 404 on the run's
+# jobs endpoint in the seconds after dispatch, before GitHub lists the jobs (observed:
+# watch attached ~4s post-create, 404'd, exited rc=1 while the destroy ran on fine —
+# failing teardown on a healthy run). A single watch exit is therefore NOT proof the
+# run ended, so re-attach until the run's status is actually 'completed'. Bound the
+# whole wait by TIMEOUT so a hung run still can't pin this job.
+deadline=$(( $(date -u +%s) + TIMEOUT ))
+watch_rc=0
+run_status=""
+while :; do
+  remaining=$(( deadline - $(date -u +%s) ))
+  if [[ $remaining -le 0 ]]; then
+    log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
+    gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
+    exit 124
+  fi
+  set +e
+  # --interval 15 (not the 30 default here previously): the interval is pure
+  # completion-detection latency on the caller's critical path — ~15s average
+  # saved per dispatch at the cost of a few extra API reads on runs that take
+  # tens of minutes anyway.
+  timeout "$remaining" gh run watch "$RUN_ID" --repo "$REPO" --interval 15 --exit-status >&2
+  watch_rc=$?
+  set -e
+  if [[ $watch_rc -eq 124 ]]; then
+    log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
+    gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
+    exit 124
+  fi
+  run_status="$(gh run view "$RUN_ID" --repo "$REPO" --json status --jq '.status // ""' 2>/dev/null || echo "")"
+  [[ "$run_status" == "completed" ]] && break
+  # Watch returned but the run is still going: a transient API hiccup (e.g. the
+  # jobs-endpoint 404 right after dispatch) detached it early. Wait a beat and
+  # re-attach rather than mistaking it for a run failure.
+  log "watch detached before completion (rc=${watch_rc}, run status='${run_status:-unknown}') — re-attaching in 5s"
+  sleep 5
+done
 
-# Do NOT trust `gh run watch --exit-status` alone: it has been observed to return
-# 0 for a run that had ALREADY finished (e.g. failed within seconds, before the
-# watch attached) — which silently turned a failing dispatched run into a green
-# caller job. Authoritatively re-read the run's conclusion and require success.
+# Even once the run is completed, do NOT trust the watch exit code alone: it has been
+# observed to return 0 for a run that had ALREADY finished (e.g. failed within seconds,
+# before the watch attached) — which silently turned a failing dispatched run into a
+# green caller job. Authoritatively re-read the run's conclusion and require success.
 # (A run whose jobs were all skipped concludes 'success' too; that's intended —
 # skip-only no-ops are prevented upstream by forwarding the dispatch inputs.)
 CONCLUSION="$(gh run view "$RUN_ID" --repo "$REPO" --json conclusion --jq '.conclusion // "unknown"' 2>/dev/null || echo unknown)"

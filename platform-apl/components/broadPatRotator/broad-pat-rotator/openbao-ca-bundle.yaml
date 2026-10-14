@@ -1,0 +1,47 @@
+# OpenBao CA bundle for this namespace — the thing that lets the broad-pat-rotator CronJob VERIFY
+# OpenBao's TLS instead of skipping it.
+#
+# WHY A CERTIFICATE AND NOT A REFLECTOR: OpenBao's serving cert is signed by the
+# private `openbao-ca` ClusterIssuer (components/certManagerBootstrapCA/). Its
+# `ca.crt` therefore has to reach every consumer namespace, and the platform ships
+# no secret-reflector. cert-manager stamps `ca.crt` onto the Secret of EVERY
+# certificate it issues from a CA issuer — so issuing one throwaway leaf here
+# yields the bundle as a side effect, using machinery the cluster already hard-
+# requires. No Kyverno generate/clone rule on a bootstrap-critical path, no
+# cross-namespace RBAC for a background controller, no sync lag.
+#
+# The leaf itself is never used: nothing serves on this cert. Only `ca.crt` off
+# the resulting Secret is consumed (mounted at /etc/openbao-ca, pointed at by
+# OPENBAO_CA_FILE). dnsNames is a placeholder that must simply be valid.
+#
+# ORDERING: the `openbao-ca` ClusterIssuer reaches Ready at sync-wave -15, long
+# before this. The mount is still marked `optional: true` in the CronJob for
+# the same reason the token mounts are — a pod that starts before the Secret
+# materializes should come up and pick it up, not CrashLoop. That is also why the
+# Deployment keeps OPENBAO_SKIP_VERIFY as the documented fallback: with the CA
+# file absent, inClusterBaoHTTPClient() would otherwise hard-fail rather than
+# degrade, turning a missing bundle into a failed job run.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openbao-ca-bundle
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  secretName: openbao-ca-bundle
+  # Short-lived on purpose: the leaf is disposable, and a tight renewal keeps the
+  # copied `ca.crt` fresh against the 10-year CA without ever changing it (the CA
+  # is signed once and never re-signed — see openbao-bootstrap-ca.yaml).
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  # Placeholder — this leaf is never presented to anything. Only ca.crt is read.
+  dnsNames:
+    - openbao-ca-bundle.llz-pat-rotator.svc.cluster.local
+  issuerRef:
+    name: openbao-ca
+    kind: ClusterIssuer

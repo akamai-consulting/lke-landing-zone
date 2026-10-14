@@ -1,0 +1,26 @@
+# The address CoreDNS rewrites the Object Storage endpoint hostname to.
+#
+# Clients keep addressing <region>.linodeobjects.com — that is REQUIRED, not
+# incidental: the proxy does not re-sign, so the Host header the client signed must
+# survive to the upstream. The rewrite changes only what that name RESOLVES to.
+#
+# internalTrafficPolicy: Local pairs with the DaemonSet — a node's traffic is served
+# by the pod on that node, so a large layer push never takes a cross-node hop.
+# NOTE the failure mode that buys: if a node's proxy pod is unhealthy, that node's
+# writers have nowhere to fall back to. That is deliberate — the alternative is
+# writing PLAINTEXT to a neighbour, which is worse and silent.
+apiVersion: v1
+kind: Service
+metadata:
+  name: obj-proxy
+  namespace: obj-proxy
+  annotations:
+    # Wave 5, with the DaemonSet it fronts — a Service with no ready endpoints is
+    # not useful earlier, and /Service is not a health-vetted kind at negative waves.
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  selector:
+    app.kubernetes.io/name: obj-proxy
+  ports:
+    - { name: s3, port: 443, targetPort: s3, protocol: TCP }
+  internalTrafficPolicy: Local

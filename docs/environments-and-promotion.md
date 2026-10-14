@@ -6,8 +6,9 @@ workflows, N ranked deployments, and a change that walks them in order on green.
 
 > Prerequisite: you can stand up a single deployment end to end
 > ([quickstart.md](quickstart.md)). This doc is the multi-deployment layer on
-> top — read [§0 of the quickstart](quickstart.md#0-a-word-on-environments-first)
-> for the three meanings of "environment" first; here, "environment" always means
+> top — read the quickstart's *What "environment" means here* table
+> ([§3](quickstart.md#3-scaffold-your-instance--llz-new--llz-env-add)) for the
+> three meanings of "environment" first; here, "environment" always means
 > a **deployment**.
 
 ## 1. The model: a pipeline is N deployments in one repo
@@ -34,20 +35,35 @@ What "promotion" means here is deliberately narrow and GitOps-shaped:
 
 This gives you blast-radius control (a bad change is caught on `dev` before it
 reaches `prod`) without a second repo or a separate config system: the same
-`llz validate → tokens → build → status` flow you already run for one deployment,
-run per stage in a fixed order.
+`llz tokens → doctor → build → status` flow you already run for one deployment
+(or `llz up <env>`, which chains the first three), run per stage in a fixed order.
 
+```mermaid
+flowchart LR
+    PR["PR merges a chart pin<br/>or module change to <b>main</b>"]
+
+    subgraph REPO["one instance repo, one main branch"]
+        direction LR
+        DEV["<b>dev</b><br/>promotion_rank = 1<br/><i>build + verify</i>"]
+        STG["<b>staging</b><br/>promotion_rank = 2<br/><i>build + verify</i>"]
+        PRD["<b>prod</b><br/>promotion_rank = 3<br/><i>build + verify</i>"]
+        LAB["<b>lab</b><br/><i>no rank — not in the pipeline</i>"]
+    end
+
+    PR --> DEV
+    DEV ==>|"on green"| STG
+    STG ==>|"on green"| PRD
+
+    classDef ranked fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef unranked fill:#f1f3f4,stroke:#9aa0a6,stroke-dasharray:4 3,color:#5f6368;
+    class DEV,STG,PRD ranked;
+    class LAB unranked;
 ```
-        one instance repo, main branch
-                     │
-   PR merges a chart pin / module change to main
-                     │
-   ┌─────────────────┼──────────────────┐
-   ▼                 ▼                  ▼
- dev (rank 1) ──▶ staging (rank 2) ──▶ prod (rank 3)
- build+verify     build+verify         build+verify
-   on green         on green             on green
-```
+
+Each stage is a **separate cluster** built from the same `main`. Only ranked
+deployments appear in the pipeline — `lab` above is a real deployment that
+`llz env list --ordered` simply never returns, because it has no
+`promotion_rank`.
 
 ## 2. Declaring the order: `promotion_rank`
 
@@ -76,9 +92,11 @@ Rules:
 Set it at scaffold time:
 
 ```bash
-llz env add dev     --region us-ord --promotion-rank 1   # ...plus the usual flags
-llz env add staging --region us-ord --promotion-rank 2
-llz env add prod    --region us-sea --promotion-rank 3
+# --region and --obj-cluster are required on every `env add`; the rest of the
+# sizing falls back to spec.defaults.
+llz env add dev     --region us-ord --obj-cluster us-ord-1 --promotion-rank 1
+llz env add staging --region us-ord --obj-cluster us-ord-1 --promotion-rank 2
+llz env add prod    --region us-sea --obj-cluster us-sea-1 --promotion-rank 3
 ```
 
 …or edit `promotion_rank` in an existing `cluster/<env>.tfvars` by hand. Either
@@ -125,7 +143,7 @@ deployment — both are "stop here" signals a CI step can branch on.
 
 The pipeline runs as a **static `needs:`-chained workflow**
 (`.github/workflows/promote.yml`) — *generated from the ranks*, not hand-written.
-GitHub already provides the three pieces of a promotion pipeline, so the runtime
+GitHub already provides every piece of a promotion pipeline, so the runtime
 reinvents nothing:
 
 | Promotion concern | Native mechanism |
@@ -143,21 +161,44 @@ single-deployment flow uses — promotion only adds *ordering* (`needs:`) and th
 ```yaml
 # .github/workflows/promote.yml  (GENERATED — `llz env pipeline` renders it)
 jobs:
+  llz-preflight:                                          # spec gate — see below
+    runs-on: ubuntu-latest
+    container: { image: "${{ vars.TF_IMAGE }}" }
+    steps:
+      - uses: actions/checkout@<pinned-sha>
+      - run: llz ci assert-image-fresh          # skew check FIRST — see below
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - run: llz env pipeline --check --require-pipeline
   dev:                                                    # rank 1 — pipeline entry
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    needs: llz-preflight
+    uses: ./.github/workflows/llz-terraform.yml           # vendored body — local, same-repo
     with: { action: apply, module: all, region: dev }
     secrets: inherit
   staging:                                                # rank 2
     needs: dev                                            # green gate
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    uses: ./.github/workflows/llz-terraform.yml
     with: { action: apply, module: all, region: staging }
     secrets: inherit
   prod:                                                   # rank 3
     needs: staging
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    uses: ./.github/workflows/llz-terraform.yml
     with: { action: apply, module: all, region: prod }
     secrets: inherit
 ```
+
+**A fresh instance does not have this file — it has a placeholder with no stages.**
+It ships that way on purpose. The template used to deliver the three-stage example
+above *live and dispatchable*, which meant an instance that declared only `prod`
+could run a `dev → staging → prod` promotion: three stages started, and each died
+about twenty seconds in with `llz: env "dev" not in spec (have: [prod])`. One
+cause, three unrelated-looking failures. An example you can run is not an example,
+so the runnable copy lives here and the instance gets a placeholder that tells you
+to rank two deployments.
+
+The `uses:` is **repo-local**: the instance vendors the reusable bodies and
+composite actions (ADR 0003), so `secrets: inherit` is same-repo and nothing is
+fetched from the template repo at runtime — the property that makes cross-org
+instances and air-gapped GHE deployments work.
 
 You never edit this file by hand. **`llz env add <env> --promotion-rank N`
 regenerates it**, and for the hand-edit path (you changed a `promotion_rank` in a
@@ -165,14 +206,132 @@ tfvars directly) **`llz env pipeline`** re-renders it from the current ranks:
 
 ```bash
 llz env pipeline           # regenerate promote.yml from the promotion_rank ordering
-llz env pipeline --check    # CI gate: exit non-zero if promote.yml has drifted from the ranks
+llz env pipeline --check   # CI gate: exit non-zero on rank drift, or on a stage the spec does not declare
 ```
 
-Wire `llz env pipeline --check` into the instance's CI as the "did you
-regenerate?" guard so a tfvars rank edit can't silently diverge from the workflow.
-The reusable-workflow pin (`uses:@<ref>` + `template-ref`) is **preserved** from
-the file already on disk (or lifted from the sibling `terraform.yml`), so a
-Renovate version bump is *not* treated as drift — only a rank change is.
+`--check` asserts two different things, and the second is the one that bites:
+
+1. **Rank drift** — the file no longer matches the `promotionRank` ordering. Fix
+   by regenerating.
+2. **A stage naming a deployment that does not exist** — renamed, deleted, or
+   never created. Fix by adding the deployment, or re-running `llz env pipeline`
+   (which regenerates from what the spec actually declares).
+
+Only the first needs two or more ranked deployments to mean anything; the second
+runs at any count, *including zero*. That asymmetry is the whole point. The check
+used to abstain below two ranks and print "in sync" for it, so an instance with
+one deployment and a three-stage workflow was reported as healthy right up until
+somebody pressed **Run workflow**. Abstaining is not agreement.
+
+It runs in three places, and each catches a population the others cannot:
+
+| Where | When | Catches |
+| --- | --- | --- |
+| `llz doctor` | locally, before you push | the bad edit *and* the state your instance was scaffolded in — this is the only one that runs before a commit exists |
+| `promote-pipeline-drift` in `llz-terraform.yml` | on every pull request | the bad edit before it lands |
+| the `llz-preflight` job the generated `promote.yml` chains its first stage from | on dispatch | anything that reached `main` another way, before a single stage starts applying |
+
+The first was added last, and the gap it closed was the expensive one. The other
+two only ever fire on a *change*, so an instance that carried an unrunnable
+`promote.yml` from the day it was scaffolded — nobody edits a file they never
+configured — met neither until some unrelated pull request happened to run the CI
+job months later. `llz upgrade` runs `llz doctor` as its post-upgrade readiness
+report, so the check now also reaches the operator at the one moment they are
+guaranteed to be looking.
+
+**`llz ci assert-image-fresh` runs first in the preflight, and the order is load
+bearing.** A `TF_IMAGE` that has not been re-pinned since the last upgrade is the
+*normal* state right after one, and that image's baked `llz` does not have
+`--require-pipeline` — so with the steps the other way round the job dies on
+`unknown flag` and the actionable skew message never runs, on exactly the
+population it was built for. `assert-image-fresh` has shipped for many releases,
+so it resolves in the old image and says the useful thing. Any new verb or flag
+added to this job belongs *below* it. (Same rule `repo-readiness` records in
+`llz-terraform.yml`, learned the same way.)
+
+### One declared deployment: the single-stage pipeline
+
+**You do not need two deployments to have a working `Promote`.** An instance that
+declares exactly one gets a one-stage pipeline that applies it, generated by the
+same `llz env pipeline`:
+
+```yaml
+jobs:
+  llz-preflight:            # same gate as the chain form
+    ...
+  prod:
+    name: Promote → prod (the only deployment)
+    needs: llz-preflight
+    uses: ./.github/workflows/llz-terraform.yml
+    with: { action: apply, module: ${{ inputs.module || 'all' }}, region: prod }
+    secrets: inherit
+```
+
+Dispatch it and it runs. No `promotionRank` is involved and none is printed: the
+rank answers *which order*, and with one deployment there is no order to answer.
+Declare a second, rank both, re-run `llz env pipeline`, and the same file grows
+into the `needs:`-chain above.
+
+This replaced an answer that was worse than it looked. A single-deployment
+instance used to get the **stage-less placeholder** — a `Promote` button that
+promoted nothing, every check green, and a message telling the operator to go
+dispatch `terraform.yml` by hand, for the one topology where *what to apply* was
+never in question. The placeholder is still what you get with **two or more**
+unranked deployments, where `llz` genuinely cannot know the order you want.
+
+### When `llz` is *not* managing this file
+
+`llz env pipeline` writes only where there is nothing to destroy: a file that
+cannot run, a file that applies nothing, or a file `llz` itself generated (every
+generated `promote.yml` opens with a `# GENERATED` banner). Anything else it
+leaves **alone** — an unranked chain over deployments that all exist applies
+exactly what it says, and is yours to maintain.
+
+The case it *will* overwrite is a stage naming a deployment that **does not
+exist** — a **literal** name the spec does not have. That file cannot run, and
+regenerating is the only route back to a green `--check`: to the single stage if
+you declare one deployment, to the stage-less placeholder if you declare several
+and have ranked fewer than two.
+
+Recognising its own banner is what keeps a generated file *managed*. Without it,
+the second `llz env pipeline` disowned the pipeline it had just written — and,
+more expensively, stopped reporting drift on it, so a hand-edit to a generated
+stage read as "in sync".
+
+A `region:` that is an **expression** (`${{ inputs.target }}`) is *not* that case,
+and is never overwritten. There is no name to compare against the spec, so calling
+it undeclared would assert a falsehood — and no edit makes an expression resolvable
+at check time, so the failure would have no reachable remedy. `--check` reports such
+a stage as **unverified** and still exits 0; the passing message says so rather than
+claiming every stage was checked. Whatever it resolves to at run time must be a
+declared deployment, and only the run can tell you.
+
+What `--check` *will* fail on, ranked or not, is a file with two or more `action:
+apply` stages and **no `needs:` between any of them**. Every stage starts at once,
+so the last deployment applies alongside the first — and the ordering is precisely
+what `promote.yml` adds over dispatching `terraform.yml` per deployment. A *partial*
+chain (one stage fanning out to two) stays legal: that is an ordering, and a
+hand-maintained file is not required to look like the generated one.
+
+### `llz upgrade` never rewrites this file
+
+`promote.yml` is `owned` in `.template-manifest` and fenced by copier's
+`_skip_if_exists`: seeded once at scaffold, yours from then on. `llz env pipeline`
+is what keeps it correct, so copier must not be what rewrites it. Left in the
+three-way merge, an instance that took the old shipped example unchanged had
+`ours == base`, so copier applied *theirs* cleanly — silently replacing a working
+promotion pipeline, with no conflict markers for `llz upgrade` to stop on.
+
+The cost of that safety is that improvements to this file — a new preflight step, a
+bumped `actions/checkout` — **do not arrive by upgrade**. Re-run `llz env pipeline`
+after an upgrade to pick them up. An instance whose pipeline predates the preflight
+job keeps dispatching without one; `--check` says so as an advisory rather than
+failing, because that file runs correctly and nothing the operator did caused it.
+
+The caller boilerplate (`instance_repo`) is **preserved** from the file already
+on disk (or lifted from the sibling `terraform.yml`), and the stages carry no
+template pin at all — so a template version bump is *not* treated as drift, and
+does not rewrite this file. Only a rank change does.
 
 Start a rollout with **Run workflow** on the Promote action (or `gh workflow run
 promote.yml`). It walks `dev → staging → prod`, pausing at each protected
@@ -193,7 +352,7 @@ branching the repo:
 
 | Knob | Where | Typical pipeline use |
 |---|---|---|
-| `apl_chart_version` | `cluster-bootstrap/<env>.tfvars` | bump `dev` first, promote the pin to `staging`/`prod` once green |
+| `aplChartVersion` | `spec.cluster.bootstrap.aplChartVersion` (env YAML) | **Rarely worth setting.** On managed App Platform Linode owns the deployed version, so a pin promotes nothing to a cluster — it only moves what `llz ci assert-apl-version` resolves. `llz upgrade` drops a pin llz set so the env tracks the release baseline; set one only to hold an env's *assertion* at a version of your own choosing |
 | `k8s_version` | `cluster/<env>.tfvars` | canary a new LKE-E version on `dev` |
 | node sizing / count | `cluster/<env>.tfvars` | smaller `dev`, production-sized `prod` |
 | region | `cluster/<env>.tfvars` | co-locate or spread stages |
@@ -201,7 +360,7 @@ branching the repo:
 
 Promotion of a *version* pin, then, is literally: edit `dev`'s pin → merge →
 build `dev` → on green, copy the pin into `staging`'s tfvars in a follow-up PR →
-build `staging`, and so on. `llz validate --env <env>` flags any unfilled
+build `staging`, and so on. `llz doctor --env <env>` flags any unfilled
 placeholder before each stage's build, so a half-configured stage fails fast.
 
 ## 6. Ordering caveats that interact with promotion
@@ -226,7 +385,7 @@ remove them:
 This is platform/infrastructure promotion — rolling an instance-repo change
 across clusters in order. It is **not** application-level continuous delivery of
 *your* workloads onto a cluster; that is apl-core / Argo CD's job, and the
-"Deploy GitHub Environment" row in the [quickstart's environment table](quickstart.md#0-a-word-on-environments-first)
+"Deploy GitHub Environment" row in the [quickstart's environment table](quickstart.md#3-scaffold-your-instance--llz-new--llz-env-add)
 is the seam for app secrets. Keep the two mental models separate: `promotion_rank`
 sequences *clusters*; Argo sequences *apps within* a cluster.
 

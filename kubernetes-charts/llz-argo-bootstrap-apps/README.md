@@ -11,8 +11,7 @@ Application YAML.
 
 The bootstrap path is deterministic only because the Applications sync in a
 specific order: the `AppProject` (wave -20) must exist before any Application
-that references it; the External Secrets Operator (-15) must install its CRDs
-before any `ExternalSecret` consumer; Argo Events (-15) must register the
+that references it; Argo Events (-15) must register the
 `EventBus` CRD before llz-cert-automation (-14) references it; stateful OpenBao (0)
 consumes the CA chain laid down earlier. That ordering is operational knowledge
 that previously lived only in a pile of per-component `argocd/applications/`
@@ -20,7 +19,7 @@ wrapper files. This chart captures it as **defaults** so the next adopter
 doesn't re-discover it.
 
 > **Not wired into the live tree.** The existing repo manages its Applications
-> via the `_shared/manifest/kustomization.yaml` resource list. This chart is the
+> via the `platform-apl/manifest/kustomization.yaml` resource list. This chart is the
 > *generator* a NEW system team uses instead — it is intentionally standalone.
 
 ## How a sibling team adopts it
@@ -34,7 +33,7 @@ doesn't re-discover it.
 
 ```sh
 helm template our-bootstrap oci://ghcr.io/akamai-consulting/charts/llz-argo-bootstrap-apps \
-  --version 0.1.0 \
+  --version 0.1.26 \
   --set global.gitRepoURL='git@github.com:yourorg/yourplatform.git' \
   --set 'components[N].enabled=false'   # disable a component you don't run
 ```
@@ -59,17 +58,24 @@ components:
 ```
 
 (With `--set`, address the entry by list index, e.g.
-`--set 'components[7].enabled=false'`.)
+`--set 'components[3].enabled=false'` (indices are 0-3).)
 
 ## Default components and their waves
 
 | Component | Wave | Source | Why this wave |
 |---|---|---|---|
-| `external-secrets-operator` | -15 | oci (upstream ESO chart) | After AppProject (-20) so `project:` resolves; before consumers so ESO CRDs/webhook exist first. apl-core doesn't ship ESO. |
-| `argo-workflows` | -15 | oci (argo-helm) | Provides Workflow/CronWorkflow CRDs; same wave as ESO. |
-| `argo-events` | -15 | oci (argo-helm) | Provides EventBus/EventSource/Sensor CRDs; must precede llz-cert-automation. |
-| `llz-cert-automation` | -14 | oci (GHCR first-party) | After argo-events (-15) registers the EventBus CRD it references. |
-| `openbao` | 0 | git | Consumes ESO + CA chain; `prune: false` (stateful PKI/auth). |
+| `llz-cluster-foundation` | -20 | oci (GHCR first-party) | Creates the `llz-*` namespaces and the default-deny NetworkPolicies, so it must land before anything targets them. |
+| `llz-argo-workflows` | -15 | oci (argo-helm) | Provides the Workflow/CronWorkflow CRDs. |
+| `llz-argo-events` | -15 | oci (argo-helm) | Provides the EventBus/EventSource/Sensor CRDs; must precede `llz-cert-automation`. |
+| `llz-cert-automation` | -14 | oci (GHCR first-party) | After `llz-argo-events` (-15) registers the EventBus CRD it references. |
+
+Two components this chart used to render are deliberately gone, and re-adding
+them breaks things:
+
+- **`external-secrets-operator`** — apl-core 6.x ships ESO itself. A second
+  controller fights apl-core's over the same CRs.
+- **`openbao`** — the OpenBao Application is owned elsewhere; an `llz-openbao`
+  App rendered here collides with it.
 
 ## Values
 

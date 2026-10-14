@@ -14,7 +14,7 @@
 #   merge   → carries <@ token @> substitutions; 3-way-merged (conflicts only on
 #             lines the instance changed beyond the token)
 #   owned   → seeded once via _skip_if_exists, never touched again
-# template-scripts/check-template-manifest.sh keeps that manifest complete in CI.
+# `llz ci template-manifest` keeps that manifest complete in CI.
 
 # Only instance-template/ is the scaffold; the rest of the repo (modules, charts,
 # reusable workflows, this file) is template machinery, not copied into instances.
@@ -39,12 +39,10 @@ _templates_suffix: ""
 
 # Files under the scaffold that instances must NOT receive. Setting _exclude
 # REPLACES Copier's built-in default, so the usual junk patterns are re-listed.
-# `.github/actions` is template-INTERNAL: the reusable `llz-*` workflows source
-# the composite actions from a template checkout (docs/templatization-plan.md
-# §"Keeping instances in sync"), so an instance no longer copies them — every
-# instance workflow is a thin caller now. The actions stay physically under
-# instance-template/.github/actions/ (this scaffold dir) for the reusable
-# workflows to reference; this rule just keeps them out of generated instances.
+# (The composite actions live under instance-template/.github/actions and are
+# deliberately NOT excluded: they are vendored into every instance so the
+# reusable llz-* bodies can reference them locally as ./.github/actions/<name> —
+# the self-contained-instance model, ADR 0003.)
 _exclude:
   - "copier.yml"
   - "copier.yaml"
@@ -54,21 +52,43 @@ _exclude:
   - ".git"
   - ".DS_Store"
   - ".svn"
-  - ".github/actions"
-  - ".github/actions/**"
 
 # Answers tracker that `copier update` reads. Shipped (templated) at
 # instance-template/.copier-answers.yml.
 _answers_file: .copier-answers.yml
 
 # Seed once on `copier copy`, never overwrite on `copier update` (= manifest
-# `owned`): the provider lockfile each instance regenerates, and the operator's
-# control-plane ACL allow-list. Per-env tfvars and apl-values/<env> overlays are
+# `owned`): the operator's control-plane ACL allow-list. Per-env tfvars and
+# apl-values/<env> overlays are
 # created by `llz env add` and never exist in the template, so Copier
 # leaves them alone without needing a rule here.
+#
+# EVERY `owned` file the template actually SHIPS must appear here (or under
+# `_exclude`), or `copier update` re-renders + 3-way-merges it onto the instance's
+# own content and can leave conflict markers behind — the failure that shipped
+# invalid YAML in the gsap-apl v0.0.24 upgrade. `llz ci template-manifest`
+# asserts this manifest↔copier consistency in CI (see
+# docs/designs/cross-org-reuse-pattern.md Phase 0), so an owned file added to
+# .template-manifest without a rule here fails the build.
+# THE PROVIDER LOCKFILES USED TO HEAD THIS LIST and are deliberately not here any
+# more: they no longer ship from the template at all. The pin now lives beside the
+# constraint it satisfies in tools/internal/shared/tfroots/roots/<root>/, and
+# `llz render` writes it into each root as a gitignored build artifact — so there
+# is nothing for copier to seed and nothing for an update to preserve.
 _skip_if_exists:
-  - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
   - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
+  # The operator-owned custom/ escape hatch (shipped once as an empty namespaces/ +
+  # global/ skeleton) is `owned`, so an update must never re-render + merge it — an
+  # instance's own manifests here are theirs. (The ACME email is no longer a vendored
+  # file rewrite — it's a JSON6902 patch in the per-env overlay now.)
+  - "kubernetes-custom/**"
+  # promote.yml is GENERATED per-instance by `llz env pipeline` from each
+  # deployment's promotionRank. Seed it once; never re-render it. Left in the
+  # 3-way merge, an instance that took the shipped example unchanged has
+  # ours == base, so copier applies "theirs" cleanly and SILENTLY replaced a
+  # working promotion pipeline with the stage-less placeholder — no markers, so
+  # `llz upgrade` had nothing to stop on. See .template-manifest.
+  - ".github/workflows/promote.yml"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
 # docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a
@@ -76,9 +96,13 @@ _skip_if_exists:
 # template's own CI/README AND every instance:
 #   * docs/ — the operator-facing runbooks/playbooks/architecture the README
 #             calls "knowledge an adopter inherits", landed at the instance's
-#             docs/. The two pure template-build docs (templatization-plan.md =
-#             extraction design, agents.md = contributor convention) are dropped —
-#             they describe building the template, not operating an instance.
+#             docs/. Only the operator set (quickstart + runbooks + playbooks) is
+#             kept locally; the template-build docs (agents.md = contributor
+#             convention, designs/cross-org-reuse-pattern.md = the reuse-pattern
+#             design) and everything else are dropped and referenced at the template
+#             repo instead — they describe building the template, not operating an
+#             instance (and cross-org-reuse-pattern.md carries literal <@ … @>
+#             delimiter examples that must never reach the instance's rendered docs/).
 # `_subdirectory` would otherwise never copy docs/, so this task pulls it in from
 # the cloned template (`_copier_conf.src_path`). Tasks run on BOTH `copier copy`
 # and `copier update`, so docs/ refreshes on update exactly like a `managed` file
@@ -89,10 +113,46 @@ _skip_if_exists:
 # Operational tooling is deliberately NOT delivered here. Like .github/actions
 # (see `_exclude` above), it is template-INTERNAL: the former instance-scripts/
 # were assimilated into the llz CLI (tools/cmd/llz), which is baked into the
-# ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
-# workflows run in, so an instance never carries its own copy.
+# ci-tofu CI image (the ci-tofu target of dockerfiles/Dockerfile) the
+# reusable `llz-*` workflows run in, so an instance never carries its own copy.
 _tasks:
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md"
+  # Deliver docs/: copy the template's full set in, then `llz ci deliver-docs`
+  # prunes to the day-to-day operator set (quickstart + runbooks + playbooks) and
+  # writes docs/README.md pointing at the rest in the (public) template repo,
+  # version-pinned to <@ llz_version @>. The keep-set lives ONCE in the verb, so
+  # this and release-e2e can't drift (the drift that leaked a template-build doc
+  # into the e2e instance). No-op fallback if llz isn't on PATH (full docs kept).
+  #
+  # --template-root additionally repoints links in the instance's ROOT-level
+  # Markdown (README.md, AGENTS.md, apl-values/README.md) that target paths only
+  # the template carries. Without it those stayed relative and stayed dead in
+  # every rendered instance — the docs/-scoped rewrite never walks the root. The
+  # flag is what lets the rewrite tell "template-only" from "created later by
+  # `llz env add`", so it never repoints a link to a URL that would 404.
+  #
+  # THREE-WAY FALLBACK, in descending order of what the operator's `llz` supports.
+  # `copier update` runs with whatever binary is on PATH, which is routinely OLDER
+  # than the template being pulled — an adopter who has not `llz self-update`d yet.
+  # A binary predating --root/--template-root would fail the whole task on an
+  # unknown flag and silently leave the full docs/ tree with no README pointer, so
+  # the middle rung retries the pre-flag form and only then gives up. Cosmetic
+  # degradation (root links stay relative) instead of a broken delivery.
+  #
+  # The middle rung cannot tell an OLD BINARY from a FAILED PASS — both are just a
+  # non-zero exit — and the root pass now fails closed on a walk error, so that
+  # second cause is real. The message therefore names both and gives the command to
+  # find out, rather than asserting a cause it cannot know.
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && { llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> 2>/dev/null || { echo \"(root-link repoint skipped — either this llz predates --template-root, or the pass failed; docs are delivered either way. Diagnose with: llz ci deliver-docs --docs docs --root . --template-root <template-checkout>)\" && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @>; }; } || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
+  # The vendored workflow bodies (llz-*.yml) ship VERBATIM — comments included.
+  # There is deliberately NO comment-strip task here: .github/workflows/** is
+  # `merge`-classified (.template-manifest), and copier's 3-way merge on
+  # `copier update` uses the template render as its base — a render-time strip
+  # would make every instance copy diverge from that base on every comment line,
+  # so any release that touches a comment would land conflict markers in
+  # 1000-line workflow YAML (the invalid-YAML failure mode _skip_if_exists above
+  # documents from the gsap-apl v0.0.24 upgrade). Carrying maintainer comments
+  # is the cheap side of that trade. (The former `strip-comments` verb
+  # was removed with the task.)
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
@@ -117,17 +177,91 @@ instance_repo:
   type: str
   help: >-
     This instance's own GitHub repository as <owner>/<name> — used for ArgoCD
-    repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
+    repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring. The <owner>
+    (your GitHub user, or an org you can create repos in) must ALREADY exist:
+    `llz new --push` creates the repository, never its owner. Create an org at
+    https://github.com/organizations/new first, or use your own username.
   default: your-org/your-instance-repo
+  # Shape only, and the placeholder default stays legal: `copier copy --defaults`
+  # (template CI's instance-test) renders with it, and `llz new --push` already
+  # detects it and skips the repo creation with a message. What this catches is an
+  # answer that is not an <owner>/<name> pair at all — a browser URL, a bare repo
+  # name, a trailing .git — plus an OWNER that GitHub itself would refuse. Every
+  # one of those renders a scaffold that LOOKS fine: the value is only
+  # dereferenced later, by `gh repo create` (after the whole render), by the
+  # ArgoCD repoURL, and by every `gh` call `llz tokens`/`doctor` make against
+  # "the instance repo".
+  #
+  # The owner half is GitHub's OWN account-name rule (alphanumerics joined by
+  # single hyphens, no leading/trailing hyphen, <= 39 chars), not merely
+  # "something before the slash": "acme--corp" or "acme-" would otherwise pass
+  # here, 404 at `llz new --push`'s owner preflight, and be answered with "create
+  # the org, named exactly acme--corp" — an org GitHub then refuses to create.
+  # Whether the owner EXISTS is that preflight's job, at the point where it can
+  # ask GitHub; this is only the shape.
+  #
+  # The .git suffix is a separate elif on purpose: the name half accepts dots, so
+  # "org/repo.git" reaches it and gets told about the suffix specifically instead
+  # of the generic slug message.
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if not instance_repo | regex_search('^[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[A-Za-z0-9][A-Za-z0-9._-]*$')
+    or instance_repo.split('/')[0] | length > 39 %>instance_repo must be <owner>/<name> — the repo
+    slug, not a URL, and not a bare name; the owner is a GitHub org or your own username
+    (alphanumerics joined by single hyphens, no leading/trailing hyphen, max 39 chars). Got
+    "<@ instance_repo @>" (e.g. my-org/my-lke-instance).<% elif instance_repo.endswith('.git') %>instance_repo
+    must be <owner>/<name> without the .git suffix — got "<@ instance_repo @>".<% endif %>
+
+openbao_team:
+  type: str
+  help: >-
+    Name of this instance's default OpenBao "team" — the group of human operators
+    who get scoped, non-root WRITE access to secrets under secret/<name>/ via their
+    Keycloak identity (`llz openbao login --team <name>`, then `llz openbao set`).
+    It becomes a native apl-core team (namespace + Keycloak group/role team-<name>)
+    and a <name>-writer OpenBao policy. Keep "platform" for a platform-operators
+    team, or name it after your app team; add more teams later in landingzone.yaml.
+    Lowercase kebab (a-z, 0-9, -).
+  default: platform
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if not openbao_team | regex_search('^[a-z]([a-z0-9-]*[a-z0-9])?$') or openbao_team | length > 31 %>openbao_team
+    must be lowercase kebab, start AND end alphanumeric (no trailing hyphen), max 31
+    chars — it names an apl-core team, the k8s namespace team-<name>, and an OpenBao
+    policy/role. Got "<@ openbao_team @>".<% elif openbao_team in ['admin', 'platform-admin', 'all-teams-admin'] %>openbao_team
+    "<@ openbao_team @>" is reserved — apl-core owns that built-in team; pick another name.<% endif %>
 
 llz_version:
   type: str
   help: >-
     The landing-zone release this instance pins to — the git tag rendered into the
-    Terraform module `?ref=` sources and the reusable-workflow `uses:@` /
-    `template-ref:` refs, so a scaffold references the very release it was cut from.
-    Normally set automatically by `llz new` / `llz upgrade` to the version of the
-    `llz` binary you ran (the CLI is the version anchor). For a manual `copier
-    copy`, pass `-d llz_version=vX.Y.Z` to pin a release; the `main` default tracks
-    the tip unpinned.
+    Terraform module `?ref=` sources, so a scaffold references the very release it
+    was cut from. It is also the ONE place the pin is recorded for CI: the
+    workflows carry no `template-ref:` input, they read this answer at runtime.
+    Normally set automatically by `llz new` / `llz upgrade` to a published release
+    (the CLI is the version anchor; a dev build resolves the latest tag). For a
+    manual `copier copy`, pass `-d llz_version=vX.Y.Z` to pin a release.
+  # Fail closed: there is no safe default. An unpinned `main`/`master`/`HEAD` ref
+  # floats the first-party module `?ref=` sources on a branch, which the template's
+  # own tflint gate (terraform_module_pinned_source) rejects and Renovate cannot
+  # bump. `llz new`/`llz upgrade` always pass a concrete tag via -d; a raw `copier
+  # copy` must too. (`main` is still the pre-filled default an interactive prompt
+  # shows — the validator forces it to be replaced.)
   default: main
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if llz_version in ["", "main", "master", "HEAD"] %>llz_version must be a
+    pinned release tag like v0.0.18, not "<@ llz_version @>". `llz new` / `llz
+    upgrade` set it for you; for a manual `copier copy` pass -d llz_version=vX.Y.Z.
+    An unpinned ref fails the template's own tflint pinned-source gate and Renovate
+    cannot bump it.<% endif %>
+
+llz_image_ref:
+  type: str
+  default: "ghcr.io/<@ upstream_org @>/llz:latest"
+  when: false
+  help: >-
+    Fully-qualified in-cluster llz image reference for CronJobs that run the llz
+    CLI. Hidden from adopters: release-e2e renders it to the signed sha image for
+    the commit under test, while normal copier scaffolds keep the signed latest
+    image unless explicitly overridden by automation.

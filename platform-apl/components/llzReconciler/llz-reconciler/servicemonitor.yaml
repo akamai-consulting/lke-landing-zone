@@ -1,0 +1,57 @@
+# ServiceMonitor for the reconciler's /metrics endpoint.
+#
+# REQUIRED label: `prometheus: system`. apl-core's kube-prometheus-stack runs its
+# Prometheus with `serviceMonitorSelector: {matchLabels: {prometheus: system}}`
+# (confirmed live on apl-core v6), NOT an empty/discover-all selector — so a
+# ServiceMonitor without this label is silently ignored and the pod's llz_*
+# metrics never reach Prometheus, leaving every reconciler alert a promtool-valid
+# but never-firing rule. (LLZ asked for an empty
+# serviceMonitorSelector via `_rawValues`, but apl-core overrides it — the empty
+# selector does not take effect, so the label is mandatory, not belt-and-braces.)
+# The old `release: platform-prom` label matched nothing (apl-core does not select
+# on a release label).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llz-reconciler
+  namespace: llz-reconciler
+  labels:
+    prometheus: system
+    app.kubernetes.io/name: llz-reconciler
+spec:
+  namespaceSelector:
+    matchNames:
+      - llz-reconciler
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llz-reconciler
+  endpoints:
+    - port: metrics
+      # https, was http. The reconciler's /metrics listener now requires a client
+      # certificate (serveMetrics in reconcile.go), so this scrape both proves
+      # itself and verifies the server.
+      #
+      # WATCH THE TWO `ca:` vs `cert:` SOURCES — they are DIFFERENT Secrets and
+      # crossing them yields an opaque x509 failure:
+      #   ca   → llz-reconciler-serving-ca      (the SERVING root, llz-serving-ca)
+      #   cert → llz-reconciler-scrape-client-tls (this scraper's own identity)
+      #
+      # serverName is required: the scrape dials a POD IP, which is not a SAN on
+      # the serving cert, so verification would fail on hostname mismatch without it.
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: llz-reconciler-serving-ca
+            key: ca.crt
+        cert:
+          secret:
+            name: llz-reconciler-scrape-client-tls
+            key: tls.crt
+        keySecret:
+          name: llz-reconciler-scrape-client-tls
+          key: tls.key
+        serverName: llz-reconciler.llz-reconciler.svc
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

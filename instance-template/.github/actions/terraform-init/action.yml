@@ -5,7 +5,7 @@ description: >
 
 inputs:
   module:
-    description: Module directory under terraform-iac-bootstrap/ (cluster, cluster-bootstrap, object-storage)
+    description: Module directory under terraform-iac-bootstrap/ (cluster, object-storage, databases, vpc)
     required: false
     default: cluster
   aws-access-key-id:
@@ -22,6 +22,42 @@ inputs:
       a different repo needing a broader-scoped token.
     required: false
     default: ${{ github.token }}
+  state-encryption-passphrase:
+    description: >
+      Passphrase for OpenTofu native state+plan encryption (GitHub secret
+      TF_STATE_ENCRYPTION_PASSPHRASE). Exported as TF_ENCRYPTION for every
+      subsequent step in the calling job. REQUIRED: the roots carry an
+      `encryption` block, so a run without this fails rather than writing
+      plaintext state — see roots' encryption.tf.
+    required: true
+  state-encryption-key-name:
+    description: >
+      HCL name of the CURRENT pbkdf2 key provider (repo variable
+      TF_STATE_ENCRYPTION_KEY_NAME; default `llz`). LOAD-BEARING: OpenTofu stores
+      each key provider's pbkdf2 SALT in the state metadata keyed by this name
+      (`meta["key_provider.pbkdf2.<name>"]`), so a passphrase can only decrypt
+      state that was written under the SAME name. Renaming it in place makes the
+      old salt be fed to the new passphrase and every decrypt fails. Rotation
+      therefore introduces a NEW name and keeps the old one; see
+      state-encryption-passphrase-old.
+    required: false
+    default: "llz"
+  state-encryption-passphrase-old:
+    description: >
+      PREVIOUS passphrase, set ONLY during a rotation window (secret
+      TF_STATE_ENCRYPTION_PASSPHRASE_OLD). When present the action adds a second
+      key provider and an ENCRYPTED `fallback`, so OpenTofu reads state written
+      with the old key and rewrites it with the new one. Empty in steady state.
+    required: false
+    default: ""
+  state-encryption-key-name-old:
+    description: >
+      HCL name the PREVIOUS passphrase was written under (repo variable
+      TF_STATE_ENCRYPTION_KEY_NAME_OLD). Required whenever
+      state-encryption-passphrase-old is set — the fallback cannot find its salt
+      without the original name.
+    required: false
+    default: ""
   state-key:
     description: >
       Override the S3 state key. Default is <module>/<REGION>/terraform.tfstate
@@ -41,7 +77,12 @@ runs:
     # gate). REGION is inherited from the caller; render every env when it is unset
     # (e.g. a job that targets a peer env sets its own REGION). A working `llz` is
     # therefore a hard prerequisite for any terraform op — by design.
-    - name: Render tfvars from the LandingZone spec (spec-driven instances)
+    # IT ALSO LAYS DOWN THE ROOTS THEMSELVES — the *.tf and each root's
+    # .terraform.lock.hcl, all generated from the tfroots embed. `--tfvars-only`
+    # narrows what it skips (the committed apl-values artifacts), not what it
+    # writes here, which is why the init step below can rely on a lock being
+    # present and current without a step of its own.
+    - name: Render the TF roots + tfvars from the LandingZone spec (spec-driven instances)
       shell: bash
       run: |
         if [ -f landingzone.yaml ]; then
@@ -56,9 +97,23 @@ runs:
     #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
     # (the published, SemVer-tagged reuse units — see terraform-modules/RELEASING.md).
     # The CI container has no SSH key for <host> and the bind-mounted workspace
-    # trips git's dubious-ownership guard, so `terraform init`'s module clones
+    # trips git's dubious-ownership guard, so `tofu init`'s module clones
     # would fail. The shared git-auth script (trust paths + rewrite SSH→HTTPS)
     # fixes both; it lives once and is shared with fetch-kubeconfig.
+    # State/plan encryption. Delegated to the shared tf-encryption-env action so
+    # this path and the cluster-access → fetch-kubeconfig path (which runs its own
+    # `tofu init` via llz and does NOT come through here) build the identical
+    # config from one copy of the passphrase validation.
+    - name: Export TF_ENCRYPTION (state + plan encryption at rest)
+      uses: ./.github/actions/tf-encryption-env
+      with:
+        state-encryption-passphrase: ${{ inputs.state-encryption-passphrase }}
+        # Rollover coordinates. The shared action owns the HCL emission AND the
+        # injection guards for all of them — keeping a second copy here is exactly
+        # the liability that action's own header warns about.
+        state-encryption-key-name: ${{ inputs.state-encryption-key-name }}
+        state-encryption-passphrase-old: ${{ inputs.state-encryption-passphrase-old }}
+        state-encryption-key-name-old: ${{ inputs.state-encryption-key-name-old }}
     - name: Authenticate git for published module sources
       shell: bash
       env:
@@ -74,10 +129,47 @@ runs:
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        # Via env:, never interpolated into the script. `working-directory:` above
+        # keeps its expression — that is a path GitHub resolves itself, not a
+        # shell — but a state key reaching `tofu init` through the script would be
+        # syntax the moment it carried a quote.
+        STATE_KEY: ${{ inputs.state-key }}
+        MODULE:    ${{ inputs.module }}
       run: |
-        KEY="${{ inputs.state-key }}"
-        [ -n "$KEY" ] || KEY="${{ inputs.module }}/$REGION/terraform.tfstate"
-        terraform init \
-          -backend-config="bucket=$TF_STATE_BUCKET" \
-          -backend-config="key=$KEY" \
-          -backend-config="region=us-east-1"
+        # -e and pipefail only: `set -u` would newly abort on an unset REGION or
+        # TF_STATE_BUCKET, which this step tolerated before and callers may rely on.
+        set -eo pipefail
+        KEY="$STATE_KEY"
+        [ -n "$KEY" ] || KEY="$MODULE/$REGION/terraform.tfstate"
+
+        init() {
+          tofu init "$@" \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=$KEY" \
+            -backend-config="region=us-east-1"
+        }
+
+        # A PLAIN init, WITH NO -upgrade RETRY BEHIND IT — and the retry's removal is
+        # the point of the change that removed it, not an oversight.
+        #
+        # .terraform.lock.hcl used to be class `owned`: seeded into this repo at
+        # scaffold time and never re-touched by an upgrade, while the provider
+        # CONSTRAINT travelled the other way inside the ci image. So a release that
+        # raised a provider major left every instance in the field holding a lock it
+        # could not satisfy, and `tofu init` refused outright:
+        #
+        #   locked provider registry.opentofu.org/linode/linode 3.12.0 does not
+        #   match configured version constraint ~> 4.3
+        #
+        # There was no recovery inside CI, so this step carried a guarded `-upgrade`
+        # retry to unblock the op — which unblocked it by re-resolving providers
+        # under a plan nobody reviewed, on every run, until someone committed the
+        # regenerated lock.
+        #
+        # The lock is now generated: it is embedded beside the versions.tf that
+        # constrains it and written into this root by the `llz render` step above,
+        # before this one runs. The pin and the constraint cannot disagree, so the
+        # error the retry recognised is no longer a state that exists — and if it
+        # ever appears again it means the llz in vars.TF_IMAGE is internally
+        # inconsistent, which is a template bug to see, not to paper over.
+        init

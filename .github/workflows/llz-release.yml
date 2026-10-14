@@ -25,6 +25,42 @@ permissions:
   contents: read
 
 jobs:
+  # THE RELEASE'S OWN PRECONDITION, and it has to be a job of its own because the
+  # thing it protects is an ORDERING. `image-tag` already refused to retag a
+  # missing image and said so loudly — but it declares no `needs:`, so on v0.0.44
+  # it failed at 00:30:04Z while "Attach binaries to the release" had already
+  # succeeded. The release went out installable, advertising a `:vX.Y.Z` image
+  # that did not exist. A gate that runs after the irreversible step is a report.
+  #
+  # Measured root cause: build-images for that commit started 00:28:49Z and was
+  # still in_progress when the release fired 66s later. Not a missing build — a
+  # race with one. So this WAITS (default ~15 min, against 6-9 min observed
+  # build-images runs) rather than failing fast, which would turn every promptly
+  # cut release into a manual re-run.
+  preflight:
+    name: The commit's image is published
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Through the composite, not a hand-rolled setup-go: setup-go-sole-site
+      # gates that, and llz-release.yml's ONE sanctioned exception is the `go
+      # build` that stamps the release version via -ldflags. This is not that.
+      - name: Set up Go + build llz from source
+        uses: ./.github/actions/setup-llz
+        with:
+          install-path: /usr/local/bin/llz
+      # From source on purpose: a released binary would answer for code that is
+      # not what this release ships.
+      - name: Wait for ghcr.io/<owner>/llz:sha-<commit>
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: llz ci assert-release-image --owner "$OWNER" --sha "$SHA"
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
@@ -34,12 +70,10 @@ jobs:
         goos: [darwin, linux]
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+      - name: Set up Go
+        uses: ./.github/actions/setup-llz
 
       - name: Build
         working-directory: tools
@@ -50,11 +84,20 @@ jobs:
         run: |
           set -euo pipefail
           # $GITHUB_REF is a trusted built-in (refs/tags/vX.Y.Z); derive the
-          # semver and stamp it into main.version.
+          # semver and stamp it into the CLI's Version.
+          #
+          # THE SYMBOL PATH IS NOT main.version ANY MORE. The command tree moved to
+          # internal/cli so it could be imported and tested; cmd/llz is now a
+          # four-line stub with no version var to stamp. A stale `-X main.version`
+          # here would NOT fail the build — the linker ignores an -X for a symbol it
+          # cannot find — it would ship every release reporting "dev", which makes
+          # selfupgrade see every release as newer than the running binary forever.
+          # tools/internal/cli/version_stamp_test.go pins this exact string against
+          # the variable it names, so the two cannot drift apart silently.
           VER="${GITHUB_REF##*/}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] || VER="dev"
           out="llz-${GOOS}-${GOARCH}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VER}" -o "../${out}" ./cmd/llz
+          go build -trimpath -ldflags "-s -w -X github.com/akamai-consulting/lke-landing-zone/tools/internal/cli.Version=${VER}" -o "../${out}" ./cmd/llz
           echo "asset=${out}" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
@@ -66,7 +109,10 @@ jobs:
 
   release:
     name: Attach binaries to the release
-    needs: build
+    # preflight as well as build: attaching the binaries is what makes a release
+    # installable, so it must not happen while the image tag it advertises is
+    # still missing. `build` alone was the ordering that let v0.0.44 out.
+    needs: [build, preflight]
     # Only the real release event has a release to attach to; a manual dispatch
     # just exercises the matrix build (artifacts only).
     if: github.event_name == 'release'
@@ -96,6 +142,50 @@ jobs:
         # makes re-runs idempotent.
         run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/llz-* dist/SHA256SUMS
 
+  # ── Publish the release-version container tag ────────────────────────────────
+  # build-images.yml only ever pushes :latest and :sha-<SHA> (the llz image has no
+  # static `version` in its matrix). Nothing published :vX.Y.Z — so an instance
+  # pinned to a release rendered ghcr.io/…/llz:v0.0.28 into its carved apps and
+  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/internal/extensions/lifecycle/render/render.go).
+  #
+  # RETAG rather than rebuild: the sha- image for this commit is the artifact
+  # release-e2e already validated, so pointing the version tag at the same
+  # manifest keeps the release byte-identical to what was tested. `imagetools
+  # create` copies the multi-arch index, preserving both platforms + provenance.
+  image-tag:
+    name: Retag the llz image as ${{ github.event.release.tag_name }}
+    # Only a real release has a version to publish; a dispatch run has no tag.
+    if: github.event_name == 'release'
+    # preflight has already waited for the source image, so this no longer races
+    # build-images — it either finds what preflight saw, or something removed it
+    # in between, which is worth failing on.
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point the version tag at this commit's image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA:   ${{ github.sha }}
+          VER:   ${{ github.event.release.tag_name }}
+        # Fails loudly if the sha- image is missing (a release cut from a commit
+        # whose build-images run never completed) — better than a silent 404 that
+        # only surfaces as an ImagePullBackOff in an adopter's cluster.
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "ghcr.io/${OWNER}/llz:${VER}" "ghcr.io/${OWNER}/llz:sha-${SHA}"
+          docker buildx imagetools inspect "ghcr.io/${OWNER}/llz:${VER}" >/dev/null
+
   functional:
     name: Documented install flow (against the published release)
     needs: release
@@ -104,15 +194,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-
-      - name: Build llz
-        run: cd tools && go build -o ../bin/llz ./cmd/llz
+          install-path: ${{ github.workspace }}/bin/llz
 
       - name: Functional + install/self-update flow
         env:

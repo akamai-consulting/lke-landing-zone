@@ -1,0 +1,42 @@
+name: Wedge game-day (blast-radius containment proof)
+
+# Thin caller for the reusable LLZ workflow. Breaks one platform ExternalSecret on
+# this instance's cluster and asserts the wedge is contained to the carved
+# Application that owns it (docs/designs/blast-radius-decomposition.md). The command
+# always restores the ExternalSecret. Manual-dispatch only — run it against a warm
+# cluster (e.g. after an e2e provision with keep_cluster=true, or the converge-only
+# fast-path's reused cluster).
+#
+# ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
+# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Deployment name to run the game-day against — NOT a Linode region. e.g. e2e | lab | primary'
+        required: true
+        type: string
+        default: e2e
+      target-app:
+        description: 'Carved Application expected to degrade (owns the ExternalSecret below)'
+        required: false
+        type: string
+        default: llz-observability
+      externalsecret:
+        description: 'ExternalSecret to break, as <namespace>/<name>'
+        required: false
+        type: string
+        default: apl-secrets/obj-secrets
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: ./.github/workflows/llz-wedge-gameday.yml
+    with:
+      region: ${{ inputs.region }}
+      target-app: ${{ inputs.target-app }}
+      externalsecret: ${{ inputs.externalsecret }}
+    secrets: inherit

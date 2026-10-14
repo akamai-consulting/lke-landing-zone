@@ -28,7 +28,7 @@ checks, so a fresh container reports green tooling out of the box:
 | Tool | For |
 |---|---|
 | `llz` | the adopter CLI that drives the whole flow — built from this template commit |
-| `terraform` | the Terraform roots under `terraform/` |
+| `terraform` | the Terraform roots under `terraform-iac-bootstrap/` |
 | `kubectl`, `helm`, `kustomize` | rendering + inspecting the cluster |
 | `bao` | the OpenBao CLI |
 | `copier` | `llz upgrade` / `copier update` to pull template releases |
@@ -40,14 +40,14 @@ checks, so a fresh container reports green tooling out of the box:
 | `actionlint`, `shellcheck` | workflow + script linting |
 | `argo` | inspecting the cert-automation / OpenBao Argo workflows |
 
-Tool versions track the `ci-terraform` / `ci-kubernetes` images, so what passes
+Tool versions track the `ci-tofu` / `ci-kubernetes` images, so what passes
 locally passes in CI.
 
 `llz` is **built into the image** from the same template commit, so it's on your
 `PATH` the moment the container starts (`llz version`). To move to a *different*
 release — e.g. a newer one published since the image was built, or one matching
 an instance pinned to an older template — run `llz self-update` (optionally
-`--ref v0.2.0`), or install over it with the one-liner from
+`--ref v0.0.39`), or install over it with the one-liner from
 [Quick Start §2](quickstart.md#2-install-llz).
 
 ---
@@ -84,8 +84,9 @@ llz doctor --env <env>              # confirm the toolchain + your repo config
 can share your host setup with the container:
 
 - **Git / SSH:** VS Code forwards your host SSH agent automatically, and copies
-  your `~/.gitconfig` in — so commits and the ArgoCD deploy-key SSH wiring work
-  with your host keys.
+  your `~/.gitconfig` in — so `git` push/pull over SSH works with your host
+  keys. (Argo CD itself no longer uses an SSH deploy key: the values-repo
+  credential is the `APL_VALUES_REPO_TOKEN` PAT over HTTPS.)
 - **`gh` login:** mount it in by adding to `.devcontainer/devcontainer.json`:
   ```jsonc
   "mounts": [
@@ -104,10 +105,11 @@ If you forked the template and want the devcontainer to track **your** tools, th
 image build ships with it:
 
 1. The Dockerfile lives at
-   [`dockerfiles/devcontainer/Dockerfile`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/dockerfiles/devcontainer/Dockerfile)
-   in the template repo; [`.github/workflows/build-images.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/build-images.yml)
+   [`dockerfiles/Dockerfile`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/dockerfiles/Dockerfile)
+   in the template repo (the `devcontainer` target); [`.github/workflows/build-images.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/build-images.yml)
    builds and pushes it (amd64 + arm64) to `ghcr.io/<your-org>/devcontainer` on
-   every change under `dockerfiles/**`. Trigger it manually with **Run workflow →
+   **every push to `main`** — there is deliberately no path filter, so `:latest`
+   always carries HEAD's baked sha. Trigger it manually with **Run workflow →
    image: devcontainer**.
 2. Point your instance at it: `image:` in `.devcontainer/devcontainer.json` is
    rendered from your `upstream_org` Copier answer, so it already targets your

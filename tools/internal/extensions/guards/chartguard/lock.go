@@ -1,0 +1,204 @@
+package chartguard
+
+// ci_chart_lock_guard.go implements `llz ci chart-lock-drift` — the native port
+// of check-chart-lock-drift.py (the
+// Makefile's helm-dep-lock-check). It verifies that every named chart's
+// committed Chart.lock matches the dependency declarations in its Chart.yaml:
+// a dependency name, version, or repository that differs means Chart.yaml was
+// edited without re-running `helm dependency update`, so the lock is stale.
+//
+// The comparison core (checkChartLock) is pure and unit-tested; RunE only reads
+// the two files per chart and prints.
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
+)
+
+// chartDep is one entry of a Chart.yaml `dependencies:` / Chart.lock list.
+type chartDep struct {
+	Name       string `yaml:"name"`
+	Version    string `yaml:"version"`
+	Repository string `yaml:"repository"`
+}
+
+type chartDepDoc struct {
+	Dependencies []chartDep `yaml:"dependencies"`
+}
+
+// chartLockResult is the outcome of checking one chart directory.
+type chartLockResult struct {
+	Dir      string
+	Skipped  bool // no declared dependencies — nothing to lock
+	Errors   []string
+	Warnings []string
+}
+
+func RunLockDrift(root string, dirs []string, out io.Writer) error {
+	repo := capability.RepoForGate(Extension(), root)
+	total := 0
+	for _, dir := range dirs {
+		// A missing file is a legitimate answer here — an unlocked chart is the
+		// finding — so both errors stay soft. The fence's refusal arrives the same
+		// way, which is acceptable only because the chart dir is a POSITIONAL the
+		// caller supplies: a path outside the tree is a mistyped argument, and it
+		// already reports as "no Chart.yaml" today.
+		chartYAML, chartErr := repo.ReadFile(filepath.Join(dir, "Chart.yaml"))
+		lockRaw, lockErr := repo.ReadFile(filepath.Join(dir, "Chart.lock"))
+
+		var chartPtr, lockPtr *string
+		if chartErr == nil {
+			s := string(chartYAML)
+			chartPtr = &s
+		}
+		if lockErr == nil {
+			s := string(lockRaw)
+			lockPtr = &s
+		}
+
+		res := checkChartLock(dir, chartPtr, lockPtr)
+		for _, w := range res.Warnings {
+			fmt.Fprintf(os.Stderr, "::warning file=%s/Chart.lock::%s\n", dir, w)
+		}
+		for _, e := range res.Errors {
+			fmt.Fprintf(os.Stderr, "::error file=%s/Chart.yaml::%s\n", dir, e)
+			total++
+		}
+		switch {
+		case res.Skipped:
+			fmt.Fprintf(out, "  skip (no dependencies): %s\n", dir)
+		case len(res.Errors) == 0:
+			fmt.Fprintf(out, "  ok: %s\n", dir)
+		}
+	}
+
+	if total > 0 {
+		return fmt.Errorf("chart-lock-drift: %d Chart.lock drift error(s) found "+
+			"(run `helm dependency update <chart>` and commit the result)", total)
+	}
+	fmt.Fprintln(out, "All Chart.lock files are in sync with Chart.yaml.")
+	return nil
+}
+
+// checkChartLock compares a chart's Chart.yaml against its Chart.lock. A nil
+// raw pointer means that file is absent. The returned errors/warnings are bare
+// messages (the caller adds the ::error::/::warning:: annotation wrapper).
+func checkChartLock(dir string, chartYAML, lockRaw *string) chartLockResult {
+	res := chartLockResult{Dir: dir}
+
+	if chartYAML == nil {
+		res.Errors = append(res.Errors, fmt.Sprintf("No Chart.yaml found in %s", dir))
+		return res
+	}
+
+	var chartDoc chartDepDoc
+	if err := yaml.Unmarshal([]byte(*chartYAML), &chartDoc); err != nil {
+		res.Errors = append(res.Errors, fmt.Sprintf("%s: failed to parse Chart.yaml: %v", dir, err))
+		return res
+	}
+	declared := map[string]chartDep{}
+	for _, d := range chartDoc.Dependencies {
+		declared[d.Name] = d
+	}
+
+	if len(declared) == 0 {
+		res.Skipped = true
+		return res
+	}
+
+	if lockRaw == nil {
+		res.Errors = append(res.Errors, fmt.Sprintf(
+			"%s: Chart.lock is missing. Run `helm dependency update %s` and commit the result.", dir, dir))
+		return res
+	}
+
+	var lockDoc chartDepDoc
+	if err := yaml.Unmarshal([]byte(*lockRaw), &lockDoc); err != nil {
+		res.Errors = append(res.Errors, fmt.Sprintf("%s: failed to parse Chart.lock: %v", dir, err))
+		return res
+	}
+	locked := map[string]chartDep{}
+	for _, d := range lockDoc.Dependencies {
+		locked[d.Name] = d
+	}
+
+	for _, name := range sortedDepKeys(declared) {
+		d := declared[name]
+		l, ok := locked[name]
+		if !ok {
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"%s: dependency '%s' is declared in Chart.yaml but missing from Chart.lock. "+
+					"Run `helm dependency update %s`.", dir, name, dir))
+			continue
+		}
+		if d.Version != l.Version {
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"%s: dependency '%s' version mismatch — Chart.yaml: %q, Chart.lock: %q. "+
+					"Run `helm dependency update %s`.", dir, name, d.Version, l.Version, dir))
+		}
+		if d.Repository != l.Repository {
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"%s: dependency '%s' repository mismatch — Chart.yaml: %q, Chart.lock: %q. "+
+					"Run `helm dependency update %s`.", dir, name, d.Repository, l.Repository, dir))
+		}
+	}
+
+	for _, name := range sortedDepKeys(locked) {
+		if _, ok := declared[name]; !ok {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"%s: Chart.lock contains '%s' which is not in Chart.yaml — stale lock entry.", dir, name))
+		}
+	}
+
+	return res
+}
+
+func sortedDepKeys(m map[string]chartDep) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// firstPartyChartDirs enumerates kubernetes-charts/*/ — the corpus chart-lock-drift
+// checks when the caller names none.
+//
+// IT REFUSES AN EMPTY RESULT. A lock-drift guard that found no charts would report
+// the same clean as one that checked them all, which is the vacuous-green shape
+// every corpus guard in this tree already refuses (guardkit.RequireCorpus). The
+// discovery path is exactly where that failure would arrive unnoticed, because
+// nobody typed the subject.
+func firstPartyChartDirs(root string) ([]string, error) {
+	repo := capability.RepoForGate(Extension(), root)
+	entries, err := repo.ReadDir(chartsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s to discover first-party charts: %w", chartsDir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// A directory without a Chart.yaml is not a chart — the guard would report
+		// it as unlocked, which is a finding about a directory rather than a chart.
+		if _, err := repo.Stat(filepath.Join(chartsDir, e.Name(), "Chart.yaml")); err != nil {
+			continue
+		}
+		out = append(out, filepath.Join(chartsDir, e.Name()))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no first-party charts found under %s — refusing to report a "+
+			"clean lock-drift run having examined nothing", chartsDir)
+	}
+	sort.Strings(out)
+	return out, nil
+}

@@ -1,0 +1,39 @@
+# Ingress: any pod that writes to object storage (Loki in `monitoring`, Harbor's
+# registry, the reconciler's drain paths) must reach :8443. A namespace-scoped
+# selector would need editing every time a new writer appears, and a writer that
+# cannot reach the proxy does NOT fail closed — with the CoreDNS rewrite in place
+# it simply cannot reach object storage at all, which reads as an OBJ outage.
+#
+# Egress: 443 to anywhere, because the upstream is a public Linode endpoint whose
+# address is not stable enough to pin. This pod is deliberately NOT in the mesh, so
+# this NetworkPolicy is the only thing scoping it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obj-proxy
+  namespace: obj-proxy
+  annotations:
+    argocd.argoproj.io/sync-wave: "-11"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: obj-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: TCP, port: 8443 }
+    # kubelet probes originate from the node, which no namespaceSelector matches,
+    # so the health port takes an unrestricted-source rule. It serves only /healthz
+    # and counters — no object data and no key material.
+    - ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - ports:
+        - { protocol: TCP, port: 443 }
+    # dnsPolicy: Default sends resolution to the NODE's resolver rather than to
+    # CoreDNS, but the packets still leave the pod and still need an egress rule.
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

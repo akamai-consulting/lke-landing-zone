@@ -1,0 +1,46 @@
+# Serving certificate for the OBJECT STORAGE endpoint hostname.
+#
+# This is what makes the CoreDNS rewrite survive TLS: clients connect to
+# <region>.linodeobjects.com and validate that name, so the proxy must present a
+# certificate FOR it. A publicly-trusted one is impossible (we do not own
+# linodeobjects.com), so it is issued from the platform's internal CA.
+#
+# THEREFORE — the deployment's hardest dependency — every pod that talks to object
+# storage (Loki in `monitoring`, Harbor's registry in `harbor`) must TRUST that CA.
+# On managed apl-core that means the CA bundle apl-core injects into its pods.
+# Until that is in place those clients get `x509: certificate signed by unknown
+# authority` against the endpoint name, which presents as an object-storage outage
+# rather than as a certificate problem.
+#
+# Verify the trust bundle BEFORE flipping the CoreDNS rewrite. The rewrite is the
+# switch that makes this live, which is exactly why it is staged last.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: obj-proxy-tls
+  namespace: obj-proxy
+  annotations:
+    # Wave 5: cert-manager must be up to issue this, and nothing needs the cert
+    # before the DaemonSet that mounts it. Certificate is not health-vetted at
+    # negative waves — an unissued cert there would wedge the bootstrap.
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  secretName: obj-proxy-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # The proxy reads the keypair from disk at startup; rotating the SAME secret in
+    # place lets the kubelet refresh the mount without a name change.
+    rotationPolicy: Always
+  # Filled per env by `llz render` (RenderObjProxyCertPatch → obj-proxy-cert-patch.yaml)
+  # from spec …objectStorage.cluster — the SAME endpoint host the buckets were
+  # created against, and the same value the DaemonSet's OBJ_ENDPOINT_HOST gets.
+  # dnsNames is a plain list, so the patch REPLACES this placeholder rather than
+  # appending to it.
+  dnsNames:
+    - REPLACE_ME.linodeobjects.com
+  issuerRef:
+    name: llz-serving-ca
+    kind: ClusterIssuer

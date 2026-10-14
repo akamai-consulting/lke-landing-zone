@@ -1,0 +1,152 @@
+# The client-side certificates the mTLS listener needs. The first three are
+# issued by platform.clientTls.issuerRef (the `llz-client-ca` root — NOT the
+# serving root); the fourth is an apl-core CA anchor on a different issuer and
+# is separately gated (see it for why).
+#
+# Ordering: cert-manager must have written the first two Secrets before the OpenBao
+# StatefulSet can start, because the pod mounts two of them and a missing Secret
+# volume parks the pod in ContainerCreating. That is the same benign wait the
+# openbao-tls and openbao-unseal-key mounts already rely on, so no sync-wave
+# gymnastics are needed — the pod simply waits.
+---
+# 1. CLIENT-CA TRUST ANCHOR.
+#
+# This Certificate exists for its `ca.crt` alone. cert-manager writes the
+# issuing CA's certificate into ca.crt on every Secret it mints, so issuing a
+# throwaway leaf from llz-client-ca into this namespace is how the client root
+# gets here. The leaf's own tls.crt/tls.key are never read by anything.
+#
+# WHY NOT just reference the cert-manager-namespace `llz-client-ca` Secret
+# directly: Secrets are namespace-scoped and OpenBao runs here, not in
+# cert-manager. This platform ships no reflector/trust-manager to copy Secrets
+# across namespaces, and the ESO caProvider already uses this same indirection
+# to read openbao-ca off the openbao-tls Secret — so this is the established
+# pattern, not a new one.
+#
+# If trust-manager is ever adopted, replace this with a Bundle and point
+# tls_client_ca_file at it; nothing else in the chart changes.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.platform.clientTls.caSecretName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Values.platform.clientTls.caSecretName }}
+  commonName: openbao-client-ca-anchor
+  duration: {{ .Values.platform.clientTls.duration }}
+  renewBefore: {{ .Values.platform.clientTls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.platform.clientTls.issuerRef.name }}
+    kind: {{ .Values.platform.clientTls.issuerRef.kind }}
+---
+# 2. RAFT PEER CLIENT IDENTITY.
+#
+# Presented by a joining follower to the leader's :8200 API during retry_join
+# (leader_client_cert_file / leader_client_key_file). Without it no follower can
+# join once the listener requires client certs, and a fresh cluster never forms.
+#
+# `client auth` only — this must never be usable as a serving cert. Raft's own
+# cluster-port replication on :8201 uses OpenBao-generated internal certs and is
+# unaffected by this identity.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.platform.clientTls.raftSecretName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Values.platform.clientTls.raftSecretName }}
+  # Stable across renewals — cert-manager preserves commonName, and this string
+  # is the principal any future OpenBao cert-auth role or audit filter binds on.
+  commonName: openbao-raft-client
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["openbao-raft"]
+  duration: {{ .Values.platform.clientTls.duration }}
+  renewBefore: {{ .Values.platform.clientTls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Rotate the key on renewal. Safe here (unlike the CA) because nothing pins
+    # this leaf's public key — the server verifies the chain, not the key.
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.platform.clientTls.issuerRef.name }}
+    kind: {{ .Values.platform.clientTls.issuerRef.kind }}
+{{- if .Values.platform.serviceMonitor.enabled }}
+---
+# 3. PROMETHEUS SCRAPE CLIENT IDENTITY.
+#
+# The ServiceMonitor's tlsConfig points at this Secret. Lives in THIS namespace
+# (beside the ServiceMonitor) rather than in `monitoring`: prometheus-operator
+# resolves endpoint tlsConfig secret refs relative to the ServiceMonitor's own
+# namespace and mounts them into the Prometheus pod as scrape assets.
+#
+# Scoped to a distinct CN from the raft identity so an audit or authz rule can
+# tell "the metrics scraper" from "a raft peer" even though both chain to the
+# same client CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.platform.clientTls.scrapeSecretName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Values.platform.clientTls.scrapeSecretName }}
+  commonName: openbao-metrics-scraper
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["observability"]
+  duration: {{ .Values.platform.clientTls.duration }}
+  renewBefore: {{ .Values.platform.clientTls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.platform.clientTls.issuerRef.name }}
+    kind: {{ .Values.platform.clientTls.issuerRef.kind }}
+{{- end }}
+{{- if .Values.platform.aplCA.enabled }}
+---
+# 4. apl-core CA ANCHOR, for the Keycloak JWKS fetch (jwks_ca_pem).
+#
+# ca.crt indirection again — issued from apl-core's `custom-ca` ClusterIssuer so
+# that CA's certificate lands in this namespace, mounted at /openbao/apl-ca.
+# The leaf is unused.
+#
+# Guarded by platform.aplCA.enabled because, unlike openbao-ca and llz-client-ca,
+# the issuer is NOT ours: if apl-core does not provide `custom-ca` this Certificate
+# stays Pending forever. It sits at the default wave (0) rather than -14 for that
+# reason — a Pending cert here must not gate the bootstrap, and the JWKS fetch it
+# feeds is itself deferred to first team login (skip_jwks_validation=true).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.platform.aplCA.secretName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Values.platform.aplCA.secretName }}
+  commonName: openbao-apl-ca-anchor
+  duration: {{ .Values.platform.clientTls.duration }}
+  renewBefore: {{ .Values.platform.clientTls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.platform.aplCA.issuerRef.name }}
+    kind: {{ .Values.platform.aplCA.issuerRef.kind }}
+{{- end }}

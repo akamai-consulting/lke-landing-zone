@@ -15,13 +15,15 @@ spec:
   cluster:
     clusterLabel: platform-prod-web-ord           # → cluster_label (Linode LKE label)
     region: us-ord                                 # → region (must match its network's region)
-    k8sVersion: v1.33.6+lke7                       # → k8s_version (or inherit from defaults)
+    k8sVersion: v1.34.6+lke2                       # → k8s_version (or inherit from defaults)
     tags: [platform, prod, web]                    # → tags
 
     nodePool:                                      # → node_type / node_count / autoscaler
       type: g8-dedicated-16-8
       count: 8
       autoscalerEnabled: true                      # optional; omit → tfvars-example default
+      autoscalerMin: 6                             # optional; omit → 3
+      autoscalerMax: 12                            # optional; omit → 6
 
     controlPlane:                                  # → control_plane_* (both optional)
       highAvailability: true
@@ -38,26 +40,49 @@ spec:
       ipv6: []
 
     network:                                       # omit entirely → own dedicated VPC
-      vpc: prod-ord                                # a spec.networks name (same region)
+      # vpc: prod-ord                              # a spec.networks name (same region) —
+                                                   #   uncomment ONLY after declaring it in
+                                                   #   landingzone.yaml's spec.networks, or
+                                                   #   the spec fails validation
       subnetCIDR: 10.0.0.0/14                      # → vpc_subnet_cidr (/13 or /14)
 
     promotionRank: 3                               # → promotion_rank (pipeline position)
 
-    bootstrap:                                     # → cluster-bootstrap/<env>.tfvars
+    bootstrap:                                     # → apl-core bootstrap inputs (llz ci bootstrap-cluster)
       name: platform-prod-web                      # → cluster.name (apl-core identity)
-      domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
-      aplChartVersion: 5.0.0                       # → apl_chart_version (optional)
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git
-        revision: main
+        # revision: omit → the apl-core-owned `apl-<env>` branch. It must NOT equal
+        #   appsRepoRevision below: apl-operator commits its env/ tree to the former
+        #   while platform-bootstrap reads the latter, so one shared branch
+        #   reproduces the converge wedge (the validator rejects it).
       appsRepoRevision: main                       # optional
+
+      # ── Managed App Platform (REQUIRED) ──────────────────────────────────────
+      # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled): Linode
+      # installs+manages apl-core AND provisions the lke<id>.akamai-apl.net domain +
+      # DNS + wildcard cert; `llz ci bootstrap-cluster` only LAYERS LLZ's extras as
+      # Argo apps. `managedAppPlatform: true` is mandatory (validation rejects a
+      # self-install spec), and you must NOT set domainSuffix (Linode owns the
+      # domain — LLZ discovers it in-cluster). Usually set once in
+      # spec.defaults.cluster.bootstrap and inherited; shown here for clarity.
+      # See docs/adr/0005-managed-app-platform.md.
+      managedAppPlatform: true
+      #
+      # Managed apl-core installs only a MINIMAL core; the OPTIONAL apps (harbor,
+      # loki, grafana, …) are enabled by the operator in the App Platform Console.
+      # Declare the ones you enabled so LLZ layers its matching extras (harbor
+      # robot-provisioner, observability glue) ONLY for apps that exist — render
+      # can't discover them. The always-on LLZ platform (OpenBao, external-secrets
+      # store, reconciler, PAT rotator) is emitted regardless and needs no entry.
+      # managedApps: [harbor, loki, grafana]
 
     objectStorage:                                 # → object-storage/<env>.tfvars
       cluster: us-ord-1                             # → obj_cluster (region-local OBJ)
       keyRotationDays: 90                           # → obj_key_rotation_days (≤120)
 
   # ── Components: one toggle, two backends (apl-core apps + llz Argo manifests) ──
-  # Omit this block entirely → every component on except dns. A partial block
+  # Omit this block entirely → every component on. A partial block
   # changes only what you name; an explicit enabled:false sticks. Sizing knobs
   # (config in the spec, mechanism stays in apl-values/example/values.yaml) render
   # into the env's values.yaml — set them where prod should differ from defaults.
@@ -72,4 +97,3 @@ spec:
       registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
     imageScanning: { enabled: true }               # Trivy
     policyEngine:   { enabled: true }              # Kyverno + policy-reporter
-    # dns stays default-off — applied separately by bootstrap-dns.yml.

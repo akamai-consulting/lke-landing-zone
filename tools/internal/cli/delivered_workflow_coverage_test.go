@@ -1,0 +1,417 @@
+package cli
+
+// delivered_workflow_coverage_test.go — two gates against the same failure
+// class, which is the one this whole file tree keeps meeting: A DELIVERED
+// SURFACE THAT NOTHING EXERCISES IS INDISTINGUISHABLE FROM ONE THAT WORKS.
+//
+// The evidence, all of it from real instances rather than reasoning:
+//
+//   • The instance's tf-lint and checkov jobs ran `make tf-lint` against a
+//     scaffold with no Makefile, for several releases. Both are gated on
+//     `pull_request`, and the example instance is driven by force-push and
+//     dispatch — so the jobs had never once executed.
+//   • The instance's credential-rotation workflow produced `startup_failure`
+//     nightly for months: the caller job held less permission than the callee
+//     asked for, so GitHub killed the run before any job existed. No jobs, no
+//     annotations, no notification. Nothing in this repo runs that workflow.
+//   • v0.0.42 made TF_STATE_ENCRYPTION_PASSPHRASE required. The adopter learned
+//     about it from a failed `terraform init` on the PR after the upgrade.
+//
+// Every one of those is the same shape: a claim about the delivered tree that
+// nothing checked, in a place nothing ran. TestDeliveredWorkflowCommands (the
+// sibling file) covers the command words. These two cover the other two halves —
+// which entry points are exercised at all, and whether the one job that CANNOT
+// read its own requirement list from the binary has drifted from it.
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
+)
+
+// ── Gate 1: repo-readiness's env: block vs the requirement table ─────────────
+
+// deliveredPipeline is the workflow carrying the repo-readiness job.
+const deliveredPipeline = "../../../instance-template/.github/workflows/llz-terraform.yml"
+
+// TestDeliveredJobCoversRepoLevelRequirements pins the ONE thing
+// `llz ci require-repo-config` cannot do for itself.
+//
+// The verb reads the requirement table, so the SET it checks can never drift.
+// But a GitHub Actions job only sees a secret it names — there is no way to splat
+// them — so the `env:` block in the delivered YAML is a hand-maintained copy of
+// part of that table. Add a repo-level required secret to the table and the verb
+// starts demanding it while the workflow never supplies it: the gate then fails
+// on every instance, forever, for a value that is actually set. That is worse
+// than the gap it was added to close, and it is invisible from the Go side.
+func TestDeliveredJobCoversRepoLevelRequirements(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	body := string(raw)
+
+	if !strings.Contains(body, "llz ci require-repo-config") {
+		t.Fatal("the delivered pipeline no longer runs `llz ci require-repo-config` — " +
+			"the upgrade-prerequisite gate is gone and this test would pass having checked nothing")
+	}
+
+	names := configreadiness.RepoLevelRequirementNames()
+	if len(names) == 0 {
+		t.Fatal("the requirement table lists no repo-level required values — " +
+			"either the table moved or the filter is wrong; this gate would pass vacuously")
+	}
+
+	// SCOPED TO THE JOB'S OWN env:, not to the file. Searching the whole file is
+	// what the first draft did, and it passed while TF_STATE_ENDPOINT was
+	// unreachable from this job: the workflow-level block exports that variable as
+	// AWS_ENDPOINT_URL_S3, so `vars.TF_STATE_ENDPOINT` appeared in the file under a
+	// DIFFERENT name and the substring matched anyway. The verb looks values up by
+	// name, in the environment of the step it runs in — so that is the text this
+	// gate has to read, or it is checking a coincidence.
+	env := jobEnvBlock(t, body, "repo-readiness")
+	for _, n := range names {
+		// A requirement arrives as `NAME: ${{ secrets.NAME }}` or `${{ vars.NAME }}`
+		// depending on its kind; both put the value in the environment under NAME,
+		// which is all the verb needs.
+		mapped := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(n) + `:\s*\$\{\{\s*(secrets|vars)\.` + regexp.QuoteMeta(n) + `\s*\}\}`)
+		if !mapped.MatchString(env) {
+			t.Errorf("%s is a REQUIRED repo-level value but the repo-readiness job does not map it into env: "+
+				"as `%s: ${{ secrets.%s }}` (or vars.%s) — `llz ci require-repo-config` reads it from the "+
+				"environment BY NAME, so it would report a correctly configured instance as missing it.\n"+
+				"repo-readiness env: block was:\n%s",
+				n, n, n, n, env)
+		}
+	}
+}
+
+// jobEnvBlock returns the `env:` mapping of one job in a workflow file. Both
+// blocks are located by indentation, which is what YAML nesting is — a job is a
+// 4-space key under `jobs:`, its `env:` a 6-space key under that, and each block
+// ends at the next key of its own depth or shallower.
+func jobEnvBlock(t *testing.T, body, job string) string {
+	t.Helper()
+	jobRe := regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(job) + `:\s*$`)
+	loc := jobRe.FindStringIndex(body)
+	if loc == nil {
+		t.Fatalf("no `%s:` job in %s — the gate it backs is gone, and this test would pass "+
+			"having read nothing", job, deliveredPipeline)
+	}
+	rest := body[loc[1]:]
+	if end := regexp.MustCompile(`(?m)^  [a-zA-Z_-]+:`).FindStringIndex(rest); end != nil {
+		rest = rest[:end[0]] // stop at the next job
+	}
+	envLoc := regexp.MustCompile(`(?m)^    env:\s*$`).FindStringIndex(rest)
+	if envLoc == nil {
+		t.Fatalf("job %q has no `env:` block, so it maps no secret into the environment "+
+			"`llz ci require-repo-config` reads", job)
+	}
+	envBody := rest[envLoc[1]:]
+	if end := regexp.MustCompile(`(?m)^    [a-zA-Z_-]+:`).FindStringIndex(envBody); end != nil {
+		envBody = envBody[:end[0]] // stop at the job's next key (steps:, if:, …)
+	}
+	return envBody
+}
+
+// ── Gate 2: no pull-request path writes Terraform state ──────────────────────
+
+// deliveredCaller is the thin stub that owns the pull_request TRIGGER, in a
+// different manifest class from the pipeline body that owns the jobs.
+const deliveredCaller = "../../../instance-template/.github/workflows/terraform.yml"
+
+// deliveredJobHeaderRe finds each job header in the delivered pipeline, so a step
+// can be attributed to the job whose `if:` decides whether it runs.
+var deliveredJobHeaderRe = regexp.MustCompile(`(?m)^  ([a-z][a-z0-9-]*):$`)
+
+// withoutCommentLines blanks every whole-line comment, keeping the line count so
+// offsets still line up. These workflows carry more prose than YAML — the note
+// where the retired plan job used to be NAMES `llz ci tf-import` while explaining
+// why nothing runs it any more — and a scanner that reads prose as a step reports
+// the comment's job. That is not a hypothetical: the delivered-workflow scanner
+// has read prose in a `run:` block as a command before.
+func withoutCommentLines(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "#") {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestNoPullRequestPathWritesTerraformState couples two files a copier upgrade
+// moves by DIFFERENT rules, over the property that replaced the draft-PR skip.
+//
+// THE HISTORY MATTERS, because this test is the third position on the same
+// question. `llz ci tf-import` WRITES cluster/<deployment>/terraform.tfstate with
+// nothing serializing it against a concurrent apply — PR jobs group under
+// terraform-infra-pr, dispatched applies under terraform-infra-<deployment>, and
+// the s3 backend sets no use_lockfile. Two writers, last one wins. That hazard
+// was managed first by skipping DRAFT pull requests (so an operator had a way to
+// say "do not disturb live state", and terraform.yml needed `ready_for_review` in
+// its trigger types to make the skip recoverable), and the template pin was kept
+// OUT of the paths: filter because a filter selects the WORKFLOW, not a job, and
+// would have handed the state write to every automated pin-bump PR.
+//
+// The job that did the writing is gone. `plan-cluster-pr` could never resolve its
+// environment-scoped credentials, and could not be given the environment holding
+// them either, because infra-<env> is locked to ref=main. With it retired, the
+// invariant is stronger and simpler than the skip ever was: NO pull-request path
+// writes Terraform state at all — so the draft skip is unnecessary,
+// `ready_for_review` is dead weight, and the pin can be in the filter.
+//
+// THE TWO FILES ARE NOT DELIVERED ALIKE. llz-terraform.yml is `managed` — copier
+// overwrites it from a clean render. terraform.yml is `merge` — it carries jinja
+// and an adopter may have edited it, so its half arrives through a 3-way merge
+// that can decline. This test cannot reach that adopter; what it can do is
+// guarantee the template never SHIPS the halves out of step, so the only way to
+// reach the broken combination is a local edit, which `llz upgrade` reports as a
+// conflict.
+func TestNoPullRequestPathWritesTerraformState(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	rawCaller, err := os.ReadFile(deliveredCaller)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredCaller, err)
+	}
+	body, caller := withoutCommentLines(string(raw)), withoutCommentLines(string(rawCaller))
+
+	// ARM 1: every job that runs the state write is dispatch-only. Attributing the
+	// step to its JOB (rather than grepping the file for both strings) is the part
+	// that matters — the old hazard was a state-writing step sitting in a job whose
+	// gate did not exclude pull requests, which a file-wide grep cannot see.
+	lines := strings.Split(body, "\n")
+	jobStart := map[int]string{}
+	for _, m := range deliveredJobHeaderRe.FindAllStringSubmatchIndex(body, -1) {
+		jobStart[strings.Count(body[:m[0]], "\n")] = body[m[2]:m[3]]
+	}
+	job, cond, imports := "", "", 0
+	conds := map[string]string{}
+	for i, ln := range lines {
+		if name, ok := jobStart[i]; ok {
+			job, cond = name, ""
+		}
+		if job != "" && strings.Contains(ln, "llz ci tf-import") {
+			imports++
+			conds[job] = cond
+		}
+		cond += ln + " "
+	}
+	if imports == 0 {
+		t.Fatal("no `llz ci tf-import` step in the delivered pipeline — either the state write moved " +
+			"(and this test now proves nothing) or the command was renamed. Do not delete this test to " +
+			"make it pass: find where the state write went.")
+	}
+	for name, c := range conds {
+		if !strings.Contains(c, "github.event_name == 'workflow_dispatch'") {
+			t.Errorf("job %q runs `llz ci tf-import` — which WRITES cluster/<deployment>/terraform.tfstate "+
+				"against no lock — and its `if:` does not restrict it to workflow_dispatch. A pull request "+
+				"can now race a concurrent apply on the same state, and terraform.yml lists the template pin "+
+				"in its paths: filter on the understanding that no pull-request path writes state.", name)
+		}
+	}
+
+	// ARM 2: the trigger type that existed only for the retired draft skip is gone.
+	// Left behind it re-runs the same read-only checks and, worse, reads as a live
+	// rationale for a skip nothing performs.
+	if regexp.MustCompile(`(?m)^\s*types:.*ready_for_review`).MatchString(caller) {
+		t.Error("terraform.yml still lists `ready_for_review` in its pull_request trigger types, but no " +
+			"delivered job gates on draft any more. Either it is dead weight (remove it), or a draft skip " +
+			"came back — in which case the state-write hazard it manages needs its own answer, not a " +
+			"revived trigger type.")
+	}
+	if strings.Contains(body, "github.event.pull_request.draft == false") {
+		t.Error("a delivered job skips DRAFT pull requests again. That skip only ever existed to keep the " +
+			"state-writing plan job off a PR racing an apply; if it is back, arm 1 above and terraform.yml's " +
+			"paths: filter (which now lists the template pin) both need re-deciding.")
+	}
+
+	// ARM 3: the pin IS in the filter. Arms 1 and 2 make it safe, and it is what
+	// closes the v0.0.42 gap — a pin-only upgrade PR that reaches repo-readiness.
+	// Without this the other two arms could hold while the gap they unlock stayed
+	// open, and nothing would say so.
+	if !strings.Contains(caller, "'.copier-answers.yml'") {
+		t.Error("terraform.yml's paths: filter no longer lists '.copier-answers.yml'. A pin-only upgrade PR " +
+			"then reaches no job at all — which is how v0.0.42 made TF_STATE_ENCRYPTION_PASSPHRASE required " +
+			"and an adopter found out from a failed `terraform init`. It was excluded only while a " +
+			"pull-request path wrote Terraform state; arms 1 and 2 are what pay for it being here.")
+	}
+}
+
+// ── Gate 3: which delivered entry points are exercised at all ────────────────
+
+// exercisedEntryPoints records, per delivered entry-point workflow, WHY it is
+// considered covered — or, for an exclusion, why it is knowingly not.
+//
+// An "entry point" is a delivered workflow with a real trigger (push /
+// pull_request / schedule / workflow_dispatch). A `workflow_call`-only body is
+// not one: it runs whenever a caller runs, so it inherits its caller's coverage.
+//
+// THE EXCLUSIONS ARE THE POINT OF THE GATE, not a loophole in it. Nothing here
+// can execute these workflows; what it can do is refuse to let the set of
+// unexercised ones grow silently. Adding a delivered workflow now forces one of
+// two decisions, in writing: drive it from the release lane, or say here why not.
+// The template's release-e2e lane drives exactly ONE instance workflow —
+// terraform.yml — which is a fact worth having written down somewhere a reviewer
+// meets, because it was not obvious to anyone until a rotation workflow turned
+// out to have been dead for months.
+var exercisedEntryPoints = map[string]string{
+	"terraform.yml": "DRIVEN: release-e2e dispatches it (apply + destroy) and the PR-gate probe " +
+		"opens a pull request against it — the only delivered workflow the lane actually runs.",
+
+	// ── Knowingly unexercised, with the risk each one carries ───────────────
+	"scheduled-checks.yml": "NOT DRIVEN: cron-only drift/health reporting. Its body (llz-scheduled-checks.yml) " +
+		"is workflow_call and its verbs are unit-tested; what is unproven is the caller stub — the exact " +
+		"surface where the rotation workflow's startup_failure lived. reusable-workflow-caller-permissions " +
+		"gates that specific class statically.",
+	"secret-rotation.yml": "NOT DRIVEN: rotating real credentials on a throwaway instance would mint and revoke " +
+		"account-scoped Linode PATs on a shared account. THIS IS THE ONE THAT WAS DEAD FOR MONTHS " +
+		"(caller job missing id-token: write -> startup_failure, no jobs, no annotations, no notification). " +
+		"Now covered statically by reusable-workflow-caller-permissions.",
+	"cluster-health.yml": "NOT DRIVEN as a stub: the former e2e `validate` job that dispatched it was folded into " +
+		"the converge gate, so llz-cluster-health.yml's BODY runs every e2e via llz-bootstrap-openbao. " +
+		"Only the dispatch stub is unexercised.",
+	"bootstrap-openbao.yml": "NOT DRIVEN as a stub: llz-bootstrap-openbao.yml's body runs on every e2e as part of " +
+		"terraform.yml's apply chain. Only the standalone-retry dispatch stub is unexercised.",
+	"breakglass-openbao.yml": "NOT DRIVEN: an emergency handle for a wedged OpenBao. Running it in the lane would " +
+		"regenerate a root token on every release for no signal.",
+	"wedge-gameday.yml": "NOT DRIVEN by the release lane: it deliberately INJECTS wedges, so running it inside the " +
+		"gate would fail the gate. It is exercised by hand during gameday exercises.",
+	"promote.yml": "NOT DRIVEN: rendered per-instance from promotionRank, and the e2e instance has fewer " +
+		"than 2 ranked deployments so it carries the EMPTY pipeline (a preflight, no stages) — there is no " +
+		"chain to walk. Not a no-op gate, though: promote-pipeline-drift runs `llz env pipeline --check` on " +
+		"every PR at any rank count, and the preflight re-runs it with --require-pipeline on dispatch.",
+	"template-upgrade.yml": "NOT DRIVEN by the release lane, and it cannot be: it upgrades an instance to the " +
+		"LATEST PUBLISHED release, while the lane's instance is scaffolded from the commit under test — so it " +
+		"would either no-op or drag the fixture onto a different version mid-run. The `llz upgrade` it wraps is " +
+		"covered by `llz ci upgrade-test` (a real upgrade across the last 3 releases on every lint run), and the " +
+		"decisions around it (already-current; the open-upgrade and rejected-version guards, including the " +
+		"exact-version match and merged-beats-closed; --draft read off the real argv; summary and annotation " +
+		"written after the work rather than after the decision) are unit-tested in " +
+		"internal/extensions/lifecycle/upstreamupdates. What stays unproven is the stub's trigger surface; " +
+		"reusable-workflow-caller-permissions covers the startup_failure class statically.",
+}
+
+// workflowCallOnly matches a delivered body that is only ever invoked by another
+// workflow, so it carries no coverage question of its own.
+func workflowCallOnly(body string) bool {
+	triggers := regexp.MustCompile(`(?m)^  (push|pull_request|schedule|workflow_dispatch|workflow_call):`)
+	found := map[string]bool{}
+	for _, m := range triggers.FindAllStringSubmatch(body, -1) {
+		found[m[1]] = true
+	}
+	return found["workflow_call"] && len(found) == 1
+}
+
+func TestEveryDeliveredEntryPointIsExercisedOrExcused(t *testing.T) {
+	dir := "../../../instance-template/.github/workflows"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	var entryPoints []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if ext := filepath.Ext(e.Name()); ext != ".yml" && ext != ".yaml" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		if workflowCallOnly(string(raw)) {
+			continue // inherits its callers' coverage
+		}
+		entryPoints = append(entryPoints, e.Name())
+	}
+	sort.Strings(entryPoints)
+
+	// Fail closed on vacuity, the same way the sibling gate does: an extractor
+	// that stopped seeing workflows would otherwise report a clean tree.
+	if len(entryPoints) < 5 {
+		t.Fatalf("found only %d delivered entry-point workflow(s) (%v) — the classifier is broken, "+
+			"not the tree", len(entryPoints), entryPoints)
+	}
+
+	for _, name := range entryPoints {
+		if _, ok := exercisedEntryPoints[name]; !ok {
+			t.Errorf("delivered workflow %q has a real trigger but is not listed in exercisedEntryPoints. "+
+				"Nothing in this repo runs it, so nothing would notice it breaking — the way "+
+				"secret-rotation.yml produced startup_failure nightly for months. Either drive it from the "+
+				"release-e2e lane, or add it with a one-line note saying why not and what covers it instead.",
+				name)
+		}
+	}
+
+	// And the reverse: a stale entry would quietly excuse a workflow that no
+	// longer exists, so the list cannot rot into a list of names nobody checks.
+	for name := range exercisedEntryPoints {
+		if !slices.Contains(entryPoints, name) {
+			t.Errorf("exercisedEntryPoints names %q, which is not a delivered entry-point workflow "+
+				"(deleted, renamed, or now workflow_call-only) — drop the entry", name)
+		}
+	}
+
+	driven := 0
+	for _, name := range entryPoints {
+		if strings.HasPrefix(exercisedEntryPoints[name], "DRIVEN") {
+			driven++
+		}
+	}
+	t.Logf("%d delivered entry point(s); %d driven by the release lane, %d excused",
+		len(entryPoints), driven, len(entryPoints)-driven)
+}
+
+// ── Gate 4: the probe's check names vs the delivered jobs' own ───────────────
+
+// TestPRGateCheckNamesMatchTheDeliveredJobs couples the last restated list in
+// this PR's new machinery.
+//
+// DefaultPRGateChecks names the two jobs `llz ci assert-instance-pr-gates` waits
+// for, and llz-terraform.yml names them again in its `name:` fields. Rename a job
+// there and nothing in this repo notices: the template stays green, and the
+// mismatch surfaces fifteen minutes into the next release-e2e as "the gates never
+// ran — either the paths: filter no longer covers AGENTS.md, or the jobs were
+// removed or renamed". That diagnosis lists the right cause third, behind two
+// wrong ones, for a rename a static gate can see instantly. Every other split
+// contract in this branch got a coupling test; this is the one that did not.
+func TestPRGateCheckNamesMatchTheDeliveredJobs(t *testing.T) {
+	raw, err := os.ReadFile(deliveredPipeline)
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveredPipeline, err)
+	}
+	// Job `name:` values, at job depth (4 spaces) inside the pipeline.
+	names := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^    name: (.+)$`).FindAllStringSubmatch(string(raw), -1) {
+		names[strings.TrimSpace(strings.Trim(m[1], `"'`))] = true
+	}
+	if len(names) < 5 {
+		t.Fatalf("found only %d job name(s) in %s — the extractor is broken, so this gate would pass "+
+			"having compared nothing", len(names), deliveredPipeline)
+	}
+	for _, want := range releasepublish.DefaultPRGateChecks {
+		if !names[want] {
+			var have []string
+			for n := range names {
+				have = append(have, n)
+			}
+			sort.Strings(have)
+			t.Errorf("the PR-gate probe waits for a check called %q, but no job in %s is named that.\n"+
+				"A release-e2e run would report it as \"the gates never ran\" and send an operator to the "+
+				"paths: filter. Jobs actually named there: %s",
+				want, deliveredPipeline, strings.Join(have, ", "))
+		}
+	}
+}

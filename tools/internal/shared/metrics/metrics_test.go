@@ -1,0 +1,227 @@
+package metrics
+
+import (
+	"math"
+	"strings"
+	"testing"
+)
+
+func render(t *testing.T, r *Registry) string {
+	t.Helper()
+	var b strings.Builder
+	n, err := r.WriteTo(&b)
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if int(n) != b.Len() {
+		t.Fatalf("WriteTo reported %d bytes, wrote %d", n, b.Len())
+	}
+	return b.String()
+}
+
+func TestSingleGauge(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("llz_reconcile_up", "1 if the last sample succeeded", nil, 1)
+	got := render(t, r)
+	want := "# HELP llz_reconcile_up 1 if the last sample succeeded\n" +
+		"# TYPE llz_reconcile_up gauge\n" +
+		"llz_reconcile_up 1\n"
+	if got != want {
+		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFamiliesSortedSamplesSorted(t *testing.T) {
+	r := NewRegistry()
+	// Insert out of order across two families with multiple label sets.
+	r.SetGauge("z_metric", "z help", map[string]string{"k": "b"}, 2)
+	r.SetGauge("z_metric", "z help", map[string]string{"k": "a"}, 1)
+	r.SetGauge("a_metric", "a help", nil, 5)
+	got := render(t, r)
+	want := "# HELP a_metric a help\n" +
+		"# TYPE a_metric gauge\n" +
+		"a_metric 5\n" +
+		"# HELP z_metric z help\n" +
+		"# TYPE z_metric gauge\n" +
+		`z_metric{k="a"} 1` + "\n" +
+		`z_metric{k="b"} 2` + "\n"
+	if got != want {
+		t.Fatalf("families/samples not deterministically ordered.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestLabelsSortedByKey(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("m", "h", map[string]string{"b": "2", "a": "1", "c": "3"}, 0)
+	got := render(t, r)
+	if !strings.Contains(got, `m{a="1",b="2",c="3"} 0`) {
+		t.Fatalf("label keys not sorted: %s", got)
+	}
+}
+
+func TestSetGaugeUpsert(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("m", "h", map[string]string{"k": "v"}, 1)
+	r.SetGauge("m", "h", map[string]string{"k": "v"}, 9) // same label set → overwrite
+	got := render(t, r)
+	if strings.Contains(got, "m{k=\"v\"} 1\n") {
+		t.Fatalf("stale value not overwritten:\n%s", got)
+	}
+	if !strings.Contains(got, `m{k="v"} 9`) {
+		t.Fatalf("upsert value missing:\n%s", got)
+	}
+	// One family, one sample line — no duplicate.
+	if c := strings.Count(got, "# TYPE m gauge"); c != 1 {
+		t.Fatalf("expected 1 TYPE line, got %d:\n%s", c, got)
+	}
+}
+
+func TestLabelValueEscaping(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("m", "h", map[string]string{"path": `a\b"c` + "\n" + "d"}, 0)
+	got := render(t, r)
+	if !strings.Contains(got, `m{path="a\\b\"c\nd"} 0`) {
+		t.Fatalf("label value not escaped per spec: %s", got)
+	}
+}
+
+func TestHelpNewlineEscaped(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("m", "line1\nline2", nil, 0)
+	got := render(t, r)
+	if !strings.Contains(got, "# HELP m line1\\nline2\n") {
+		t.Fatalf("HELP newline not escaped: %q", got)
+	}
+}
+
+func TestNoHelpStillEmitsType(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("m", "", nil, 3) // no help text
+	got := render(t, r)
+	if strings.Contains(got, "# HELP") {
+		t.Fatalf("unexpected HELP line for empty help: %s", got)
+	}
+	if !strings.Contains(got, "# TYPE m gauge\nm 3\n") {
+		t.Fatalf("TYPE + sample missing: %s", got)
+	}
+}
+
+func TestValueFormatting(t *testing.T) {
+	cases := map[float64]string{
+		0:            "0",
+		1:            "1",
+		3.5:          "3.5",
+		1234567:      "1.234567e+06",
+		math.Inf(1):  "+Inf",
+		math.Inf(-1): "-Inf",
+		1751644800:   "1.7516448e+09", // a unix timestamp round-trips
+	}
+	for v, want := range cases {
+		if got := formatValue(v); got != want {
+			t.Errorf("formatValue(%v) = %q, want %q", v, got, want)
+		}
+	}
+	if got := formatValue(math.NaN()); got != "NaN" {
+		t.Errorf("formatValue(NaN) = %q, want NaN", got)
+	}
+}
+
+func TestEmptyRegistry(t *testing.T) {
+	if got := render(t, NewRegistry()); got != "" {
+		t.Fatalf("empty registry should render nothing, got %q", got)
+	}
+}
+
+func TestAddCounterAccumulates(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "observe"}, 1)
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "observe"}, 1)
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "harbor"}, 1)
+	got := render(t, r)
+	want := "# HELP llz_reconcile_runs_total runs\n" +
+		"# TYPE llz_reconcile_runs_total counter\n" +
+		`llz_reconcile_runs_total{reconciler="harbor"} 1` + "\n" +
+		`llz_reconcile_runs_total{reconciler="observe"} 2` + "\n"
+	if got != want {
+		t.Fatalf("counter accumulation wrong.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCounterAndGaugeCoexistWithCorrectTypes(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("a_total", "c", nil, 3)
+	r.SetGauge("b_gauge", "g", nil, 7)
+	got := render(t, r)
+	if !strings.Contains(got, "# TYPE a_total counter\na_total 3\n") {
+		t.Errorf("counter type/line wrong:\n%s", got)
+	}
+	if !strings.Contains(got, "# TYPE b_gauge gauge\nb_gauge 7\n") {
+		t.Errorf("gauge type/line wrong:\n%s", got)
+	}
+}
+
+func TestCounterKeepsTypeAcrossZeroDelta(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("errs_total", "e", nil, 0) // register at 0, no error yet
+	got := render(t, r)
+	if !strings.Contains(got, "# TYPE errs_total counter\nerrs_total 0\n") {
+		t.Fatalf("counter registered at 0 not rendered as counter:\n%s", got)
+	}
+}
+
+// SetGaugeFamily replaces the sample set, which is the property SetGauge cannot
+// offer: there is no delete, so a label set the caller stops producing is served
+// at its last value until the process ends. A lane whose series come from DATA
+// (a list that shrinks) needs removal, not upsert.
+func TestSetGaugeFamilyReplacesRatherThanMerges(t *testing.T) {
+	r := NewRegistry()
+	r.SetGaugeFamily("m", "help", []GaugeSample{
+		{Labels: map[string]string{"k": "a"}, Value: 1},
+		{Labels: map[string]string{"k": "b"}, Value: 1},
+	})
+	r.SetGaugeFamily("m", "help", []GaugeSample{
+		{Labels: map[string]string{"k": "a"}, Value: 0},
+	})
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if !strings.Contains(out, `m{k="a"} 0`) {
+		t.Errorf("the surviving sample must carry its new value:\n%s", out)
+	}
+	if strings.Contains(out, `k="b"`) {
+		t.Errorf("a sample the caller stopped producing must be GONE:\n%s", out)
+	}
+}
+
+// An empty set clears the family. That is deliberate: a pass that measured
+// nothing must not leave the previous pass's values standing as if they were
+// fresh measurements.
+func TestSetGaugeFamilyWithNoSamplesClearsTheFamily(t *testing.T) {
+	r := NewRegistry()
+	r.SetGaugeFamily("m", "help", []GaugeSample{{Labels: map[string]string{"k": "a"}, Value: 1}})
+	r.SetGaugeFamily("m", "help", nil)
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), `m{`) {
+		t.Errorf("an empty family must publish no samples:\n%s", b.String())
+	}
+}
+
+// It must not disturb a DIFFERENT metric — the guard against the hazard its own
+// doc comment names, where two lanes share a family name.
+func TestSetGaugeFamilyLeavesOtherMetricsAlone(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("other", "help", map[string]string{"k": "x"}, 7)
+	r.SetGaugeFamily("m", "help", []GaugeSample{{Labels: map[string]string{"k": "a"}, Value: 1}})
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), `other{k="x"} 7`) {
+		t.Errorf("an unrelated family must survive:\n%s", b.String())
+	}
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "llz-cert-automation values",
+  "description": "Root-strict schema: every top-level key is declared, so a typo (e.g. `certManagerNamspace:`) is REJECTED AT RENDER instead of silently activating nothing. This chart is the one first-party chart the app-of-apps passes a valuesObject to (namespace, certManagerNamespace, eventBus), so a typo there would otherwise render a chart pointed at the wrong namespace. Nested objects stay permissive on purpose.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "namespace": {
+      "type": "string",
+      "description": "Namespace this chart creates and runs in. Set by the app-of-apps valuesObject."
+    },
+    "certManagerNamespace": {
+      "type": "string",
+      "description": "Where cert-manager runs — the NetworkPolicies key on it. Set by the app-of-apps valuesObject."
+    },
+    "eventBus": {
+      "type": "object",
+      "description": "Argo Events EventBus this chart's Sensor binds to. Set by the app-of-apps valuesObject."
+    },
+    "watchedSecret": {
+      "type": "object",
+      "description": "The TLS Secret whose rotation triggers the HAProxy rebuild."
+    },
+    "harborUrl": { "type": "string" },
+    "haproxyImage": { "type": "object" },
+    "githubDeploy": { "type": "object" },
+    "images": { "type": "object" },
+    "externalSecrets": {
+      "type": "object",
+      "description": "Includes harborDockerConfig, which renders the dockerconfigjson from secret/harbor/robot."
+    },
+    "networkPolicy": { "type": "object" },
+    "syncWaves": { "type": "object" },
+    "podSecurity": { "type": "object" }
+  }
+}

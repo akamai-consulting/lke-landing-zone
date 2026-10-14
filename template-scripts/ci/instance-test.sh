@@ -34,7 +34,7 @@
 # Usage: template-scripts/ci/instance-test.sh
 # Env:
 #   INSTANCE_TEST_DIR  build dir (default: .instance-test; gitignored)
-#   TF                 terraform binary (default: terraform, falling back to tofu)
+#   TF                 Terraform-family binary (default: tofu, falling back to terraform)
 #   SKIP_TF            set to 1 to skip the terraform validate stage (no TF binary)
 set -euo pipefail
 
@@ -47,10 +47,11 @@ BUILD="${INSTANCE_TEST_DIR:-.instance-test}"
 case "$BUILD" in /*) : ;; *) BUILD="$ROOT/$BUILD" ;; esac
 INSTANCE="$BUILD/instance"
 
-# terraform proper in CI; locally this repo usually has only tofu (the dev alias).
-# Default to `terraform` when neither is found — the validate stage below reports
-# the missing binary and skips rather than aborting the whole run.
-TF="$(detect_tf)"; TF="${TF:-terraform}"
+# tofu everywhere now (CI image and dev boxes alike). Default to `tofu` when
+# neither is found — the validate stage below reports the missing binary and
+# skips rather than aborting the whole run, and naming tofu points at the right
+# remedy.
+TF="$(detect_tf)"; TF="${TF:-tofu}"
 
 # `llz env add` is the scaffolder (built into the binary). Resolve it so we can
 # prove it works INSIDE a rendered instance (the instance carries no scripts/).
@@ -59,20 +60,39 @@ elif [[ -x "$ROOT/bin/llz" ]]; then LLZ="$ROOT/bin/llz"
 elif command -v llz >/dev/null 2>&1; then LLZ="$(command -v llz)"
 else ( cd "$ROOT/tools" && go build -o "$ROOT/bin/llz" ./cmd/llz ) && LLZ="$ROOT/bin/llz"; fi
 
+# copier's _tasks shell out to a BARE `llz` (they run in the rendered instance, not
+# here), so they pick up whatever is on PATH — which on a dev box is the installed
+# release, not this tree. That made the deliver-docs task test the WRONG binary:
+# a task using a flag this tree just added failed against an older release and fell
+# through to its fallback, and the run reported a docs-delivery failure that had
+# nothing to do with the template under test. Put the resolved llz first on PATH so
+# the copier tasks exercise the CLI this template ships with.
+PATH="$(cd "$(dirname "$LLZ")" && pwd):$PATH"
+export PATH
+
 # step() and fail() come from lib-common.sh; fail() accumulates into FAILED.
 FAILED=0
 
 # ── 1. Instantiate via copier ─────────────────────────────────────────────────
 step "Instantiate (copier copy → ${INSTANCE#"$ROOT"/})"
+# Self-skip when copier is absent so this can sit in `make lint` (LINT_ALL /
+# change-scoped) without breaking a dev who hasn't installed it — the CI
+# `instantiate` job installs copier, so the gate still runs there. Same
+# graceful-degradation pattern as the helm/tofu-optional steps elsewhere.
 command -v copier >/dev/null 2>&1 || {
-  echo "copier not found — install with: pipx install copier (or pip install --user copier)" >&2
-  exit 1
+  echo "::warning::copier not found — SKIPPING instance-test (install: pipx install copier). CI runs it regardless." >&2
+  exit 0
 }
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
 # --vcs-ref HEAD + the working tree (DirtyLocalWarning) so local edits are tested.
 # --trust runs copier.yml _tasks (copies the operator docs/ into the instance).
-copier copy --trust --defaults --vcs-ref HEAD "$ROOT" "$INSTANCE"
+# llz_version is fail-closed (copier.yml validator rejects an unpinned main/HEAD),
+# so pass the latest published v* tag explicitly — the same concrete pin `llz new`
+# renders. The validate stage below rewrites git:: sources to in-repo paths, so the
+# exact tag value is not resolved over the network here.
+LLZ_VERSION="$(git -C "$ROOT" describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.0.0)"
+copier copy --trust --defaults --vcs-ref HEAD -d "llz_version=$LLZ_VERSION" "$ROOT" "$INSTANCE"
 
 # ── 2. Token residue ──────────────────────────────────────────────────────────
 step "Token residue (no unrendered copier delimiters)"
@@ -90,7 +110,19 @@ require ".copier-answers.yml"
 require "renovate.json"
 require ".github/workflows/terraform.yml"
 require ".github/workflows/cluster-health.yml"
-require "apl-values/_shared/values.yaml"
+# The apl-OVERLAY, which is what LLZ actually owns in an instance's apl-values
+# tree. appvalues.yaml is named individually because it is the ONLY channel that
+# can set an apl-core app's chart values on the managed platform — an instance
+# rendered without it silently loses the Argo CD health customizations that keep a
+# fresh bootstrap from wedging, and Loki's WAL-replay headroom.
+require "apl-values/_shared/apl-overlay/obj.yaml"
+require "apl-values/_shared/apl-overlay/apps.yaml"
+require "apl-values/_shared/apl-overlay/appvalues.yaml"
+# The operator escape hatch ships as an empty namespaces/ + global/ skeleton at the
+# REPO ROOT (not under apl-values/ — see .template-manifest). Assert the skeleton
+# lands: an instance that never receives it silently loses the documented layout.
+require "kubernetes-custom/namespaces"
+require "kubernetes-custom/global"
 # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
 # template-INTERNAL and intentionally NOT delivered: the reusable llz-* workflows
 # build it from a template checkout (_llz-template/), so an instance must NOT
@@ -100,14 +132,30 @@ if [[ -d "$INSTANCE/scripts" ]] && [[ -n "$(ls -A "$INSTANCE/scripts" 2>/dev/nul
 else
   echo "  ok   no scripts/ delivered (llz tooling sourced from template checkout)"
 fi
-# _tasks should also deliver the operator-facing docs/ subset (and drop the two
-# template-build docs). Spot-check both: a representative operational doc present,
-# and the excluded ones absent.
+# _tasks delivers the day-to-day operator docs subset (quickstart + runbooks +
+# playbooks) via `llz ci deliver-docs`, and REFERENCES the rest at the template
+# repo via a generated docs/README.md pointer. Spot-check the kept set is present,
+# the pointer is version-pinned, and referenced/template-build docs are absent.
+require "docs/quickstart.md"
 require "docs/runbooks/bootstrap-openbao.md"
-require "docs/adopter-guide.md"
-absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
-absent "docs/templatization-plan.md"
-absent "docs/agents.md"
+require "docs/playbooks"
+require "docs/README.md"
+if grep -q "lke-landing-zone/tree/.*/docs" "$INSTANCE/docs/README.md"; then
+  echo "  ok   docs/README.md points at the versioned template docs"
+else
+  fail "docs/README.md is missing the version-pinned reference URL"
+fi
+absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (referenced/template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
+# apl-core's own values are Linode's on the managed App Platform. This file used
+# to be `managed` and shipped to every instance while reaching no cluster: its
+# renderer was retired at the pivot, four docs kept pointing operators at it, and
+# an instance's Loki OOM fix sat in it doing nothing for 16 days. If it ever
+# reappears in a rendered instance, something re-added it to the scaffold.
+absent "apl-values/values.yaml"
+absent "templatization-plan.md"   # template-build
+absent "docs/agents.md"                # template-build
+absent "docs/adopter-guide.md"         # referenced (in the template repo)
+absent "docs/designs"                  # referenced (internal design docs)
 
 # ── 3b. `llz env add` works INSIDE the rendered instance ──────────────────────
 # This is the documented `cd my-instance; llz env add <env>` path. It must work
@@ -120,13 +168,17 @@ else
   ( cd "$INSTANCE" && git init -q && git add -A && git commit -qm scaffold >/dev/null 2>&1 || true
     "$LLZ" env add itest --region us-ord --obj-cluster us-ord-1 >/dev/null ) \
     || fail "llz env add failed inside the rendered instance"
+  # No per-env apl-core values.yaml on the managed platform — Linode owns apl-core
+  # values; `llz render` emits only the manifest/ tree + tfvars.
   for p in \
     "terraform-iac-bootstrap/cluster/itest.tfvars" \
-    "terraform-iac-bootstrap/cluster-bootstrap/itest.tfvars" \
     "terraform-iac-bootstrap/object-storage/itest.tfvars" \
-    "apl-values/itest/values.yaml"; do
+    "apl-values/itest/manifest/env-revision-configmap.yaml"; do
     if [[ -e "$INSTANCE/$p" ]]; then echo "  ok   env add -> $p"; else fail "env add did not create $p"; fi
   done
+  if [[ -e "$INSTANCE/apl-values/itest/values.yaml" ]]; then
+    fail "env add emitted an apl-core values.yaml — managed apl-core owns its own values"
+  fi
   # The generated env must carry no surviving 'your-env' value (comments aside).
   if grep -rnH "your-env" "$INSTANCE"/terraform-iac-bootstrap/*/itest.tfvars 2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*#'; then
     fail "env add left an unfilled 'your-env' value above"
@@ -155,8 +207,8 @@ else
   # in-repo module path so init/validate work with no tags, backend, or creds —
   # same approach as template-scripts/ci/instantiate-terraform.sh. The path MUST be a
   # local *relative* source: a relative module source stays in the calling root's
-  # Terraform "package", so a module's own internal "../llz-node-firewall" refs
-  # can traverse up; an absolute source would make each module its own package and
+  # Terraform "package", so any internal "../llz-<name>" ref a module carries can
+  # traverse up; an absolute source would make each module its own package and
   # those internal refs would error with "Local module path escapes module
   # package". All roots are siblings at $INSTANCE/terraform-iac-bootstrap/<root>, so one relative
   # path (computed lexically, name is just a depth placeholder) serves them all.

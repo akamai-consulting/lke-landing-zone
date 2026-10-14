@@ -1,0 +1,61 @@
+# Argo Workflows — wave -15.
+#
+# apl-core doesn't ship it; provides the Workflow/CronWorkflow CRDs the
+# cert-automation WorkflowTemplate consumes.
+# Same wave as ESO — installs alongside it, before default-wave consumers.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-argo-workflows
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: platform-support
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-workflows
+    targetRevision: 0.42.3
+    helm:
+      releaseName: llz-argo-workflows
+      valuesObject:
+        crds:
+          install: true
+          keep: true
+        controller:
+          workflowNamespaces:
+            - llz-openbao
+            - llz-cert-automation
+            # The clusterHealthWorkflow health WorkflowTemplate + its submitted
+            # Workflows live here; the controller must manage this namespace for the
+            # `llz ci assert-health-workflow` RUN-path (and any day-2 health jobs).
+            - llz-argo-workflows
+        workflow:
+          serviceAccount:
+            create: true
+            name: argo-workflow
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llz-argo-workflows
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      # First-boot ordering races (OpenBao unseal / secret seed) can outlast the
+      # old ~5-retry (~5 min) budget; a failed automated sync then terminally pins
+      # the revision and Argo will not re-attempt it. ~20 retries @ 3m cap (~1h)
+      # rides out the bootstrap window instead.
+      limit: 20
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      # llz-argo-workflows is created by cluster-foundation at wave -20 (single
+      # Namespace owner).
+      - CreateNamespace=false
+      - ServerSideApply=true

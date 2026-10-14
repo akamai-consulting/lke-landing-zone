@@ -1,0 +1,476 @@
+# Alert rules that make the reconciler's metrics surface actionable. Picked up by
+# apl-core's kube-prometheus-stack ruleSelector, which matches {prometheus: system}
+# (see the metadata label below — REQUIRED, not organizational). These three
+# distinguish the failure modes the design calls out:
+#
+#   LLZReconcilerScrapeDown  — Prometheus can't reach the pod (target down /
+#                              NetworkPolicy / pod gone). The metrics are blind.
+#   LLZReconcilerReportingDown — the pod is up and scraped, but its own samples
+#                              are failing (llz_reconcile_up 0 — e.g. lost API
+#                              access). It is reporting, and reporting failure.
+#   LLZReconcilerStale       — scraped and up, but the sample loop has not advanced
+#                              (wedged goroutine). Timestamp staleness catches what
+#                              up=1 alone would miss.
+#
+# One property governs half the rules below: the reconciler's registry is
+# UPSERT-ONLY (tools/internal/shared/metrics — no Delete, no expiry). A lane that stops
+# sampling does not go absent and does not go stale to Prometheus, because the
+# endpoint is up and still answering with the last value it ever wrote. So an
+# alert shaped `max(llz_foo) == 1` cannot fire while the thing that would set it
+# to 1 is broken: the alerts go quiet exactly when their input dies.
+#
+# Two rule shapes exist to counter that, and any new gauge-fed alert needs one:
+#   - freshness — LLZReconcilerStale joins every lane against its own
+#     llz_reconcile_interval_seconds, so a wedged feeder is loud even while its
+#     gauges read healthy.
+#   - corpus/presence — LLZConvergenceUnobserved and LLZConvergenceSignalAbsent
+#     fire on "this verdict was computed from nothing" and "this series does not
+#     exist", neither of which a threshold on the value can express.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llz-reconciler-alerts
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system} (NOT permissive/empty — confirmed live on apl-core v6).
+    # Without it this PrometheusRule is never loaded and its alerts never fire.
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: llz-reconciler
+      interval: 30s
+      rules:
+        - alert: LLZReconcilerScrapeDown
+          expr: up{namespace="llz-reconciler"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler metrics target is down
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: Prometheus cannot scrape the llz-reconciler /metrics endpoint; the in-cluster convergence signals are blind.
+        - alert: LLZReconcilerReportingDown
+          # Fires per reconciler (the `reconciler` label rides through): any
+          # reconciler whose last pass failed — the observe sampler losing API
+          # access, or a Phase 2 timed reconciler erroring.
+          expr: llz_reconcile_up{namespace="llz-reconciler"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler {{ $labels.reconciler }} pass is failing
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The {{ $labels.reconciler }} reconciler is scraped but its last pass failed (e.g. lost Kubernetes API access, or a rotation/provisioning error).
+        - alert: LLZReconcilerStale
+          # EVERY lane, each against its OWN cadence (llz_reconcile_interval_seconds,
+          # published per pass): no successful pass in 10 intervals. For observe
+          # (30s) that is the same >5m this rule always used.
+          #
+          # It was scoped to reconciler="observe" on the reasoning that "the timed
+          # reconcilers run hourly/daily, so staleness is not a signal for them".
+          # That was not true of openbao-gauges, which runs every 60s — and it is
+          # the lane feeding LLZOpenBaoSealed and LLZCredentialRotationOverdue.
+          # Because the registry never expires a gauge, a dead lane does not go
+          # absent: it keeps serving its last-known-good sample, so
+          # llz_openbao_sealed stays 0 and the critical alert can never fire. The
+          # freshness series is the only thing that can contradict a stale value,
+          # so every lane that has a cadence now gets checked against it.
+          #
+          # Both sides are aggregated `by (reconciler)` before the join: a bare
+          # series-to-series match would be one-to-one on the reconciler label, so
+          # the two pods that coexist during a rolling update (or any future
+          # replica bump — leader election exists for exactly that) would make it a
+          # duplicate match group and the rule would ERROR OUT rather than fire.
+          # max() over replicas is also the semantics we want: if any replica
+          # completed a pass recently, the lane is not stale.
+          expr: |
+            (time() - max by (reconciler) (llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler"}))
+              > on(reconciler) (10 * max by (reconciler) (llz_reconcile_interval_seconds{namespace="llz-reconciler"}))
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler {{ $labels.reconciler }} loop is stale
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The {{ $labels.reconciler }} reconciler has not completed a successful pass in 10 of its own intervals ({{ $value }}s ago). Its loop may be wedged — and every gauge it publishes is still being served at its last-known-good value, so the alerts fed by those gauges are silently unfalsifiable until this clears.
+        - alert: LLZReconcilerErroring
+          # A folded timed reconciler (Linode cred rotation / Harbor provisioning)
+          # failing repeatedly — distinct from a single transient blip.
+          expr: increase(llz_reconcile_errors_total{namespace="llz-reconciler"}[1h]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler {{ $labels.reconciler }} is erroring repeatedly
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The {{ $labels.reconciler }} reconciler has failed more than 3 times in the last hour.
+        - alert: LLZClusterNotConverged
+          # The observe reconciler's day-2 convergence read (Argo app health via
+          # the same predicate llz ci health uses): 1 = hard-failed (a required
+          # component the reconciler can't fix on its own). A sustained hard-fail
+          # is operator-actionable. State 2 (in-progress) is intentionally NOT
+          # alerted — reconciles are expected to be in flight.
+          expr: max(llz_convergence_state{namespace="llz-reconciler"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: cluster is not converged (hard-failed)
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
+        - alert: LLZAppScopeNotConverged
+          # The other half of the convergence boundary. Instance-owned Applications
+          # (the operator escape hatch and the apps deployed through it) are
+          # deliberately excluded from llz_convergence_state, so a broken one leaves
+          # the platform alert silent by design. Without this alert that exclusion is
+          # indistinguishable from health: eight unseeded per-app credentials once
+          # survived eight days behind exactly that silence. Longer `for` than the
+          # platform alert — an app team's deploy is theirs to finish, and this is a
+          # notification that it did not, not a platform incident.
+          expr: max(llz_convergence_apps_instance_failed{namespace="llz-reconciler"}) > 0 or max(llz_convergence_apps_instance_pending{namespace="llz-reconciler"}) > 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: instance-owned Argo Applications are hard-failed
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: >-
+              One or more Applications in the instance-custom project are hard-failed or have been reconciling for an hour.
+              They do not gate platform convergence (llz_convergence_state stays 0); they are the instance's own to fix.
+              SCOPE: this lane classifies Argo APPLICATIONS, so a Synced+Healthy instance app whose ExternalSecrets, Jobs
+              or Pods are broken does not move it — run `llz ci converge --scope=apps` (converge, not health: the one-shot
+              reads a pod that is merely being created as failed) for the per-resource verdict, which the blocking
+              app-scope-health job in llz-scheduled-checks also runs unattended each week.
+        - alert: LLZConvergenceUnobserved
+          # llz_convergence_state == 0 means "converged" — but the state is derived
+          # from classifying Argo Applications, and classifying NOTHING produced the
+          # same 0. An empty items[], a malformed list, or a batch that all failed to
+          # parse rendered as "all Argo Applications converged" (fixed in
+          # reconcile_convergence.go, which now reports in-progress). This alert is
+          # the observability half of that fix: it fires on the corpus itself, so a
+          # convergence claim backed by zero evidence is visible rather than silently
+          # green. Pre-bootstrap it rides the same 15m as LLZClusterNotConverged.
+          expr: max(llz_convergence_apps_observed{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: convergence is being reported from zero Argo Applications
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The reconciler classified no Argo Applications at all, so llz_convergence_state carries no evidence either way. Either bootstrap has not created the Applications yet, or the list read is returning nothing (RBAC, a renamed namespace, an unparseable response).
+        - alert: LLZConvergenceSignalAbsent
+          # The convergence gauge is the in-cluster mirror of the bootstrap converge
+          # gate. If the observe lane never publishes it the series is ABSENT, not 0
+          # — and every other convergence rule is a threshold on a series that isn't
+          # there, which never fires. absent() is what makes "no signal" loud.
+          expr: absent(llz_convergence_state{namespace="llz-reconciler"})
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz convergence gauge is not being published
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: No llz_convergence_state series exists. The observe reconciler is not publishing it, so LLZClusterNotConverged and LLZConvergenceUnobserved cannot fire — the cluster's convergence is unmonitored, not healthy.
+        - alert: LLZESOStoreNotReady
+          # The openbao ClusterSecretStore is not Ready — every platform
+          # ExternalSecret binds to it, so a sustained not-Ready stalls secret sync.
+          expr: max(llz_eso_store_ready{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: openbao ClusterSecretStore is not Ready
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The ESO ClusterSecretStore the platform ExternalSecrets bind to has been not-Ready for 15m.
+        - alert: LLZCertificatesNotReady
+          # One or more cert-manager Certificates stuck not-Ready.
+          expr: max(llz_certificates_not_ready{namespace="llz-reconciler"}) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: cert-manager Certificates are not Ready
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: '{{ $value }} cert-manager Certificate(s) have been not-Ready for 30m.'
+        - alert: LLZOpenBaoNotAvailable
+          # Fewer OpenBao pods Ready than exist — a sealed pod reads NotReady, so a
+          # sustained shortfall usually means OpenBao is sealed (or crashed).
+          expr: (min(llz_openbao_pods_ready{namespace="llz-reconciler"}) < min(llz_openbao_pods_total{namespace="llz-reconciler"})) and (min(llz_openbao_pods_total{namespace="llz-reconciler"}) > 0)
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: an OpenBao pod is not Ready (possibly sealed)
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: Not all OpenBao pods pass their readiness probe; a sealed pod reads NotReady.
+        - alert: LLZOpenBaoSealed
+          # The precise seal signal from --reconcile-openbao-gauges (vs the
+          # LLZOpenBaoNotAvailable pod-readiness proxy). Published only when that
+          # reconciler is enabled, so silent otherwise.
+          expr: max(llz_openbao_sealed{namespace="llz-reconciler"}) == 1
+          for: 5m
+          labels:
+            severity: critical
+            service: llz-reconciler
+          annotations:
+            summary: OpenBao is sealed
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: OpenBao reports sealed for 5m; ESO reads are blocked until it is unsealed.
+        - alert: LLZCredentialRotationOverdue
+          # A credential in OpenBao has not rotated within its SLA. 90d is now the
+          # ONLY rotation threshold for these credentials, and `llz ci
+          # assert-rotation-health` is pinned to it by
+          # TestRotationSLAsMatchThePrometheusRules. The weekly
+          # loki-objkey-rotation-health check used to claim 120d for
+          # secret/loki/object-store; two mechanisms asserting different SLAs for one
+          # credential is worse than either number, and that one could not measure
+          # anything anyway (it needed a root token bootstrap revokes), so #483
+          # retired it rather than reconciling it.
+          #
+          # SCOPED to the classes whose age something can actually bring back down:
+          #   automated  — a rotator resets it on a cadence (linodeCredRotator,
+          #                ~80d; rotate-incluster-pat, monthly). A breach here
+          #                means the ROTATOR is broken.
+          #   on-demand  — a rotation path exists but an OPERATOR triggers it
+          #                (rotate-db-admin; the opt-in cloud-firewall token is
+          #                re-seeded by hand). A breach means nobody ran it.
+          # Both are actionable, which is the test for whether an alert should
+          # fire at all; the remedy differs, so the description branches on class.
+          #
+          # generate-once / tracks-source / static publish a real age too, but
+          # nothing will ever reset them; alerting on those would fire on day 91
+          # and stay firing forever. Their (much weaker) statement is
+          # LLZCredentialNeverRotated below.
+          #
+          # `by (cred, class)` — class must survive the aggregation or the
+          # description below cannot tell an operator which remedy applies.
+          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"automated|on-demand"}) > 90
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} rotation is overdue'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+            description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d). {{ if eq $labels.class "on-demand" }}Rotation is operator-triggered — no schedule will clear this. {{ if match "^db-admin-" $labels.cred }}Dispatch secret-rotation.yml with scope=db-admin; it resets the password IN PLACE with no overlap window, so consumers break until ESO re-syncs — read the runbook first.{{ else }}Re-seed it with `llz openbao set` (see the runbook for this credential''s scope).{{ end }}{{ else }}A rotator owns this path, so it is LATE rather than un-run: check the llz-reconciler linode-creds lane and the secret-rotation.yml schedule.{{ end }}'
+        - alert: LLZCredentialNeverRotated
+          # The honest half of the coverage the class label buys. These credentials
+          # (grafana/admin, otel/ingress — generate-once; harbor/admin — mirrors
+          # Harbor; the Harbor robots, both GitHub-PAT copies, the Slack webhook and
+          # the Managed Postgres admin creds — static) have NO rotation automation at
+          # all, so this is not "a rotator is late", it is "a year has passed and this
+          # password is the one that was generated at bootstrap". INFO, not warning:
+          # there is no runbook step that clears it short of building rotation or
+          # re-seeding by hand, and it must not sit in the same bucket as an
+          # actionable page. 365d, not 90d, for the same reason — a yearly nudge, not
+          # a standing red.
+          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"generate-once|tracks-source|static"}) > 365
+          for: 24h
+          labels:
+            severity: info
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} has never been rotated'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+            description: '{{ $labels.cred }} (class {{ $labels.class }}) is {{ $value }} days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.'
+        - alert: LLZCredentialSecretProbeUnavailable
+          # The funnel that feeds both rules below, watched at its source.
+          #
+          # The write-time probe reads GitHub Actions secret METADATA — the only
+          # age signal that exists for credentials with no expiry and no OpenBao
+          # home (ADR 0009). It needs a token and a repo, and the job that runs it
+          # supplied only the token, so newSecretAgeWriter errored on every run
+          # since the mechanism shipped: no entries in the inventory, therefore no
+          # series, therefore nothing for any rule to fire on. The failure was a
+          # ::warning:: in a scheduled job nobody reads.
+          #
+          # This is deliberately NOT expressed as "the series are missing".
+          # Absence cannot distinguish a broken probe from a deployment that
+          # genuinely holds none of these credentials, and guessing wrong in
+          # either direction is worse than asking the writer, which knows.
+          expr: max(llz_credential_secret_probe_ok{namespace="llz-reconciler"}) == 0
+          for: 6h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: the credential write-time probe cannot run
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0009-unmeasurable-credential-coverage.md"
+            description: 'llz ci token-inventory could not build its GitHub secrets-metadata client, so no write-time credential age was measured this run. Every credential with no expiry — the state-backend key pair, the state-encryption passphrase, the OpenBao seal key and recovery quorum, the Harbor robot copies — is unmeasured while this fires. Check that the credential-single-pane job exports GH_REPO and a token with Secrets access.'
+        - alert: LLZCredentialUnconfigured
+          # The two rules above are both ABOUT AGE, and age only exists for a
+          # credential that exists. A credential that was never configured has no
+          # age, published no series at all, and therefore could not fire either of
+          # them — an alert over an absent series never evaluates. That is the same
+          # failure mode the `static` class was introduced to fix, one level up:
+          # invisible rather than visibly wrong.
+          #
+          # ADR 0009 believed this was already closed ("the API distinguishes them,
+          # so no companion absence alert is needed"). The distinction was real and
+          # was carried in the inventory JSON — it was dropped by the reconciler
+          # before any series was published. llz_credential_configured is that
+          # distinction, published.
+          #
+          # WARNING, not info: every credential with expect=present here is one the
+          # instance cannot do without. A missing OPENBAO_RECOVERY_KEY_* means
+          # break-glass is impossible and you find out on the day you need it; a
+          # missing TF_STATE_ENCRYPTION_PASSPHRASE means state is being written by
+          # something this instance cannot configure.
+          # Joined on `cred` against the verdict series rather than filtered by an
+          # `expect` label. The label would have been a CLASSIFICATION on an
+          # upsert-only registry with no delete, so reclassifying a credential
+          # (HARBOR_* moved present -> optional in this same branch) would leave
+          # the old label set behind, served at its last value, firing forever.
+          # presence_ok carries the judgement under an immutable label set; the
+          # `and configured == 0` half is what separates "missing" from "parked".
+          expr: |
+            max by (cred) (llz_credential_presence_ok{namespace="llz-reconciler"}) == 0
+            and on(cred) max by (cred) (llz_credential_configured{namespace="llz-reconciler"}) == 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} is not configured'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md"
+            description: '{{ $labels.cred }} is expected as a GitHub Actions secret on this deployment and the secrets API reports it absent. It has no age because it has no value — nothing else in this ruleset can fire for it. Seed it (docs/secrets.md), or drop it from ghSecretTargets if this instance genuinely does not use it.'
+        - alert: LLZCredentialRootTokenParked
+          # The same series read the other way. A root token is EPHEMERAL by design:
+          # bootstrap mints one, uses it, and revokes it, leaving the 3-of-5 recovery
+          # quorum as what survives (ci_bao_breakglass.go). So OPENBAO_ROOT_TOKEN
+          # present in steady state means a break-glass generate/rotate happened and
+          # the revoke half never did — a live, unexpiring, full-admin OpenBao
+          # credential parked in an Actions secret, readable by every workflow that
+          # names it.
+          #
+          # This is why `expect` is a LABEL and not a filter: presence is good for
+          # eight of the nine measured credentials and bad for this one, and a rule
+          # set that could only say "configured is good" had no way to express it.
+          # The same pair read the other way: presence does not match what is
+          # expected AND the credential IS set. See the note on the rule above for
+          # why this is a join and not an `expect="absent"` matcher.
+          expr: |
+            max by (cred) (llz_credential_presence_ok{namespace="llz-reconciler"}) == 0
+            and on(cred) max by (cred) (llz_credential_configured{namespace="llz-reconciler"}) == 1
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'an OpenBao root token is parked in {{ $labels.cred }}'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: '{{ $labels.cred }} is set. A root token is ephemeral by design — bootstrap revokes it and the recovery quorum is what survives — so this is a full-admin credential left behind by a break-glass that never ran its revoke. Dispatch llz-breakglass-openbao.yml with action=revoke; it revokes the token AND deletes the secret.'
+        - alert: LLZReconcilerNoLeader
+          # The llz_reconcile_leader gauge is published only when a driving
+          # reconciler is enabled (leader election is running). If it exists and no
+          # replica holds the lease, the driving reconcilers are all no-op'ing.
+          # max() of an absent series is no data, so this stays silent when leader
+          # election is off.
+          expr: max(llz_reconcile_leader{namespace="llz-reconciler"}) == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler has no leader
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: A driving reconciler is enabled but no replica holds the lease; nothing is being driven.
+        - alert: LLZAplOverlayObjSourceEmpty
+          # The obj.yaml overlay source EXISTS on the source branch but merges to
+          # an empty document, so the reconciler refuses to write it — writing it
+          # would blank apl-core's AplObjectStorage CR and take loki + harbor
+          # object storage with it. Refusing is right; staying quiet about it is
+          # not, because the committed overlay is wrong until someone re-renders.
+          #
+          # `== 1` rather than `> 0` and no absent() wrapper: the reconciler
+          # publishes this gauge on EVERY pass, 0 included, so an absent series
+          # means the lane is not running — which LLZReconcilerNoLeader and the
+          # target-down rules already own.
+          expr: max by (branch) (llz_apl_overlay_obj_source_empty{namespace="llz-reconciler"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the apl-overlay obj source for {{ $labels.branch }} is empty'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/apl-values-propagation.md"
+            description: 'apl-values/<env>/apl-overlay/obj.yaml merges to an empty document, so the reconciler is refusing to write it onto {{ $labels.branch }} rather than blanking apl-core AplObjectStorage CR. Object storage settings are frozen at whatever apl-core last had. Re-run `llz render` and commit the result.'
+        - alert: LLZAplOverlayNoSource
+          # A pass that finds NO overlay source is silent by construction: no
+          # error, no files, and llz_apl_overlay_synced is never published because
+          # it has no 0 arm. That is correct for an instance with nothing to
+          # overlay and indistinguishable from a misspelled env or source branch,
+          # or a token GitHub 404s on a private repo. This is the series that
+          # tells them apart.
+          #
+          # Deliberately long: an instance genuinely without an overlay is a real
+          # state, so this fires on a lane that has been reading an empty tree for
+          # an hour rather than on the first pass after a bootstrap.
+          expr: max by (branch, env) (llz_apl_overlay_source_present{namespace="llz-reconciler"}) == 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the apl-overlay lane finds no source for {{ $labels.env }} on {{ $labels.branch }}'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/apl-values-propagation.md"
+            description: 'The reconciler has found no apl-overlay source on {{ $labels.branch }} for an hour, so it is writing nothing and reporting no error. Either this instance has no overlay to apply, or the lane is reading the wrong branch/env — check the reconciler Deployment env against apl-values/{{ $labels.env }}/apl-overlay/ on {{ $labels.branch }}.'
+        - alert: LLZReconcilerWatchDown
+          # A reconciler's watch stream is how it reacts in seconds instead of on
+          # the 300s resync. A permanently broken one — an RBAC denial, a CRD that
+          # went away, an aggregated apiserver refusing the stream — is SILENT:
+          # every lane still reports healthy on its resync, so llz_reconcile_up
+          # stays 1 and nothing else notices that the event path is dead.
+          #
+          # The gauge is published at loop start, before the first stream, so this
+          # series exists from pod start. Written only after a stream CLOSED, a
+          # healthy long-lived watch published nothing at all and this alert could
+          # not fire on the metric being absent, which is exactly the shape a
+          # wedged watch leaves behind.
+          #
+          # 15m: the watch backoff caps well inside that, so a stream that is
+          # merely being re-established rides through.
+          expr: max by (reconciler) (llz_watch_connected{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'the {{ $labels.reconciler }} reconciler watch stream is down'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'The {{ $labels.reconciler }} watch stream has been failing for 15m, so this lane only reacts on its 300s resync and reacts to nothing in between. The reconciler pod log names the failure (it logs the first one and then on powers of two); llz_watch_errors_total gives the rate. An RBAC denial on the watched kind and an apiserver ERROR frame (410 Gone, aggregation failure) both land here.'
+        - alert: LLZESRecoveryFanOutStuck
+          # The es-store-recovery lane withholds its Ready transition when the
+          # force-sync fan-out fails, so the next pass retries it. That is right
+          # for a transient failure and catastrophic for a stable one: the lane
+          # runs on a 300s resync AND on every ClusterSecretStore watch event, and
+          # each retry MergePatches a fresh force-sync stamp onto every
+          # ExternalSecret in the cluster, each of which makes ESO refetch from
+          # OpenBao. The code bounds the retries and then consumes the transition,
+          # which stops the write storm but leaves the underlying error unfixed —
+          # and leaves whatever the fan-out could not patch on ESO's own ~16m
+          # backoff with nothing driving it.
+          expr: max(rate(llz_reconcile_errors_total{namespace="llz-reconciler",reconciler="es-store-recovery"}[15m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: the es-store-recovery force-sync fan-out keeps failing
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'es-store-recovery has been erroring for 30m. Its job is to force-sync every ExternalSecret when the openbao ClusterSecretStore recovers, and llz_es_recovery_nudges_total is the evidence that authorised removing the CI-side force-sync — if that counter is flat while this fires, nothing is driving ESO after a store recovery. The pod log names the first failing object.'

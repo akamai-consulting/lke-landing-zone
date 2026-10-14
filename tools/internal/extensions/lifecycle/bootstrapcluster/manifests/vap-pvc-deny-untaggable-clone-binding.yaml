@@ -1,0 +1,12 @@
+# Binding for the pvc-deny-untaggable-clone ValidatingAdmissionPolicy (a VAP
+# enforces nothing until a binding selects where and how). Cluster-wide, no
+# namespace selector: the platform ships zero clone/snapshot PVCs (verified — no
+# dataSource/VolumeSnapshot anywhere in charts or apl-values), so there is no
+# legitimate traffic to exempt, and system namespaces don't create PVCs.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pvc-deny-untaggable-clone
+spec:
+  policyName: pvc-deny-untaggable-clone
+  validationActions: [Deny]

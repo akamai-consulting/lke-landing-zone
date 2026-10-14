@@ -1,0 +1,102 @@
+# Platform alert rules for OpenBao. Deployed as a PrometheusRule CR; apl-core's
+# kube-prometheus-stack picks it up via its ruleSelector. Namespace selectors
+# target the llz-openbao namespace the llz-openbao-platform chart deploys into.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: openbao-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system} (NOT permissive/empty — confirmed live on apl-core v6).
+    # Without it this PrometheusRule is never loaded and its alerts never fire.
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: openbao-alerts
+      interval: 30s
+      rules:
+        - alert: OpenBaoMetricsTargetDown
+          expr: up{namespace="llz-openbao", service=~".*openbao.*"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao metrics target is down
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: Prometheus cannot scrape one or more OpenBao pods.
+        - alert: OpenBaoSealed
+          expr: vault_core_unsealed{namespace="llz-openbao"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao pod is sealed
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: An OpenBao pod is sealed and cannot serve secret requests until unsealed.
+        - alert: OpenBaoNoActiveLeader
+          expr: sum(vault_core_active{namespace="llz-openbao"}) < 1
+          for: 2m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao has no active leader
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: No OpenBao pod is reporting active leadership.
+        # Raft quorum: the HA cluster runs 3 peers (llz-openbao-platform
+        # server.ha.replicas), tolerating one loss. Fewer than 3 UNSEALED pods means
+        # the quorum has lost redundancy — one more loss forfeits write availability.
+        # vault_core_unsealed is the per-pod metric OpenBaoSealed already reads (1 =
+        # unsealed); counting it catches a down OR sealed peer as a quorum signal.
+        - alert: OpenBaoRaftQuorumDegraded
+          expr: count(vault_core_unsealed{namespace="llz-openbao"} == 1) < 3
+          for: 5m
+          labels:
+            severity: warning
+            service: openbao
+          annotations:
+            summary: OpenBao Raft quorum is degraded
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: 'Fewer than 3 OpenBao pods are unsealed and reachable — the 3-node Raft quorum has lost redundancy. One more peer loss forfeits write availability.'
+        # ── Saturation / audit-plane (the error-rate + saturation layer) ──────────
+        # These read OpenBao's own `vault_*` telemetry (OpenBao keeps the upstream
+        # Vault metric namespace). Like every vault_* alert here, they depend on the
+        # :8200 metrics scrape, which llz-openbao-platform allows via a pod-scoped
+        # `allowedClientPods` grant for apl-core's Prometheus (since chart 0.1.18).
+        # Without that grant the `monitoring`-namespace Prometheus is L4-blocked,
+        # vault_* is absent, and these read DEAD? in `alert-eval` — never-firing
+        # rather than loudly broken. vault_expire_num_leases / vault_audit_* are the
+        # canonical Vault names; confirm with `llz ci prom-metrics --match '^vault_'`.
+        - alert: OpenBaoLeaseExhaustion
+          # Saturation: the number of unexpired leases the expiration manager tracks.
+          # Unbounded lease growth (a client not renewing/revoking, or a too-long TTL)
+          # bloats OpenBao memory + the expiration queue until it degrades. The
+          # threshold is a fleet default — tune per real steady-state lease counts.
+          expr: sum(vault_expire_num_leases{namespace="llz-openbao"}) > 100000
+          for: 30m
+          labels:
+            severity: warning
+            service: openbao
+          annotations:
+            summary: OpenBao active-lease count is very high
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: 'OpenBao is tracking {{ $value | humanize }} unexpired leases for 30m — a client is likely not revoking/renewing, or a mount TTL is too long; the expiration manager and memory grow until they degrade.'
+        - alert: OpenBaoAuditLogFailure
+          # Audit-device health. OpenBao BLOCKS every request if all audit devices
+          # fail to log (audit is not best-effort) — so a rising failure count is a
+          # precursor to a full outage, not a cosmetic logging issue.
+          expr: sum(rate(vault_audit_log_request_failure{namespace="llz-openbao"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao audit log device is failing
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: 'OpenBao audit-log writes are failing for 5m — if all audit devices fail, OpenBao SEALS itself to requests (audit is mandatory). Investigate the audit sink (the promtail sidecar / file device) immediately.'

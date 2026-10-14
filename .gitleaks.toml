@@ -38,3 +38,73 @@ id           = "shell-token-placeholder-region-env"
 description  = "Bash placeholder <token> followed by REGION env var assignment"
 regexTarget  = "match"
 regexes      = ['''token>\s+REGION=''']
+
+# False-positive: the linode object-key CI command (ci_temp_objkey.go) writes the
+# minted key to GITHUB_ENV via `"TEMP_OBJKEY_SECRET="+secret`. Gitleaks'
+# generic-api-key heuristic captures that Go string LITERAL — the env-var NAME
+# concatenated with the runtime value — as if it were a hardcoded credential. The
+# value only ever lives in the `secret`/`access` variables at runtime, never in
+# source. Match just the exact var-name literal so a real secret can't hide here.
+[[allowlists]]
+id           = "temp-objkey-env-var-name-literals"
+description  = "GITHUB_ENV var-name literals in ci_temp_objkey.go (names, not secrets)"
+regexTarget  = "match"
+regexes      = ['''TEMP_OBJKEY_(ACCESS|SECRET)=''']
+
+# False-positive: generic-api-key matches the `keyRotationDays: DEPRECATED/ignored`
+# note in the landing-zone spec doc (the `key…` word plus following prose). It is
+# documentation in a spec example, not a credential. Narrow to that exact phrase.
+[[allowlists]]
+id           = "spec-keyrotationdays-doc-note"
+description  = "keyRotationDays deprecation note in docs/landing-zone-spec.md"
+regexTarget  = "match"
+regexes      = ['''keyRotationDays:\s+DEPRECATED''']
+
+# False-positive: `openbaoKey:` in a managed-apps app manifest names an OpenBao
+# path (an ESO remoteRef), NOT a secret value — the credential itself is fetched
+# at runtime and never committed. gitleaks' generic-api-key heuristic sees
+# `…Key: <value>` and guesses. Match only the exact `openbaoKey: <path>` shape
+# (regexTarget=match, NOT path-scoped) so a real secret on any other line/file is
+# still caught — a `paths` glob would OR-allowlist the whole file and hide them.
+# (Kept in sync with instance-template/.gitleaks.toml.)
+[[allowlists]]
+id           = "managed-apps-openbao-key-ref"
+description  = "openbaoKey is a vault path reference, not a secret"
+regexTarget  = "match"
+regexes      = ['''openbaoKey:\s*\S+''']
+
+# SealedSecret `encryptedData` is ciphertext — sealed to the cluster's public key
+# precisely so it CAN be committed — but gitleaks' generic-api-key heuristic sees
+# `password: <long opaque string>`. Scoped to the ciphertext itself, not a path:
+# kubeseal's envelope is base64 starting with `Ag`, and a 200+ char run of it is
+# not a shape a real credential takes; a `paths` glob would OR-allowlist whole
+# files and hide a genuine leak pasted alongside.
+# (Kept in sync with instance-template/.gitleaks.toml, where it is load-bearing:
+# the instance pre-commit hook scans all history on all refs, so an apl-values
+# branch full of sealed secrets blocks every commit in the repo.)
+[[allowlists]]
+id           = "sealed-secret-ciphertext"
+description  = "SealedSecret encryptedData is asymmetrically encrypted by design"
+regexTarget  = "secret"
+regexes      = ['''^Ag[A-Za-z0-9+/]{200,}={0,2}$''']
+
+# False-positive: the OpenBao init DISCLOSURE test's fixture key material. That
+# test writes a job summary containing five base64 RSA-OAEP ciphertexts built
+# with a fresh ephemeral key every run — ~1700 characters of random base64 — and
+# then substring-searches it for each fixture to prove nothing leaked. The
+# fixtures are therefore full share length ON PURPOSE: the previous three-char
+# ones ("uk1".."uk5") collided with that random base64 often enough to redden CI
+# at random, on PRs touching nothing in the package. Full length is what makes
+# the test deterministic, and it is also what makes gitleaks' generic-api-key
+# heuristic fire on `fxRootToken = "…"`.
+#
+# The values decode to `llz-test-root-token-not-real` and
+# `llz-test-recovery-share-N-not-real`. Scoped to the `fx…` identifiers, not to
+# the file: a `paths` glob would OR-allowlist the whole test and hide a real
+# credential pasted beside them. Do NOT "fix" a future hit here by shortening a
+# fixture — that trades a secret-scan finding for the flake.
+[[allowlists]]
+id           = "openbao-init-test-fixtures"
+description  = "fx* fixtures in ci_openbao_init_test.go are literal non-secrets, full-length to keep the disclosure test deterministic"
+regexTarget  = "match"
+regexes      = ['''fx(RootToken|Share\d)\s*=\s*"''']

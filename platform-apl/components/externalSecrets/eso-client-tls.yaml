@@ -1,0 +1,47 @@
+# ESO's CLIENT identity for mTLS to OpenBao.
+#
+# THIS IS THE HIGHEST-CONSEQUENCE CERTIFICATE IN THE TREE. ESO resolves every
+# ExternalSecret and PushSecret in the cluster through the `openbao` /
+# `openbao-push` ClusterSecretStores. If this Secret is absent or expired when
+# the listener starts requiring client certs, both stores go
+# Ready=False/InvalidProviderConfig, every ExternalSecret stalls, and the
+# convergence cascade in docs/lessons-learned.md follows.
+#
+# It is therefore the FIRST thing to land in the rollout and the last thing to
+# touch afterwards — see the staged sequence in docs/adr/0010-in-cluster-mtls.md.
+#
+# Lives in `external-secrets`: apl-core 6.x runs ESO as a core app there, and a
+# ClusterSecretStore's tls.certSecretRef/keySecretRef resolve against the
+# controller's own namespace.
+#
+# RENEWAL: ESO re-reads the Secret on its refreshInterval (60s on both stores),
+# so a cert-manager renewal is picked up without restarting the controller. The
+# 90d/30d duration/renewBefore pair leaves a 30-day window in which a renewal
+# failure is visible via the cert-manager expiry metrics the credential-inventory
+# dashboard already scrapes, long before anything breaks.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: eso-openbao-client-tls
+  namespace: external-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: eso-openbao-client-tls
+  commonName: external-secrets
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["external-secrets"]
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer

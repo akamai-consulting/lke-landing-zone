@@ -1,0 +1,21 @@
+# spec.components.observability → this kustomize Component. An env's overlay lists it under
+# components: when the component is enabled. Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - obj-secrets-externalsecret.yaml
+  - otel-bootstrap-ca.yaml
+  # llz-client-ca anchor for the OTLP receiver's client_ca_file (wave -5).
+  - otel-client-ca.yaml
+  - otel-collector.yaml
+  - otel-collector-servicemonitor.yaml
+  - llz-day2-dashboard.yaml
+  # Credential single-pane-of-glass: scrape cert-manager expiry, re-expose CI-token
+  # expiry (via the reconciler + token-inventory ConfigMap), alert before either
+  # expires, plus a unified Grafana dashboard.
+  - cert-manager-servicemonitor.yaml
+  - cert-manager-allow-metrics.yaml
+  - credential-inventory-dashboard.yaml
+  - prometheus-rules/openbao-alerts.yaml
+  - prometheus-rules/support-plane-alerts.yaml
+  - prometheus-rules/credential-alerts.yaml

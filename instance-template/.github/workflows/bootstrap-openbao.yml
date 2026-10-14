@@ -1,13 +1,12 @@
 name: Bootstrap OpenBao
 
-# Thin caller for the reusable LLZ workflow — the full body (init, unseal,
-# configure, secondary-CA reprovision, secret seeding), the fetch-kubeconfig
-# action, and the llz CLI all live in the template and are sourced
-# there (see docs/templatization-plan.md §"Keeping instances in sync"). The
-# reusable workflow checks THIS instance back out (its terraform-iac-bootstrap
-# TF state), so the instance copies only this stub.
-# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# Thin caller for the LOCAL reusable llz-bootstrap-openbao.yml — the full body
+# (init, unseal, configure, secondary-CA reprovision, secret seeding) and the
+# composite actions it calls are copier-delivered into THIS repo (vendored,
+# ADR 0003); the llz CLI is baked into vars.TF_IMAGE. The reusable checks this
+# instance back out (its terraform-iac-bootstrap TF state).
+# ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
+# `llz upgrade` re-renders the vendored body with each template release.
 #
 # Operators dispatch this directly. The terraform.yml pipeline reaches OpenBao
 # bootstrap through llz-terraform's own bootstrap-openbao job (which calls
@@ -17,10 +16,18 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: 'Deployment (primary | secondary | staging | lab)'
+        # NOTE: input name kept as `region` for backwards compatibility with
+        # existing state-key paths and GitHub Environment names (infra-<deployment>).
+        # The value is really a *deployment*.
+        #
+        # Free-form string, NOT a fixed `choice` list — mirrors terraform.yml.
+        # Deployments are created dynamically by `llz env add` (there is no
+        # hardcoded env list), so a choice input would reject any env an adopter
+        # adds (e.g. `e2e`, `myteam-dev`). Must match a deployment you scaffolded
+        # (^[a-z][a-z0-9-]{1,30}$) with a tfvars set + infra-<deployment> Environment.
+        description: 'Deployment name — NOT a Linode region (this field is named `region` for state-key compatibility). e.g. primary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
         required: true
-        type: choice
-        options: [primary, secondary, staging, lab]
+        type: string
       reprovision_ca_only:
         description: 'Re-provision secondary CA in primary cluster only (skips full bootstrap)'
         required: false
@@ -36,26 +43,47 @@ on:
         required: false
         type: boolean
         default: false
+      openbao_escrow_pubkey_b64:
+        description: >
+          OPTIONAL, first bootstrap only. base64 of your RSA public-key PEM
+          (>= 2048-bit). Set it and the 5 recovery shares come back encrypted to
+          you — ciphertext in the job summary and in the openbao-recovery-keys
+          artifact — which is the only way to get an OFFLINE escrow copy. Leave
+          it empty and no key material is emitted at all; all 5 shares are held
+          as infra-<deployment> environment secrets, so break-glass still works
+          but you have no copy outside GitHub. Generate a key with:
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096
+          -out escrow-priv.pem && openssl rsa -pubout -in escrow-priv.pem
+          -out escrow-pub.pem && base64 < escrow-pub.pem | tr -d '\n'
+          — then keep escrow-priv.pem offline.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
-# Same group as bootstrap-dns so a DNS seed cannot race a concurrent
-# re-bootstrap that's touching the same KV mount or the same root token.
-concurrency:
-  group: openbao-bootstrap-${{ inputs.region }}
-  cancel-in-progress: false
+# NO workflow-level `concurrency` here, on purpose. Serialization of re-bootstraps
+# (so two runs can't race the same KV mount / root token) is owned by the reusable
+# llz-bootstrap-openbao.yml, whose own `concurrency: openbao-bootstrap-<region>`
+# gates EVERY invocation — this stub and terraform.yml's bootstrap-openbao job alike.
+# Repeating that SAME group on this top-level caller DEADLOCKS: GitHub cancels the
+# run at startup with "a deadlock was detected for concurrency group
+# 'openbao-bootstrap-<region>' between a top level workflow and 'call'" (the parent
+# holds the group its own `call` job then needs). A caller must never share a
+# concurrency group with the reusable it calls.
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-bootstrap-openbao.yml@<@ llz_version @>
+    # Calls the LOCAL reusable ./.github/workflows/llz-bootstrap-openbao.yml (copier-delivered
+    # into this repo) so `secrets: inherit` is same-repo and actually resolves
+    # (#201). No fork needed for secrets; upstream_org/llz_version only source the
+    # composite actions + image.
+    uses: ./.github/workflows/llz-bootstrap-openbao.yml
     with:
       region:                   ${{ inputs.region }}
       reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
       preserve_root_on_failure: ${{ inputs.preserve_root_on_failure || false }}
+      openbao_escrow_pubkey_b64: ${{ inputs.openbao_escrow_pubkey_b64 }}
       instance_repo:            <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref:             <@ llz_version @>
     secrets: inherit

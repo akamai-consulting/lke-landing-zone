@@ -1,0 +1,9 @@
+# Native admission defense-in-depth for the platform tree. Currently the
+# llz-wave-health-guard ValidatingAdmissionPolicy — the admission-time twin of
+# `llz ci wave-health-guard`, closing the apl-operator out-of-band writeback path
+# (docs/designs/blast-radius-decomposition.md). Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - wave-health-policy.yaml
+  - wave-health-policy-binding.yaml

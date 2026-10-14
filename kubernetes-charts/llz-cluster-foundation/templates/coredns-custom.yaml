@@ -13,6 +13,17 @@
 #   keycloak.{{ .Values.coreDNS.custom.matchSuffix }}`, oauth2-proxy's `wait-for-keycloak` init container
 #   busy-loops forever, otomi-api fails its OIDC handshake.
 #
+#   apl-core 6.x note: STILL REQUIRED. The rewrite serves sidecar-less/init-container
+#   resolution of apl-core's <svc>.{{ .Values.coreDNS.custom.matchSuffix }} ServiceEntry hosts (with
+#   domainSuffix = <env>.{{ .Values.coreDNS.custom.matchSuffix }}, the suffix wildcard catches them all).
+#   keycloak.{{ .Values.coreDNS.custom.matchSuffix }} MUST keep resolving: the oauth2-proxy
+#   `wait-for-keycloak` init container is sidecar-less by definition and polls
+#   https://keycloak.<domainSuffix>/realms/otomi at boot (v6 added an in-cluster
+#   backchannel KEYCLOAK_ADDRESS_INTERNAL for the keycloak OPERATOR, but not for
+#   that init container). Narrowing this suffix-wildcard to an explicit per-host
+#   allowlist — dropping hosts no sidecar-less/init consumer resolves — is a
+#   lab-gated candidate; see docs/designs/apl-core-v6-migration.md.
+#
 # How the fix works:
 #   LKE's `workload-coredns` Corefile already includes `import custom/*.include`
 #   INSIDE its `.:53 { ... }` block (the `coredns-custom` ConfigMap is mounted

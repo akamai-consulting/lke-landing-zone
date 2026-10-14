@@ -66,9 +66,40 @@ syncWaves:
 # apl-core's later create-or-replace merges cleanly.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Reused PSS label block. The version pin must match the cluster's Kubernetes
-# minor; bump in lockstep with the LKE-E version (current default: v1.33.6+lke7).
-podSecurityStandardsVersion: "v1.33"
+# Reused PSS label block — the value of `pod-security.kubernetes.io/{enforce,warn,
+# audit}-version` on the two namespaces this chart marks `restricted`
+# (llz-openbao, llz-observability).
+#
+# `latest`, AND IT CANNOT BE A MINOR. This used to say "the version pin must match
+# the cluster's Kubernetes minor; bump in lockstep with the LKE-E version", and sat
+# at v1.33 while the scaffold default moved to a v1.34 build — a whole minor behind,
+# unnoticed, because nothing bumps it and nothing compares it to anything.
+#
+# THE STALENESS IS THE SYMPTOM. THIS CHART IS PUBLISHED ONCE AND INSTALLED ON EVERY
+# INSTANCE'S CLUSTER, and those clusters run different LKE-E minors — availability
+# is per-ACCOUNT and rotates within hours (see internal/shared/linode/lke_versions.go).
+# So "matches the cluster's Kubernetes minor" is not a property one baked literal
+# can have. Whatever minor it names is wrong for somebody, and it is silently wrong:
+# a pinned version does not fail, it just enforces an OLDER ruleset than the
+# apiserver ships. Pod Security Standards revisions are cumulative, so a lagging pin
+# is strictly weaker than the `restricted` this chart advertises — a weakened posture
+# that reads, in the labels, exactly like an enforced one.
+#
+# `latest` is the upstream DEFAULT (an absent -version label means latest) and is
+# the only value that is correct on every cluster this chart lands on, because it is
+# resolved by the apiserver that will do the enforcing rather than by us months
+# earlier.
+#
+# WHAT WE GIVE UP, STATED PLAINLY: a pin protects against an apiserver upgrade
+# tightening `restricted` and rejecting a pod that used to be admitted. That risk is
+# real and it is small here — the profile applies to two namespaces we own
+# (OpenBao and our observability stack), both already restricted-compliant — and its
+# failure mode is LOUD: an admission rejection naming the rule, at upgrade time. The
+# failure mode of the stale pin is silence, which is the one this repo trades away
+# last. TestNoPodSecurityLabelPinsAKubernetesMinor keeps the literal from coming
+# back — here and in every other chart and delivered manifest that emits one of
+# these labels.
+podSecurityStandardsVersion: "latest"
 
 namespaces:
   # openbao — our HA Raft cluster. Full restricted PSS.
@@ -102,20 +133,21 @@ namespaces:
     restricted: true
     labels:
       monitoring: enabled
-  # argo-workflows / argo-events / external-secrets — their install Apps (wave
-  # -15) set CreateNamespace=true, but Argo treats -15 "complete" when the
-  # Application resource is created, NOT when its Helm chart finishes. The NPs in
-  # those trees (wave -10) would race the eventual namespace creation. Pre-create
-  # at -20 to kill the race; the install Apps' later Helm create is a no-op merge.
+  # argo-workflows / argo-events — their install Apps (wave -15) set
+  # CreateNamespace=true, but Argo treats -15 "complete" when the Application
+  # resource is created, NOT when its Helm chart finishes. The NPs in those trees
+  # (wave -10) would race the eventual namespace creation. Pre-create at -20 to
+  # kill the race; the install Apps' later Helm create is a no-op merge.
+  #
+  # NOTE (apl-core 6.x): the former `llz-external-secrets` namespace was removed.
+  # ESO is now a core app shipped by apl-core in the `external-secrets` namespace,
+  # so the landing zone no longer runs its own controller. The gap-fill NPs for
+  # that apl-managed namespace ship from the externalSecrets component instead.
   - name: llz-argo-workflows
     restricted: false
     labels:
       monitoring: enabled
   - name: llz-argo-events
-    restricted: false
-    labels:
-      monitoring: enabled
-  - name: llz-external-secrets
     restricted: false
     labels:
       monitoring: enabled
@@ -130,11 +162,11 @@ namespaces:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NetworkPolicy knobs. apl-core's helmfile creates cert-manager/harbor/
-# istio-system/observability but ships NO NetworkPolicies into them (its 5.0.0
-# values schema has no per-app NP knob), so on a default-permit cluster every
-# workload runs unrestricted. We drop additive default-deny + minimum-viable
-# allows here. openbao NPs come from its OWN Application tree and is NOT
-# covered here.
+# istio-system/observability but ships NO NetworkPolicies into them (through 6.x
+# its apl-network-policies chart only covers gitea/git-server/otomi-api), so on a
+# default-permit cluster every workload runs unrestricted. We drop additive
+# default-deny + minimum-viable allows here. openbao NPs come from its OWN
+# Application tree and is NOT covered here.
 # ─────────────────────────────────────────────────────────────────────────────
 networkPolicies:
   # Master toggle for the whole foundation NP set.
@@ -215,10 +247,34 @@ networkPolicies:
       - port: 9187   # CNPG Prometheus metrics
         protocol: TCP
 
+  # apl-core's Prometheus (monitoring ns) scrapes Harbor's :8001 metrics endpoints
+  # (harbor-exporter + core/registry/jobservice) once metrics are enabled — see
+  # apl-values/values.yaml harbor._rawValues.metrics (issue #183). harbor-default-deny
+  # blocks it otherwise. Scoped to harbor app pods (app: harbor, which covers the
+  # exporter + every component). Mesh is PERMISSIVE, so no PeerAuthentication needed.
+  harborMetrics:
+    podLabel:
+      app: harbor
+    scrapeNamespace: monitoring
+    ports:
+      - port: 8001   # Harbor Prometheus metrics (exporter + core/registry/jobservice)
+        protocol: TCP
+
   # The grafana namespace is allowed ingress into observability (Grafana → OTel
   # Collector / dashboards). Kept as a value since apl-core's Grafana namespace
   # name is a platform assumption.
   grafanaNamespace: grafana
+
+  # apl-core's Prometheus (monitoring ns) scrapes the OTel Collector's monitoring
+  # port :8888 (otelcol_* internal telemetry) via the otel-collector-monitoring
+  # ServiceMonitor. Without this ingress rule the observability-default-deny blocks
+  # the scrape (context-deadline-exceeded) so otelcol_* is absent cluster-wide and
+  # the OTelCollector alerts silently never fire. Mirrors the CNPG metrics allow.
+  otelMetrics:
+    scrapeNamespace: monitoring
+    ports:
+      - port: 8888   # OTel Collector internal telemetry (otelcol_*)
+        protocol: TCP
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CoreDNS *.internal rewrite. apl-core publishes Istio ServiceEntries for
@@ -288,15 +344,10 @@ storageClassPatcher:
   # The LKE default we demote (annotate is-default-class=false). If absent on a
   # single-class cluster the Job no-ops that step.
   demote: linode-block-storage-retain
-  # Durable backstop CronJob. The PostSync Job demotes once per Argo sync and the
-  # Kyverno admission policy demotes on each SC write, but neither self-recovers
-  # once a Flux re-promotion slips past the (failurePolicy: Ignore) webhook and
-  # Flux goes quiet (live==desired → no further admission events). This CronJob
-  # re-runs the idempotent demote on a fixed cadence so the cluster is back to one
-  # default within `schedule` — well inside the `llz ci converge` budget.
-  cron:
-    enabled: true
-    schedule: "*/2 * * * *"
+  # The durable-backstop CronJob (formerly `cron:`) was retired — the sc-demote
+  # reconciler (llz reconcile --reconcile-sc-demote, default-on) now provides the
+  # starvation-proof re-demote on a StorageClass watch + resync floor. The PostSync
+  # Job below (fast initial demote) + the Kyverno admission policy remain.
   resources:
     limits:
       cpu: "200m"

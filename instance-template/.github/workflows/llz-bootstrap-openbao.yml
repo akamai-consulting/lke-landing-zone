@@ -1,0 +1,1091 @@
+name: llz-bootstrap-openbao (reusable)
+
+# Reusable (`workflow_call`) OpenBao bootstrap. VENDORED: copier copies this file
+# verbatim into every instance, so maintainer rationale lives in the TEMPLATE at
+# docs/workflows/llz-bootstrap-openbao.md — read it before changing anything here.
+#
+# Initializes, unseals, and configures OpenBao for one deployment. With
+# bootstrap_cluster=true it also runs the in-cluster bring-up (apl-core, Kyverno,
+# the Argo bridge) and the final convergence gate in the same job.
+#
+# First-init / wait-for-unseal / re-configure are all selected inside
+# `llz ci bao-ensure-ready` — to re-configure, set OPENBAO_ROOT_TOKEN as an
+# infra-<region> secret and delete it again right after the run.
+#
+# CONVERGENCE CONTRACT — docs/architecture/convergence-contract.md. New steps must
+# classify failures into the 3 contract codes (poll / hard-fail / converged), NOT
+# add another BOOTSTRAP_ERRORS soft-fail flag.
+#
+# Secrets/variables are listed in the sidecar. Note only that OPENBAO_SEAL_KEY and
+# OPENBAO_RECOVERY_KEY_1/2/3 are set automatically by the first bootstrap, and that
+# losing OPENBAO_SEAL_KEY loses the data.
+
+on:
+  workflow_call:
+    inputs:
+      region:
+        description: 'Deployment to bootstrap (any scaffolded deployment; its HA role is read from the cluster tfvars).'
+        required: true
+        type: string
+      reprovision_ca_only:
+        description: 'Re-provision a standby deployment''s CA into its active peer only (skips full bootstrap). Run with region = the standby deployment.'
+        required: false
+        type: boolean
+        default: false
+      preserve_root_on_failure:
+        description: 'DEBUG ONLY. Skip the post-bootstrap root-token revoke when bootstrap FAILS, so the operator can iterate. Default false (revoke runs unconditionally).'
+        required: false
+        type: boolean
+        default: false
+      instance_repo:
+        description: "This instance's GitHub repo (<owner>/<name>) for `gh` targeting."
+        required: true
+        type: string
+      assert_loki:
+        description: 'After converge, also assert Loki is bootstrapped + S3-backed (`llz ci assert-loki`) in the bootstrap job. Default false (normal instances); the release-e2e gate sets it true so the check runs inside the converge that already holds cluster access, instead of a separate validate pass dispatching cluster-health.yml.'
+        required: false
+        type: boolean
+        default: false
+      bootstrap_cluster:
+        description: 'Run the in-cluster bootstrap (wait-cluster-ready + `llz ci bootstrap-cluster`: apl-core, Kyverno policies, Argo bridge) at the head of the bootstrap job, before the OpenBao phase. Set by llz-terraform.yml''s chained call so cluster + OpenBao bootstrap share ONE container-init + checkout + cluster-access/ACL cycle (the former standalone bootstrap-cluster job paid its own, ~1.5-2m of pure overhead on the e2e critical path). Default false: a standalone bootstrap-openbao dispatch (retries, re-configuration) assumes the cluster is already bootstrapped.'
+        required: false
+        type: boolean
+        default: false
+      openbao_escrow_pubkey_b64:
+        description: 'OPTIONAL, first bootstrap only. base64 of an RSA public-key PEM (>= 2048-bit). When set, the 5 OpenBao recovery shares are RSA-OAEP/SHA-256-encrypted to it and delivered as ciphertext — inline in the job summary and as the openbao-recovery-keys artifact — so you get an OFFLINE escrow copy that no reader of this run can use. When empty, no key material is emitted at all and all 5 shares are held as infra-<deployment> environment secrets instead, which means break-glass works but you have no offline copy. Generate one with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out escrow-priv.pem && openssl rsa -pubout -in escrow-priv.pem -out escrow-pub.pem && base64 < escrow-pub.pem | tr -d "\n". Keep escrow-priv.pem offline.'
+        required: false
+        type: string
+        default: ''
+      cluster_id:
+        description: 'Numeric LKE cluster id (the `cluster` workspace''s cluster_id output), forwarded by llz-terraform.yml''s chained call. Rendered into the block-storage-retain StorageClass''s lke<id> volumeTag, which is the ownership signal `llz reap`''s cluster-liveness gate keys on. Only read when bootstrap_cluster is true; bootstrap-cluster hard-fails on an empty value, because StorageClass parameters are immutable — a silently-untagged class could never be fixed in place and every Volume it provisioned would be un-reapable.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      # ALL required: false, deliberately — do not "fix" this. `secrets: inherit`
+      # cannot forward environment-scoped secrets, and `required: true` is checked
+      # statically at the call boundary, so it would fail the run before any job
+      # enters `environment: infra-<region>`. Presence is preflighted at runtime by
+      # `llz ci require-secret`. Full reasoning in the sidecar doc.
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        required: false
+      TF_STATE_ENCRYPTION_PASSPHRASE_OLD:
+        description: 'PREVIOUS state-encryption passphrase. Set ONLY during a rotation window (secret-rotation.yml scope=state-passphrase); empty in steady state. Adds an ENCRYPTED fallback so OpenTofu can read state written with the old key and rewrite it with the new one.'
+        required: false
+      TF_STATE_ACCESS_KEY:
+        required: false
+      TF_STATE_SECRET_KEY:
+        required: false
+      LINODE_API_TOKEN:
+        required: false
+      OPENBAO_ROOT_TOKEN:
+        required: false
+      OPENBAO_SECRETS_WRITE_TOKEN:
+        required: false
+      OPENBAO_RECOVERY_KEY_1:
+        required: false
+      OPENBAO_RECOVERY_KEY_2:
+        required: false
+      OPENBAO_RECOVERY_KEY_3:
+        required: false
+      OPENBAO_SEAL_KEY:
+        required: false
+      HARBOR_PASSWORD:
+        required: false
+      HARBOR_PULL_PASSWORD:
+        required: false
+      HARBOR_PULL_ROBOT_NAME:
+        required: false
+      HARBOR_ROBOT_NAME:
+        required: false
+      # Consumed only by the bootstrap_cluster=true phase.
+      APL_VALUES_REPO_TOKEN:
+        required: false
+      LINODE_DNS_TOKEN:
+        required: false
+      GHCR_READ_TOKEN:
+        required: false
+      APPS_REPO_REVISION:
+        required: false
+      # (LOKI_S3_* / HARBOR_REGISTRY_S3_* were RETIRED — see the sidecar doc.)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openbao-bootstrap-${{ inputs.region }}
+  cancel-in-progress: false
+
+env:
+  TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+  REGION:              ${{ inputs.region }}
+  KUBECTL_VERSION:     "1.34.10"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # ── Resolve this deployment's HA role + peer ─────────────────────────────────
+  # role (active|standby|standalone) + peer (the other member of its ha_group),
+  # read from the cluster tfvars. peer is empty for standalone. Consumed by the
+  # standby jobs below across job boundaries; the bootstrap job resolves its own.
+  resolve:
+    name: Resolve HA role
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      role: ${{ steps.r.outputs.role }}
+      peer: ${{ steps.r.outputs.peer }}
+    steps:
+      - name: Checkout the instance (tfvars)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve role + peer
+        id: r
+        # Emits role=/peer= to $GITHUB_OUTPUT (peer empty for standalone).
+        run: llz env resolve "$REGION"
+
+  bootstrap:
+    name: Bootstrap OpenBao (${{ inputs.region }})
+    # No `needs: resolve` on purpose: this job self-resolves HA role/peer in its
+    # first step so it isn't serialized behind that job's container spin.
+    if: inputs.reprovision_ca_only == false
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ inputs.region }}
+    # 45m normally; 90m when bootstrap_cluster adds the apl-core phase at the head.
+    # Raised 70 -> 90 alongside wait-cluster-ready's 900 -> 1500: a cold start can
+    # now legitimately spend 25m waiting for the control-plane ACL before apl-core,
+    # OpenBao and the 20m converge budget even begin.
+    # INVARIANT when editing any step budget below: no SINGLE step may exceed this
+    # timeout, or GitHub kills the job with no verdict — losing the step's error AND
+    # the always()/failure() tail (Argo capture, control-plane ACL revoke). The
+    # budgets are NOT expected to sum to less than this; see the sidecar doc.
+    timeout-minutes: ${{ inputs.bootstrap_cluster && 90 || 45 }}
+    env:
+      # GH_REPO makes gh target the repo directly instead of shelling out to git,
+      # which fails on "dubious ownership" in the container's checkout dir.
+      GH_REPO: ${{ inputs.instance_repo }}
+      # Phase-timeline log, read by `llz ci collect-timing` at the job tail.
+      LLZ_PHASE_LOG: /tmp/llz-phases.jsonl
+      GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+      HARBOR_URL: ${{ vars.HARBOR_URL }}
+      # HA_ROLE / HA_PEER are NOT set here — the "Export HA role" step below writes
+      # them to $GITHUB_ENV, which is why later steps can reference env.HA_ROLE.
+      # S3 backend creds for the convergence gate's cluster-access terraform-init.
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    outputs:
+      ca_available: ${{ steps.secondary_ca.outputs.ca_available }}
+      ca_b64: ${{ steps.secondary_ca.outputs.ca_b64 }}
+      available: ${{ steps.ensure.outputs.available }}
+
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Two steps: the verb emits role=/peer= step outputs; the export promotes them
+      # to job-wide env so later steps can use env.HA_ROLE in their `if:`.
+      - name: Resolve HA role + peer
+        id: ha
+        run: llz env resolve "$REGION"
+      - name: Export HA role for later steps
+        run: |
+          { echo "HA_ROLE=${{ steps.ha.outputs.role }}"; echo "HA_PEER=${{ steps.ha.outputs.peer }}"; } >> "$GITHUB_ENV"
+
+      # ── Cluster-bootstrap phase (bootstrap_cluster=true only) ──────────────────
+      # Merged in from the former standalone `bootstrap-cluster` job to share this
+      # job's container/checkout/cluster-access cycle. These steps use the default
+      # $HOME/.kube/config written by the shared cluster-access step below.
+      - name: Pre-flight — probe credential validity (fail fast on a dead token)
+        if: inputs.bootstrap_cluster
+        env:
+          LINODE_API_TOKEN:            ${{ secrets.LINODE_API_TOKEN }}
+          LINODE_DNS_TOKEN:            ${{ secrets.LINODE_DNS_TOKEN }}
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:               ${{ vars.GHCR_USERNAME }}
+          TF_STATE_ACCESS_KEY:         ${{ secrets.TF_STATE_ACCESS_KEY }}
+          TF_STATE_SECRET_KEY:         ${{ secrets.TF_STATE_SECRET_KEY }}
+          TF_STATE_ENDPOINT:           ${{ vars.TF_STATE_ENDPOINT }}
+          TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
+        run: llz ci validate-tokens
+
+      - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
+        if: inputs.bootstrap_cluster
+        env:
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          # The hint text is operator-facing prose, but instance_repo is an INPUT —
+          # interpolated it would sit inside a double-quoted shell string, one quote
+          # away from being syntax.
+          INSTANCE_REPO:               ${{ inputs.instance_repo }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          set -u
+          FAIL=0
+          llz ci require-secret APL_VALUES_REPO_TOKEN \
+            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/$INSTANCE_REPO.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
+          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions: write + Environments: write + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup. Environments and Secrets are DIFFERENT permissions and both are required: Environments governs the infra-<region> secrets this workflow writes, Secrets governs the repo-level HARBOR_* secrets the in-cluster harbor-robot-provisioner publishes with this same token (without it that CronJob 403s every tick and converge hard-fails on its failed Jobs)." || FAIL=1
+          [ "$FAIL" -eq 0 ]
+
+      # (A "chart pins published to GHCR" preflight ran HERE and was removed — it
+      # can't work from an instance checkout. Don't re-add it; sidecar doc explains.)
+
+      # Regenerate the gitignored cluster tfvars so wait-cluster-ready can read
+      # node_count (its pool-Ready target).
+      - name: Render tfvars from the spec
+        if: inputs.bootstrap_cluster
+        run: llz render "${REGION}" --tfvars-only
+
+      # ── Pre-flight: object-storage buckets/keys actually exist ──────────────────
+      # Secret PRESENCE is not VALIDITY: a stale key pointing at deleted object
+      # storage seeds fine and then fails as InvalidAccessKeyId at runtime with no
+      # signal (no logs in Loki, Harbor pushes fail). Confirm the scoped keys exist
+      # on Linode before seeding. Non-fatal on a transient API hiccup.
+      - name: Pre-flight — verify object-storage buckets/keys exist
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci verify-object-storage --region "$REGION"
+
+      # ── Kubeconfig + control-plane ACL ─────────────────────────────────────────
+      # Hosted runners have a dynamic egress IP not in the LKE-E control-plane ACL;
+      # open it before any kubectl, revoke at job end. register-runner-lease keeps
+      # the EAA controller from evicting the IP mid-run — required because the
+      # convergence gate at the tail of this job polls for a long time.
+      - name: Cluster access (kubeconfig + runner ACL)
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ env.REGION }}
+          register-runner-lease: 'true'
+
+      # ── Cluster-bootstrap phase, part 2 (bootstrap_cluster=true only) ──────────
+      # Split gate, deliberately: this waits for only ONE Ready node (all apl-core's
+      # install needs); the FULL pool is asserted after the bootstrap, by which time
+      # the rest have had the apl-pipeline wait to join. Don't re-merge them.
+      # 1500s (25m), NOT 900s. On a FRESHLY CREATED LKE-E cluster the
+      # control-plane ACL takes minutes to begin honouring a newly added address,
+      # and Linode documents enabling an ACL as taking "up to 20 minutes to take
+      # effect" — so a 15-minute budget was UNDER the documented worst case and
+      # could not succeed however correct everything else was. Six consecutive
+      # cold starts exhausted it here while the same operation took ~35s against a
+      # settled cluster (measured against the Cloud Manager), and a warm-cluster
+      # re-run passed this step immediately.
+      #
+      # This is the step that OWNS reachability. Everything before it treats an
+      # unreachable apiserver as expected and warns rather than failing, so this
+      # budget is the one that decides whether a cold bootstrap lives.
+      - name: Wait for cluster API ready (first node)
+        if: inputs.bootstrap_cluster
+        run: |
+          llz ci phase-mark wait-cluster-ready
+          llz ci wait-cluster-ready --timeout 1500 --interval 10 || {
+            echo "Persisting failure = control plane still provisioning (re-run later), OR no node ever reached Ready, OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
+            exit 1
+          }
+
+      # The whole in-cluster bootstrap in one command — see
+      # tools/internal/extensions/lifecycle/bootstrapcluster/bootstrap_cluster.go. Idempotent, so a re-run is safe.
+      - name: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
+        if: inputs.bootstrap_cluster
+        env:
+          APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          LINODE_DNS_TOKEN:      ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
+          GHCR_TOKEN:            ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:         ${{ vars.GHCR_USERNAME }}
+          APPS_REPO_REVISION:    ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+          # Numeric LKE cluster id from apply-cluster's TF output — rendered into the
+          # block-storage-retain StorageClass's lke<id> ownership tag. bootstrap-cluster
+          # hard-fails if empty, so an un-reapable untagged class can never ship.
+          LKE_CLUSTER_ID:        ${{ inputs.cluster_id }}
+          # An INPUT, so it goes through env: like every other one. cluster_id above
+          # is an input too and was already routed this way — this line was the
+          # exception, and an exception is what a reader stops noticing.
+          INSTANCE_REPO:         ${{ inputs.instance_repo }}
+        run: |
+          llz ci phase-mark apl-core-install
+          llz ci bootstrap-cluster \
+            --env "${REGION}" \
+            --cluster-id "${LKE_CLUSTER_ID}" \
+            --apps-repo-revision "${APPS_REPO_REVISION}" \
+            --instance-repo "${INSTANCE_REPO}"
+          llz ci phase-mark foundation-ready
+
+      # The full-pool assert deferred from the split gate above: --tfvars reads
+      # node_count. Instant on a healthy run; a wedged pool fails HERE.
+      - name: Assert the full node pool joined
+        if: inputs.bootstrap_cluster
+        run: |
+          llz ci wait-cluster-ready --timeout 300 --interval 10 \
+            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
+            echo "The node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join) — apl-core is installed but the cluster is under-capacity."
+            exit 1
+          }
+
+      # ── Serving TLS for OpenBao and the OTel Collector: NO bootstrap seed ───────
+      # Both certs are issued from first boot by stable self-signed cert-manager CAs
+      # (openbao-ca, otel-bootstrap-ca). Do NOT re-add a hand-seeded cert here — it
+      # races cert-manager and re-introduces a mid-bootstrap CA rotation. If a pod is
+      # stuck ContainerCreating on its TLS Secret, fix the ClusterIssuer instead.
+
+      # ── Seed the static auto-unseal key (must precede the pod wait) ────────────
+      # The chart mounts openbao-unseal-key at /openbao/seal/unseal.key; without it
+      # the pods sit in ContainerCreating (a missing Secret volume waits, it does not
+      # crash-loop), so this MUST run before the pod wait below. Idempotent and
+      # never-rotating; a first bootstrap generates the key and persists it to
+      # infra-<region> for DR. Losing this key loses the data — recovery keys
+      # authorize generate-root but cannot decrypt the root key.
+      - name: Seed OpenBao static auto-unseal key
+        env:
+          OPENBAO_SEAL_KEY: ${{ secrets.OPENBAO_SEAL_KEY }}
+        run: llz ci bao-seed-seal-key --region "$REGION"
+
+      # ── Wait and status check ───────────────────────────────────────────────────
+      # Fail-fast gate: if the platform-bootstrap sync is stuck waves earlier the
+      # Application never appears, and the 600s pod wait below would burn its whole
+      # budget with nothing to say. This fails in ≤4 min WITH the parent sync's
+      # operationState message instead.
+      #
+      # The Argo Application is `llz-openbao`. NOT `platform-openbao` — that is only
+      # the Helm release / StatefulSet identity (pods platform-openbao-0..2). Polling
+      # the release name here silently never matches. See the sidecar doc.
+      - name: Assert the OpenBao Application reached the cluster
+        run: llz ci assert-argo-app --app llz-openbao --within 240
+
+      # Polls pod PHASE, not readiness: a fresh OpenBao is uninitialized, therefore
+      # sealed, therefore not-Ready, so `rollout status` would time out on every
+      # first bootstrap. The init step below only needs the pods Running to exec in.
+      # 600s covers the serial Linode Volume creates on a cold start; 300s flaked.
+      # MUST precede the pod wait below. OpenBao's OIDC mount fetches Keycloak's
+      # realm JWKS over verified TLS from the ingress gateway, which means the
+      # public hostname has to resolve to the gateway's ClusterIP inside the pod
+      # (the public name points at the external LB, and hairpinning through it is
+      # unsupported on LKE-E). That pin is a hostAliases patch on the StatefulSet,
+      # so doing it here means the pods are created with it already in place —
+      # pinning it after they are up would roll a freshly unsealed raft cluster.
+      # No-ops when the pin is already correct, and when no teams are declared.
+      - name: Pin the Keycloak JWKS hostname to the ingress gateway
+        run: llz ci pin-keycloak-gateway-alias --region "$REGION"
+
+      - name: Wait for OpenBao pods to be running
+        run: |
+          llz ci wait-pods --namespace llz-openbao --timeout 600 \
+            platform-openbao-0 platform-openbao-1 platform-openbao-2
+
+      # ── Seal/token lifecycle — one command (CONVERGENCE CONTRACT) ──────────────
+      # Detect → choose-a-path → re-verify, all inside the verb: init, wait-to-
+      # self-unseal, or validate/regen the root token via the recovery quorum.
+      # Writes available=<bool> to $GITHUB_OUTPUT (the gate every step below checks)
+      # and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV. The recovery
+      # keys are empty on a first bootstrap — init mints and persists them.
+      #
+      # OPENBAO_ESCROW_PUBKEY_B64 is read on the FIRST-INIT branch only, and is
+      # passed through `env:` rather than spliced into the argv: a PEM is base64
+      # with `+` and `/` in it, and an empty input would otherwise leave a bare
+      # `--escrow-pubkey-b64` swallowing the next flag. It is a PUBLIC key, so it
+      # is an input rather than a secret. Nothing here needs the private half —
+      # encryption happens in-job and only the operator can decrypt.
+      - name: Ensure OpenBao initialized + unsealed + root token
+        id: ensure
+        env:
+          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
+          RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
+          RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
+          RECOVERY_K3: ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
+          OPENBAO_ESCROW_PUBKEY_B64: ${{ inputs.openbao_escrow_pubkey_b64 }}
+        run: llz ci bao-ensure-ready --region "$REGION"
+
+      # The escrow artifact is a CONVENIENCE, never the only copy: bao-init also
+      # writes the same ciphertext blocks inline into the job summary, because this
+      # step can be skipped by a cancelled run and the shares are minted exactly
+      # once. `if: always()` for the same reason — a later step failing must not
+      # cost the operator their only downloadable escrow. Ciphertext is useless
+      # without the offline private key, so the short retention is hygiene rather
+      # than protection.
+      - name: Upload encrypted OpenBao recovery shares
+        if: always() && inputs.openbao_escrow_pubkey_b64 != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openbao-recovery-keys-${{ env.REGION }}-encrypted
+          path: ${{ runner.temp }}/openbao-recovery-keys.b64
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Pre-flight — verify GitHub secrets-write token for configuration
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
+            --hint "required for OpenBao configuration runs; writes Harbor and pull-robot credentials back to GitHub Actions secrets."
+
+      # HARBOR_URL is the registry hostname images push/pull from (stored in OpenBao
+      # as registry_host) — NOT how this job reaches Harbor's API. Not an
+      # operator-required input: it defaults to harbor.<cluster_domain> from the
+      # tfvars, and vars.HARBOR_URL overrides. Fails only if neither is available.
+      - name: Pre-flight — resolve Harbor URL for configuration
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci resolve-harbor-url --region "$REGION"
+
+      # ── Configure: mounts, auth, policies, roles ───────────────────────────────
+      # All enable commands are idempotent (|| true). Write commands are upserts.
+      - name: Configure OpenBao
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci bao-configure --region "$REGION"
+
+      # ── Configure: Keycloak device-flow client for team-scoped writes ─────────
+      # The realm half of the team-scoped-credentials path (bao-configure owns the
+      # OpenBao half above). apl-core provisions the per-team group/role (team-<name>)
+      # + the `groups` claim from the rendered teamConfig, so this ensures ONLY the
+      # one thing apl-core doesn't: a public device-flow OIDC client (llz) carrying
+      # the openid scope, so operators can `llz openbao login`. Best-effort (any
+      # Keycloak failure warns + exits 0), so it never wedges the bootstrap. Reads
+      # the admin creds from the in-cluster keycloak/platform-admin-credentials Secret.
+      - name: Configure Keycloak device-flow client
+        if: steps.ensure.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci keycloak-configure --region "$REGION"
+
+      # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
+      # One step runs every generic seed from the bootstrapSeeds() table in
+      # tools/internal/extensions/lifecycle/openbao/seedall.go — add new seeds THERE, not as steps here.
+      # A missing source defers per its table mode; a kv-put failure aborts the
+      # rest. HA_ROLE drives the github-dispatch-token standby skip;
+      # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
+      - name: Seed OpenBao KV bootstrap paths
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+          # apl-values repo Contents:write PAT → secret/infra/apl-values-repo-token
+          # (the apl-values-repo-token ExternalSecret the llz-reconciler consumes).
+          APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
+        run: llz ci bao-seed-all --region "$REGION"
+
+      # ── Mint + seed: object-storage keys (Loki + Harbor registry) ──────────────
+      # Mints the region's scoped keys via the Linode API and seeds
+      # secret/loki/object-store + secret/harbor/registry-s3 directly — the
+      # credentials never transit GitHub. rotated_at-stamped so the in-cluster
+      # linodeCredRotator adopts them. Idempotent: already-seeded paths are skipped,
+      # so a re-bootstrap never clobbers a rotator-minted key. obj_cluster comes
+      # from the object-storage tfvars — it is NOT derivable from the env name.
+      - name: Mint + seed object-storage keys
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci mint-bootstrap-objkeys --region "$REGION"
+
+      # ── Seed: Managed Postgres admin connections ────────────────────────────────
+      # The databases root provisions 0-n clusters; this copies each one's admin
+      # connection into secret/infra/db-admin/<name> so ESO can publish it to
+      # whatever carves per-app logical databases out of the cluster.
+      #
+      # Gated on the RENDERED tfvars rather than run unconditionally: seeding needs
+      # the databases root's terraform state, and initializing that root on the
+      # critical bootstrap path would add a failure mode for the majority of
+      # instances that declare no databases at all. The gate is exact —
+      # DatabasesTFVars omits the `databases` assignment entirely when the map is
+      # empty, so the line is present if and only if a cluster was declared. It is
+      # also safe to read the per-env file directly: `databases` is deliberately
+      # NOT inherited from spec.defaults.cluster (llz validate rejects it there),
+      # so the env's own tfvars is the whole truth.
+      - name: Detect declared database clusters
+        id: db
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci db-declared --region "$REGION"
+
+      - name: Terraform init — databases (for the admin seed)
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
+        with:
+          module: databases
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
+          github-token:          ${{ github.token }}
+
+      # Idempotent, and NOT a blind skip: unlike an object-storage key there is
+      # nothing to mint here — the credential is the provider's — so re-running
+      # updates a path whose password no longer matches the cluster (which is what
+      # a recreated cluster leaves behind) instead of stranding every consumer on
+      # a dead credential.
+      - name: Seed database admin connections
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        working-directory: terraform-iac-bootstrap/databases
+        run: llz ci seed-db-admin --region "$REGION"
+
+      # ROTATE-ON-CREATE. The password Terraform just handed over is the
+      # PROVISIONING credential and it is sitting in Terraform state; this
+      # replaces it within the same run that created it, so the copy in state is
+      # dead on arrival. From here OpenBao is authoritative — seed-db-admin
+      # compares the cluster ENDPOINT, not the password, so re-running it will
+      # never push state's dead credential back over the live one.
+      #
+      # NOT gated on `continue-on-error`: a cluster whose admin password we reset
+      # but failed to store is the one outcome worse than not rotating, and the
+      # command's own error carries the linode-cli recovery command.
+      - name: Rotate the provisioning credential (rotate-on-create)
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        working-directory: terraform-iac-bootstrap/databases
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci rotate-db-admin --region "$REGION" --rotate-now --apply
+
+      # ── Mint + seed: the narrow in-cluster Linode PAT ───────────────────────────
+      # Mints the NARROW in-cluster PAT (label llz-incluster-<region>) using the
+      # broad PAT and seeds secret/linode/api-token. Every in-cluster Linode consumer
+      # reads this one rotating token; the broad PAT is CI/Terraform-only and must
+      # never enter the cluster. Rotated monthly by llz-secret-rotation.yml.
+      # Idempotent — an already-seeded path is skipped and never clobbered.
+      - name: Mint + seed the in-cluster Linode PAT
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci mint-bootstrap-pat --region "$REGION"
+
+      # ── Broad-PAT rotator seed (ONLY when the broadPatRotator component is enabled) ─
+      # Seeds secret/linode/broad-pat so the in-cluster rotator can mint its successor.
+      # Self-gated on the rendered carved App file, so ONLY the one deployment that
+      # enables the component ever holds the account-wide broad PAT — every other
+      # instance renders no such file and skips. --skip-if-present keeps re-runs from
+      # clobbering a value the rotator has since rotated.
+      - name: Seed broad-PAT rotator token (when enabled)
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci seed-broad-pat --region "$REGION"
+
+      # ── obj-proxy SSE-C key ────────────────────────────────────────────────────
+      # The encryption key for the object-storage gateway
+      # (docs/designs/obj-sse-c-gateway.md). No-ops unless spec.components.objProxy
+      # is enabled for this deployment.
+      #
+      # MUST run here, before the converge gate. The proxy's ExternalSecret reads
+      # secret/obj/ssec, and a missing path is not a soft failure: ESO reports
+      # SecretSyncedError, the Secret is never created, the DaemonSet cannot mount
+      # it, and llz-obj-proxy sits OutOfSync/Degraded until the convergence gate
+      # gives up — which is exactly how the first e2e run of this component failed.
+      #
+      # GENERATE-ONCE: an existing key is left alone, and an INDETERMINATE OpenBao
+      # read refuses to write rather than risk orphaning every object already
+      # encrypted under a key it could not see. Re-runs are safe and do nothing.
+      - name: Seed obj-proxy SSE-C key (when enabled)
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci seed-ssec-key --region "$REGION"
+
+      # ── Standby: replicate the active's Harbor robot credentials ───────────────
+      # A standby has no in-cluster Harbor, so it seeds secret/harbor/{robot,
+      # pull-robot} from the repo-level HARBOR_* secrets the active's provisioner
+      # published. Not-published-yet is a summary note + clean exit (re-run later).
+      # Must stay BEFORE the nudge so the force-sync picks the fresh seeds up.
+      - name: Seed standby Harbor robot credentials (standby only)
+        if: steps.ensure.outputs.available == 'true' && env.HA_ROLE == 'standby'
+        env:
+          HARBOR_URL:           ${{ vars.HARBOR_URL }}
+          EXISTING_ROBOT:       ${{ secrets.HARBOR_ROBOT_NAME }}
+          EXISTING_SECRET:      ${{ secrets.HARBOR_PASSWORD }}
+          EXISTING_PULL_ROBOT:  ${{ secrets.HARBOR_PULL_ROBOT_NAME }}
+          EXISTING_PULL_SECRET: ${{ secrets.HARBOR_PULL_PASSWORD }}
+        run: llz ci seed-standby-harbor-robots
+
+      # ── Nudge Argo CD to converge the secrets pipeline now ─────────────────────
+      # The openbao ClusterSecretStore could not go Ready until the seeds above
+      # landed. nudge-argo force-syncs the owning apps (Argo does NOT auto-retry a
+      # sync that terminally failed on the same revision), then bumps a revalidation
+      # annotation on the store and waits for Ready — the converge precondition only
+      # CI can assert, because only CI knows seeding just finished. Never fails.
+      - name: Nudge Argo CD to converge secrets (post-seed)
+        if: steps.ensure.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci nudge-argo
+
+      # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
+      # harbor-registry sits in CreateContainerConfigError until the harbor-registry-s3
+      # Secret exists, which needs the seed above PLUS the es-store-recovery sync —
+      # hence checked HERE, not in the earlier Harbor readiness gate. The verb
+      # self-reports non-fatally (::warning:: + exit 0) rather than failing; converge
+      # below is the hard check, which is why there's no continue-on-error.
+      - name: Wait for Harbor registry rollout
+        if: steps.ensure.outputs.available == 'true'
+        run: |
+          if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
+            echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # No --registry-only: it is deprecated and IGNORED (the registry rollout
+          # is the only behavior now). The CLI still accepts it so already-delivered
+          # instances do not break on an image bump — but the template emitting it
+          # is what would keep that shim alive forever, so new instances stop.
+          llz ci wait-harbor
+
+      # ── Extract the standby CA cert for cross-cluster rotation ─────────────────
+      # Passes the standby's OpenBao TLS CA out as a job output so provision-peer-ca
+      # can establish cross-cluster trust. Skipped for standalone/active (no peer).
+      #
+      # The CA is deliberately NOT ::add-mask::'d: it is public material (cert, not
+      # key), and the runner EMPTIES masked values in JOB outputs — masking it would
+      # silently provision an empty ca.crt downstream.
+      - name: Extract standby CA cert
+        id: secondary_ca
+        if: env.HA_ROLE == 'standby'
+        # Non-fatal: a standby whose openbao-tls isn't up yet just skips peer-CA
+        # provisioning (ca_available=false) rather than failing the bootstrap.
+        run: llz ci extract-openbao-ca
+
+      # ── Audit: PVCs that escaped the Kyverno encryption mutation ──────────────
+      # The Kyverno policy that rewrites linode-block-storage → block-storage-retain
+      # has a 30-90s webhook readiness lag after CRD registration, and races the
+      # apl-core PVCs. Anything admitted in that window stays unencrypted forever —
+      # Kyverno does NOT background-migrate existing resources. This lists the
+      # stragglers as ::warning:: so the operator can delete+recreate them. Does NOT
+      # fail the workflow: the cluster works, it is just less secure than intended.
+      - name: Audit PVCs against encrypted-Retain StorageClass
+        if: steps.ensure.outputs.available == 'true' && env.HA_ROLE != 'standby'
+        run: llz ci audit-pvc-storageclass
+
+      # ── (e2e) Managed Postgres credential ────────────────────────────────────
+      # HERE, not in the assert suite below, and the ordering is the whole reason:
+      # the db-admin credential lives only in OpenBao — no ExternalSecret
+      # materializes it into the cluster — and the next step REVOKES the root
+      # token. Run after that and it fails for want of a token rather than for
+      # anything about the database, which is the worst kind of red.
+      #
+      # Completes the TLS + auth handshake and issues no query. rotate-db-admin
+      # resets the password IN PLACE with no overlap window, so the failure mode is
+      # a live endpoint that answers every connect and rejects the credential every
+      # consumer holds — a reachability check passes straight through that.
+      # Self-skips when no Managed Postgres is declared.
+      - name: (e2e) assert Managed Postgres accepts its seeded admin credential
+        if: ${{ inputs.assert_loki }}
+        run: llz ci assert-database
+
+      # ── Revoke root token ────────────────────────────────────────────────────────
+      # Revokes on success AND failure — fail-closed for credential hygiene. The
+      # preserve_root_on_failure debug input suppresses it on FAILURE only, so an
+      # operator iterating on a broken bootstrap need not burn a quorum-regenerate
+      # per attempt. Success always revokes regardless of the flag.
+      - name: Revoke root token
+        if: |
+          always() && (success() || inputs.preserve_root_on_failure != true)
+        run: |
+          if [ -z "${OPENBAO_ROOT_TOKEN:-}" ]; then
+            exit 0
+          fi
+          llz openbao exec -- token revoke -self \
+          && echo "Root token revoked." \
+          || echo "::warning::Root token revocation failed — delete OPENBAO_ROOT_TOKEN from the infra-${REGION} environment secrets manually to prevent credential reuse"
+
+      # ── Final convergence gate (formerly the separate `converge` job) ──────────
+      # `llz ci converge` is what makes "the workflow passed" mean "the cluster
+      # works" (docs/architecture/convergence-contract.md). Note the consequence of
+      # it living in THIS job: a converge failure fails bootstrap, so the standby
+      # provision-peer-ca job below is skipped rather than run. Intended.
+
+      # PREFLIGHT — clear the verify-llz-image-signature race before the gate. On a
+      # freshly built sha the cosign signature can lag the cluster's first admission
+      # attempt, failing the platform-bootstrap sync (which Argo will not auto-retry
+      # at the same revision). Best-effort probe: it only warns, since the argo-nudge
+      # reconciler lane does the re-syncing and converge below is the verdict.
+      # Deliberately NOT gated on `available`, unlike the seed steps: an OpenBao that
+      # never came up must surface as a convergence FAILURE, not a skipped gate.
+      - name: Preflight — confirm the cluster admits the llz CronJob
+        run: |
+          set -uo pipefail
+          # The rendered CronJob manifests that run the in-cluster llz image — the
+          # exact workloads Kyverno's autogen-cronjob-verify-llz-keyless rule gates.
+          FILES="$(grep -rlE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' . \
+            --include='*.yaml' --include='*.yml' 2>/dev/null \
+            | xargs -r grep -lE '^kind:[[:space:]]*CronJob' 2>/dev/null | sort -u || true)"
+          if [ -z "${FILES}" ]; then
+            echo "no in-cluster llz CronJob in the instance manifests — nothing to gate; skipping"
+            exit 0
+          fi
+          for FILE in ${FILES}; do
+            IMAGE="$(grep -oE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' "${FILE}" | head -n1)"
+            echo "== preflight ${IMAGE} (${FILE}) =="
+            ok=0
+            # 8 attempts x 15s (2m). Do NOT cut these retries because "nothing acts
+            # on the result" — on a cold bootstrap they are riding out the CronJob's
+            # NAMESPACE being created, not a Sigstore lag. 3 attempts reliably
+            # reports a false alarm; 2m covers it without the old 5m tail.
+            for i in $(seq 1 8); do
+              # Kyverno admits the real CronJob — server dry-run runs the autogen-cronjob
+              # verifyImages rule (and every other admission policy) without persisting.
+              if kubectl apply --dry-run=server -f "${FILE}" >/dev/null 2>/tmp/preflight-admit.err; then
+                echo "  Kyverno admits the CronJob (attempt ${i})"; ok=1; break
+              fi
+              [ "${i}" = 8 ] || { echo "  not admissible yet (attempt ${i}/8) — retrying in 15s"; sleep 15; }
+            done
+            if [ "${ok}" != 1 ]; then
+              echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing after 8 attempts — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300). Not fatal: the argo-nudge lane keeps re-triggering the sync, and converge below is the verdict."
+            fi
+          done
+          # No re-sync nudge here by design: the in-cluster argo-nudge lane
+          # re-triggers phase=Failed apps continuously, so a CI one-shot adds
+          # nothing. This step is purely the probe; converge below is the verdict.
+
+      # ── Event-pace the harbor tail instead of waiting out the */5 cron ─────────
+      # cert-automation's rollout chains on the harbor-robot-provisioner CronJob
+      # seeding secret/harbor/robot → ESO sync → rollout, so left to the schedule it
+      # is the dominant always-pay tail on the converge budget. Force one tick now.
+      # Best-effort (the verb always exits 0); the cron remains the safety net.
+      # Skipped on standby (no in-cluster Harbor).
+      - name: Kick harbor-robot-provisioner (skip the */5 first-tick wait)
+        if: env.HA_ROLE != 'standby'
+        continue-on-error: true
+        run: llz ci kick-harbor-provisioner
+
+      # --budget 1200 (20m) is NOT "anything longer is a real stall": the worst-case
+      # cert-automation tail legitimately runs ~10-15m past the primary converge, and
+      # a 10m ceiling flaked on it. 20m absorbs that and still catches a genuine
+      # stall well inside the 45m job timeout.
+      - name: Wait for cluster to converge
+        run: |
+          llz ci phase-mark converge
+          llz ci converge --budget 1200
+
+      # ── Close the obj-proxy CA admission race (no-op unless objProxy is on) ───
+      # The Kyverno policy that mounts the obj-proxy CA into harbor-registry mutates
+      # on ADMISSION, so it cannot reach a pod apl-core had already started. Sync
+      # waves order the OBJECTS (CA + policy at 5, the CoreDNS rewrite at 10) but no
+      # wave re-admits a running pod — so whether the registry trusts the proxy comes
+      # down to which of two installs won a race. Once the rewrite is live, a pod that
+      # lost it cannot complete a single S3 call: it fails to verify a certificate
+      # from a CA it does not have. It does not crash, so nothing restarts it and
+      # nothing reports it — Harbor is just broken until someone notices.
+      #
+      # AFTER converge, not before: the verb keys off the ClusterPolicy to decide
+      # whether objProxy is enabled here, and that policy arrives with the component's
+      # Argo sync. Run earlier it sees no policy and silently does nothing — which is
+      # exactly why it is not folded into wait-harbor.
+      #
+      # Always exits 0. assert-obj-encryption's [pod] check in the suite below is the
+      # gate; this is the repair that keeps it from having to fire.
+      - name: Ensure harbor-registry trusts the obj-proxy CA
+        run: llz ci harbor-trust-obj-proxy-ca
+
+      # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
+      # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
+      # ownership tag, and still wear the label named in its PV's volumeHandle.
+      # THAT LAST ONE IS THE OPPOSITE OF WHAT IT USED TO BE: this once required the
+      # Volume to have been RENAMED off the CSI default pvc-<uuid> to a readable
+      # <region>-<ns>-<pvc>. That rename is what breaks the Volume — the CSI
+      # resolves the device path from the label in the IMMUTABLE volumeHandle, so a
+      # renamed Volume fails to mount on its next attach and never recovers. A
+      # `pvc-<uuid>` label is now the CORRECT state; readability lives in Volume
+      # TAGS (ns-<namespace>, <namespace>-<pvc>), which no device lookup reads.
+      # Checks the Volume's own `encryption` field, not the PVC's
+      # storageClassName: the class name is a PROXY, and it was a satisfied proxy
+      # the entire time a managed cluster provisioned 13 of 16 PVCs unencrypted.
+      #
+      # It runs SERIALLY, BEFORE the parallel suite, because it authenticates with
+      # the broad PAT — and the `broad-pat` lane in that suite ROTATES that PAT,
+      # revoking the old id. Run concurrently, this 401s on every volume partway
+      # through and reports a fleet-wide violation that is really just a revoked
+      # credential (observed: revoked_ids=[71820512] while this was mid-flight).
+      # The fan-out's collision rules cover namespaces and ports; shared CREDENTIALS
+      # are a third axis, and this is the only lane that sits on one.
+      #
+      # Tags and labels are healed by reconciler lanes after CreateVolume, so the
+      # verb waits a bounded time for them. Encryption never waits — it cannot
+      # change, and a red run is not re-runnable: storageClassName is immutable once
+      # bound, so it means re-rolling the workload and losing that volume's data.
+      - name: (e2e) assert storage invariant — Volume encryption + tags + labels
+        if: ${{ inputs.assert_loki }}
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci assert-volume-encryption
+
+      # ── E2E assert suite ──────────────────────────────────────────────────────
+      # Release-e2e only (assert_loki=true); normal instance bootstraps skip it.
+      #
+      # The lane table, the parallel fan-out, the per-lane ::group:: capture and the
+      # pass/fail verdict all live in `llz ci assert-suite`
+      # (tools/internal/extensions/assertions/assertsuite/suite.go), not here.
+      # This used to be ~40 lines of inline bash
+      # implementing a job runner in YAML: it was the only untested part of the
+      # battery, its lane list was written TWICE (once to run, once to collect) so a
+      # lane could run and never be able to fail the step, and the list shipped
+      # per-instance so a new gate reached an instance only when someone edited its
+      # vendored workflow. Run `llz ci assert-suite --list` to see the lanes.
+      - name: (e2e) assert suite
+        if: ${{ inputs.assert_loki }}
+        env:
+          # The apl-deployed-version lane can block on a MAJOR apart, and its error
+          # tells the operator to set this. Repo variables are not auto-exported, so
+          # without the passthrough the remedy named in the message does not exist at
+          # this call site — it was wired at the scheduled one and nowhere else, which
+          # is the same "documented but unreachable" shape one call site over. Unset
+          # renders empty, which reads as not-allowed: the default stays strict.
+          LLZ_ALLOW_APL_CHART_MAJOR_DRIFT: ${{ vars.LLZ_ALLOW_APL_CHART_MAJOR_DRIFT }}
+        run: llz ci assert-suite
+
+      # Snapshot the loki-gateway resolver + nginx logs WHILE the cluster is still
+      # up — before the ACL revoke below cuts apiserver access. Every command is
+      # `|| true` so it never alters the outcome.
+      - name: Capture loki-gateway diagnostics (on convergence failure)
+        if: failure()
+        run: 'echo "== loki-gateway nginx.conf resolver =="; kubectl -n monitoring get cm loki-gateway -o "jsonpath={.data.nginx\.conf}" 2>/dev/null | grep -i resolver || true; for p in $(kubectl -n monitoring get pods -o name 2>/dev/null | grep loki-gateway); do echo "== $p =="; kubectl -n monitoring logs "$p" -c nginx --tail=50 2>/dev/null || true; kubectl -n monitoring logs "$p" -c nginx --tail=50 --previous 2>/dev/null || true; kubectl -n monitoring describe "$p" 2>/dev/null | tail -30 || true; done'
+
+      # Snapshot Argo Application states + the platform-app-ca chain before teardown.
+      # `|| cancelled()` so a cancelled run still captures. This is the ONLY Argo
+      # dump in the job — it covers bootstrap-phase failures too, so don't add a
+      # second one earlier.
+      - name: Diagnose convergence failure (Argo apps + cert-manager CA chain)
+        if: failure() || cancelled()
+        # Bound the step even though the verb gates on apiserver reachability, so a
+        # hung apiserver can't eat the job budget.
+        timeout-minutes: 10
+        run: llz ci diagnose-argocd || true
+
+      # The reconciler half, and it belongs HERE rather than only on cluster-health:
+      # THIS is the job that runs `llz ci converge`, so this is the bundle a reader
+      # opens when converge reports "obj chain settling; check llz-reconciler
+      # llz_apl_overlay_synced". Wiring it only into the health workflow (which the
+      # e2e never dispatches) left that instruction just as unanswerable from an
+      # e2e failure as before — the diagnostic existed and was not where the
+      # failure was.
+      - name: Diagnose convergence failure (llz-reconciler + apl-overlay lane)
+        if: failure() || cancelled()
+        timeout-minutes: 10
+        run: llz ci diagnose-reconciler || true
+
+      # ── Job tail: timing, ACL revoke, then fail-on-errors ─────────────────────
+      # Order matters. Timing runs while cluster access still exists; the ACL revoke
+      # passes the kubeconfig so the runner-lease is released via kubectl BEFORE the
+      # Linode API call cuts apiserver access; the BOOTSTRAP_ERRORS check is last so
+      # cleanup always happens before the job goes red.
+      - name: Report bootstrap timing
+        if: always()
+        continue-on-error: true
+        run: llz ci collect-timing --dir "$RUNNER_TEMP/timing" --title "bootstrap (cluster + openbao) timeline" --image-pulls --apl-operator
+
+      - name: Upload bootstrap timing artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timing-bootstrap-openbao-${{ env.REGION }}
+          path: ${{ runner.temp }}/timing/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Explain the failure
+        if: failure()
+        run: llz ci build-failure-summary --stage bootstrap --region "$REGION"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+          kubeconfig:   $HOME/.kube/config
+
+      - name: Fail on bootstrap errors
+        if: always()
+        run: |
+          if [ "${BOOTSTRAP_ERRORS:-}" = "true" ]; then
+            echo "::error::Bootstrap completed with errors — one or more required secrets are missing. See annotations above."
+            exit 1
+          fi
+
+  # ── Harbor provisioning — MOVED IN-CLUSTER ──────────────────────────────────
+  # There is no `harbor` job any more: the active/standalone path is the in-cluster
+  # harbor-robot-provisioner CronJob. Robot rotation is now "delete the robot in the
+  # Harbor UI" and the next tick recreates it. The STANDBY half is the "Seed standby
+  # Harbor robot credentials" step in the bootstrap job above.
+
+  # ── Provision the standby CA cert in its active peer's cluster ───────────────
+  # Runs only after a standby bootstrap that successfully extracted the CA cert.
+  # Creates/updates openbao-peer-tls in the active peer's openbao namespace so
+  # cross-peer clients can verify TLS without VAULT_SKIP_VERIFY=true. The peer is
+  # resolved from the cluster tfvars.
+  provision-peer-ca:
+    name: Provision standby CA in active peer cluster
+    if: >
+      needs.resolve.outputs.role == 'standby' &&
+      needs.bootstrap.outputs.ca_available == 'true'
+    needs: [resolve, bootstrap]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ needs.resolve.outputs.peer }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Targets the PEER's region, not this deployment's. Revoked at job end.
+      - name: Cluster access (peer kubeconfig + runner ACL)
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          region:                ${{ needs.resolve.outputs.peer }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+
+      - name: Provision openbao-peer-tls Secret in active peer cluster
+        env:
+          CA_B64: ${{ needs.bootstrap.outputs.ca_b64 }}
+        run: llz ci provision-peer-ca
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner (peer)
+        if: always()
+        uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ needs.resolve.outputs.peer }}
+
+  # ── Recovery: fetch the standby's CA cert ──────────────────────────────────
+  # Dispatch with reprovision_ca_only: true and region = the standby deployment to
+  # recover from a failed provision-peer-ca WITHOUT re-running the whole bootstrap.
+  # No-op unless the deployment's role is standby.
+  fetch-standby-ca:
+    name: Fetch standby CA (recovery)
+    if: inputs.reprovision_ca_only == true && needs.resolve.outputs.role == 'standby'
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ inputs.region }}
+    timeout-minutes: 10
+    outputs:
+      ca_available: ${{ steps.extract.outputs.ca_available }}
+      ca_b64:       ${{ steps.extract.outputs.ca_b64 }}
+
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Targets the standby (self). Revoked at job end.
+      - name: Cluster access (standby kubeconfig + runner ACL)
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          region:                ${{ inputs.region }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+
+      - name: Extract standby CA cert
+        id: extract
+        # --required: unlike the bootstrap job's twin, an absent openbao-tls is a
+        # hard error here — this job exists solely to (re)provision the peer CA.
+        run: llz ci extract-openbao-ca --required
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner (standby)
+        if: always()
+        uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ inputs.region }}
+
+  # ── Recovery: provision the standby CA in its active peer's cluster ────────
+  # Depends on fetch-standby-ca above; runs in the active peer's environment.
+  reprovision-peer-ca:
+    name: Re-provision standby CA in active peer cluster
+    if: >
+      inputs.reprovision_ca_only == true &&
+      needs.fetch-standby-ca.outputs.ca_available == 'true'
+    needs: [resolve, fetch-standby-ca]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ needs.resolve.outputs.peer }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Targets the PEER's region, not this deployment's. Revoked at job end.
+      - name: Cluster access (peer kubeconfig + runner ACL)
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          region:                ${{ needs.resolve.outputs.peer }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+
+      - name: Provision openbao-peer-tls Secret in active peer cluster
+        env:
+          CA_B64: ${{ needs.fetch-standby-ca.outputs.ca_b64 }}
+        run: llz ci provision-peer-ca
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner (peer)
+        if: always()
+        uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ needs.resolve.outputs.peer }}

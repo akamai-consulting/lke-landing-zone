@@ -4,7 +4,7 @@
 #
 # The landing-zone template ships its workload definitions AS charts (the
 # apl-values manifest trees were helmified into kubernetes-charts/, see
-# docs/templatization-plan.md §5). So the "instance" the kubernetes scans
+# templatization-plan.md §5). So the "instance" the kubernetes scans
 # (kube-linter, kubeconform, server-side dry-run) should validate is the
 # RENDERED chart output, not a raw apl-values/ tree that no longer exists here.
 #

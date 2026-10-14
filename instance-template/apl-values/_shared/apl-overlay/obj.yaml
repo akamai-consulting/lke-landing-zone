@@ -1,0 +1,9 @@
+kind: AplObjectStorage
+metadata:
+  name: obj
+spec:
+  showWizard: false
+  provider:
+    type: linode
+    linode:
+      accessKeyId: ${obj_access_key_id}

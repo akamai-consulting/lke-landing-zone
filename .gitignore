@@ -1,16 +1,19 @@
 kubernetes/observability/argocd/applications/charts/
 certs/*.pem
 
-# Go test binaries / local build output of the tools module
+# Go test binaries. The tools module's own build artifacts are ignored from
+# tools/.gitignore instead — see the comment there for why they cannot live
+# here as `tools/<name>` patterns.
 *.test
-tools/firewall-cidrs
-tools/firewall-controller/firewall-controller
-tools/linode-cred-audit
-tools/llz
 /bin/llz
 
 # Tokens gathered by `llz new` / `llz secrets gather` (0600, never committed)
 .llz/
+
+# `llz import scan` output — an inventory of a real customer cluster (domains,
+# pool IDs, secret refs). Generated per-run, never belongs in the template repo.
+import-report.yaml
+**/import-report.yaml
 
 # Coverage reports (go test -coverprofile output)
 **/coverage/
@@ -51,3 +54,5 @@ __pycache__/
 
 # Copier-rendered instance for the local smoke test (make instance-test)
 /.instance-test/
+# Scaffold+upgrade pair for the day-2 gate (make upgrade-test)
+/.upgrade-test/

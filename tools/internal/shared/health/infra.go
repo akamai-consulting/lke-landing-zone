@@ -1,0 +1,192 @@
+package health
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// infra.go ports the OpenBao seal/HA (1a), admission-webhook (1d) / Service
+// endpoint readiness, and cloud-firewall bootstrap (the kube-system Secret +
+// ConfigMap) checks.
+
+// ── Konnectivity tunnel (apiserver → pod) ────────────────────────────────────
+
+// IsTunnelBlocked reports whether a check's failure text is the konnectivity
+// signature — the apiserver having no proxy agent to reach a pod through.
+//
+// On LKE-Enterprise the control plane is not on the node network, so every
+// apiserver→pod call (aggregated APIService discovery, `kubectl exec`, admission
+// webhooks) is routed through konnectivity. When no agent is registered the
+// apiserver answers "No agent available" on ALL of them at once. That is one
+// infrastructure fault, not several component faults, and it heals on its own —
+// so it must classify as Pending (poll) rather than banking a hard strike.
+//
+// WHY this is not covered by the existing exit-3 "apiserver unreachable" path:
+// that path is gated on the apiserver answering US (kubectlReachable). During a
+// tunnel outage the apiserver is perfectly reachable — `kubectl get` works, which
+// is how the health scan enumerates everything — and only its onward hop to the
+// pods is broken. So the blip lands as exit 1 and, with the default 60s
+// --retry-delay, trips the hard-failed-twice abort ~2 minutes into a 20-minute
+// budget. Observed on the v0.0.x release gate: six checks (two APIServices, three
+// `bao status` execs, and the leader count derived from them) hard-failed
+// together while konnectivity-agent itself reported 3/3 Ready — its readiness
+// probe does not exercise the dial-out — and the run aborted having spent 121s of
+// a 1200s budget. A re-run 10 minutes later converged on the first poll.
+//
+// A tunnel that never recovers still fails: the checks stay Pending and converge
+// exhausts its budget, reporting the tunnel rather than its symptoms.
+func IsTunnelBlocked(msg string) bool {
+	return strings.Contains(msg, "No agent available")
+}
+
+// ── OpenBao seal / Raft HA (1a) ──────────────────────────────────────────────
+
+// BaoStatus is the parsed `bao status -format=json` state we classify on.
+type BaoStatus struct {
+	Initialized bool
+	Sealed      bool
+	HAMode      string // active | standby | standalone
+}
+
+// ParseBaoStatus parses `bao status -format=json`, preserving literal booleans
+// and defaulting ONLY on null — the script's hard-won fix for jq's `//` treating
+// a literal false as missing: initialized defaults false, sealed defaults true
+// (fail-safe), and HA mode is derived from is_self / ha_enabled.
+func ParseBaoStatus(raw []byte) (BaoStatus, error) {
+	var j struct {
+		Initialized *bool `json:"initialized"`
+		Sealed      *bool `json:"sealed"`
+		IsSelf      *bool `json:"is_self"`
+		HAEnabled   *bool `json:"ha_enabled"`
+	}
+	if err := json.Unmarshal(raw, &j); err != nil {
+		return BaoStatus{}, err
+	}
+	s := BaoStatus{
+		Initialized: j.Initialized != nil && *j.Initialized,
+		Sealed:      j.Sealed == nil || *j.Sealed,
+		HAMode:      "standalone",
+	}
+	switch {
+	case j.IsSelf != nil && *j.IsSelf:
+		s.HAMode = "active"
+	case j.HAEnabled != nil && *j.HAEnabled:
+		s.HAMode = "standby"
+	}
+	return s, nil
+}
+
+// ClassifyBaoSeal classifies one OpenBao pod's seal state: initialized + unsealed
+// passes; not-initialized (not part of the Raft cluster) and sealed both fail.
+func ClassifyBaoSeal(s BaoStatus) (Category, string) {
+	switch {
+	case s.Initialized && !s.Sealed:
+		return CatOK, "initialized, unsealed, HA Mode=" + s.HAMode
+	case !s.Initialized:
+		return CatFail, "NOT initialized — not part of the Raft cluster; needs raft join + unseal"
+	default:
+		return CatFail, "sealed — pods auto-unseal from the static seal key at boot; check the openbao-unseal-key Secret and Raft storage"
+	}
+}
+
+// ClassifyLeaderCount classifies the cluster-wide active-leader count: zero
+// active leaders (nobody serving writes) and more than one (Raft split-brain —
+// writes diverge) are both failures.
+func ClassifyLeaderCount(replicas, activeCount int) (Category, string) {
+	switch {
+	case replicas > 0 && activeCount == 0:
+		return CatFail, "OpenBao has no active leader (HA Mode=active not observed on any pod)"
+	case activeCount > 1:
+		return CatFail, fmt.Sprintf("OpenBao has %d active leaders (split-brain — Raft writes will diverge)", activeCount)
+	default:
+		return CatOK, "exactly one active OpenBao leader"
+	}
+}
+
+// ── Endpoint readiness (shared by webhooks 1d and Service endpoints 3e) ──────
+
+// EndpointSlice is the subset of an EndpointSlice we read.
+type EndpointSlice struct {
+	Endpoints []struct {
+		Conditions struct {
+			Ready *bool `json:"ready"`
+		} `json:"conditions"`
+	} `json:"endpoints"`
+}
+
+// CountReadyEndpoints counts endpoints across slices whose conditions.ready is
+// true — treating an absent ready field as true (jq `.conditions.ready // true`).
+func CountReadyEndpoints(slices []EndpointSlice) int {
+	n := 0
+	for _, s := range slices {
+		for _, e := range s.Endpoints {
+			if e.Conditions.Ready == nil || *e.Conditions.Ready {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// CountEndpoints counts EVERY endpoint across slices, ready or not. An
+// EndpointSlice lists notReady addresses too, which is what lets
+// ClassifyServiceEndpoints tell "the pods exist and are still starting" from
+// "nothing backs this Service".
+func CountEndpoints(slices []EndpointSlice) int {
+	n := 0
+	for _, s := range slices {
+		n += len(s.Endpoints)
+	}
+	return n
+}
+
+// ClassifyWebhookBackend classifies an admission webhook's backing Service:
+// a missing Service or zero ready endpoints fails; otherwise it passes.
+func ClassifyWebhookBackend(serviceExists bool, readyCount int) (Category, string) {
+	switch {
+	case !serviceExists:
+		return CatFail, "backing Service MISSING (configured but not present)"
+	case readyCount == 0:
+		return CatFail, "0 ready endpoints (controller down / NP blocking / selector drift)"
+	default:
+		return CatOK, fmt.Sprintf("%d ready endpoint(s)", readyCount)
+	}
+}
+
+// ── Cloud-firewall bootstrap (kube-system Secret + ConfigMap) ────────────────
+
+// ClassifyFirewallToken classifies the kube-system/linode Secret token: present
+// + non-empty passes; present-but-empty and absent both fail.
+func ClassifyFirewallToken(secretExists bool, token string) (Category, string) {
+	switch {
+	case !secretExists:
+		return CatFail, "Secret kube-system/linode missing — bootstrap step did not seed it"
+	case token == "":
+		return CatFail, "Secret kube-system/linode exists but token key is empty"
+	default:
+		return CatOK, "Secret kube-system/linode has non-empty token"
+	}
+}
+
+// ClassifyFirewallConfigKey classifies a linode-internal-cidr-firewall-config
+// ConfigMap key: a set value passes; an empty LKE_CLUSTER_ID is only
+// informational (control-plane ACL reconciliation disabled); any other empty key
+// (LINODE_FIREWALL_ID + the manifest-owned keys) is operator-deferred until the
+// firewall bootstrap / Argo App has run.
+func ClassifyFirewallConfigKey(key, value string) Category {
+	if value != "" {
+		return CatOK
+	}
+	if key == "LKE_CLUSTER_ID" {
+		return CatOK
+	}
+	return CatDeferred
+}
+
+// NOTE: the control-plane ACL outcome check (ControlPlaneACLState /
+// ClassifyControlPlaneACL) lived here until its only caller was removed by
+// f3b3bcb, which extracted the EAA/internal-CIDR firewall feature to a private
+// repo. It sat orphaned afterwards — unreachable from cmd/llz and unusable from
+// outside the module (internal/). Removed rather than left as extraction
+// residue; recover from history if the feature returns.

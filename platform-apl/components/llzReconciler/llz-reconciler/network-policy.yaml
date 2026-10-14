@@ -1,0 +1,84 @@
+# NetworkPolicy for the reconciler pod. The llz-reconciler namespace inherits the
+# platform's default-deny posture, so both directions are stated explicitly:
+#
+#   Ingress — ONLY the Prometheus scrape, from the `monitoring` namespace (where
+#     kube-prometheus-stack runs) to the metrics port. Same source the foundation
+#     uses to scrape CNPG :9187 (llz-cluster-foundation network-policies). Without
+#     this the ServiceMonitor is discovered but every scrape is silently dropped.
+#
+#   Egress — DNS + the LKE-E apiserver (dual-port 443 + 6443 DNAT; a bare `ports`
+#     rule with no `to:` — there is no in-cluster kube-apiserver pod to select on
+#     managed LKE-E). Phase 0 talks to nothing else (no Linode API, no OpenBao);
+#     those egress allows are added with the Phase 1 reconcilers that need them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-reconciler
+  annotations:
+    # -10, the tree's stated convention for per-namespace NetworkPolicies ("so
+    # they land before workload pods", llz-cluster-foundation/values.yaml).
+    #
+    # This carried NO sync-wave, so it defaulted to wave 0 — the same wave as the
+    # Deployment it is supposed to isolate. It worked only because Argo's default
+    # intra-wave kind ordering happens to apply NetworkPolicy before Deployment:
+    # an unstated dependency on Argo internals rather than a declared ordering.
+    # Now the isolation is guaranteed to exist before the pod it isolates.
+    argocd.argoproj.io/sync-wave: "-10"
+  namespace: llz-reconciler
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llz-reconciler
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Prometheus (monitoring namespace) scrapes :8080/metrics — now over mTLS.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Kubelet probes :8081/healthz. NOT scoped by `from`: the probe originates
+    # from the NODE, which is not a pod and cannot be selected by namespace or
+    # pod labels — a `from` clause here would drop every probe and CrashLoop the
+    # pod. The port serves only the leader-election liveness verdict, so an
+    # unscoped ingress on it exposes nothing.
+    #
+    # Note what this does NOT claim: the previous :8080 rule was scoped to the
+    # monitoring namespace and therefore never admitted kubelet either, yet
+    # probes worked — so node→pod probe traffic is evidently not policed here
+    # (Cilium host-entity handling on LKE). This rule makes the allowance
+    # EXPLICIT rather than dependent on that behavior, which is worth doing
+    # precisely because it is undocumented and could change.
+    - ports:
+        - { protocol: TCP, port: 8081 }
+  egress:
+    # DNS. Match kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns`
+    # podSelector: LKE-Enterprise / managed CoreDNS is labeled differently
+    # (app.kubernetes.io/name=coredns), so a kube-dns podSelector matches nothing and
+    # every lookup times out. Only DNS listens on :53 in kube-system, so a
+    # namespace-scoped :53 grant is both correct and safe.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # LKE-E apiserver (dual-port DNAT). Bare ports rule: no in-cluster
+    # kube-apiserver pod exists to selector-match on managed LKE-E. Being a bare
+    # :443 egress it ALSO covers the Linode API (api.linode.com) the Linode-touching
+    # reconcilers (volume-tags, cidr-firewall, linode-creds) call over HTTPS
+    # — so no separate Linode egress rule is needed.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+    # OpenBao API (:8200) for the --reconcile-openbao-gauges sampler (seal-status +
+    # credential-age). The OpenBao ingress side is opened by the chart's
+    # allowedClientPods entry for this pod (llz-openbao-platform 0.1.14).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }

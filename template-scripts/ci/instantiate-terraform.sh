@@ -2,9 +2,11 @@
 # instantiate-terraform.sh — Materialize the instance Terraform roots so the
 # template repo can validate them without published module tags or remote state.
 #
-# The instance roots (instance-template/terraform-iac-bootstrap/<root>) reference the reusable
+# The instance roots' *.tf now live in the embedded tfroots package
+# (tools/internal/shared/tfroots/roots/<root>) — `llz render` generates them into an instance
+# on the fly (the instance commits ZERO Terraform code). They reference the reusable
 # modules by their PUBLISHED git:: ref (e.g.
-#   source = "git::ssh://…//terraform-modules/llz-cluster?ref=llz-cluster/v0.1.0")
+#   source = "git::ssh://…//terraform-modules/llz-cluster?ref=v0.0.39")
 # which only resolves after a release tag exists. This is the Terraform analog of
 # rendering charts: it copies the roots into a build dir and rewrites those
 # git:: sources to the in-repo terraform-modules/ path, then runs
@@ -13,7 +15,7 @@
 #
 # Usage: template-scripts/ci/instantiate-terraform.sh
 # Env:   TF_INSTANCE_DIR  build dir (default: .tf-instance)
-#        TF               terraform binary (default: terraform, falling back to tofu)
+#        TF               Terraform-family binary (default: tofu, falling back to terraform)
 set -euo pipefail
 
 # shellcheck source=template-scripts/lib-common.sh
@@ -31,10 +33,15 @@ cd "$ROOT"
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
 
-# Mirror instance-template/terraform-iac-bootstrap/ at the SAME depth (<build>/terraform-iac-bootstrap/<root>)
-# so the rewritten ../../../terraform-modules path resolves to the repo-root
-# modules from each root.
-cp -R instance-template/terraform-iac-bootstrap "$BUILD/terraform-iac-bootstrap"
+# Mirror the embedded roots at the SAME depth (<build>/terraform-iac-bootstrap/<root>)
+# so the rewritten ../../../terraform-modules path resolves to the repo-root modules
+# from each root. The roots' *.tf AND their .terraform.lock.hcl both come from the
+# embed (tools/internal/shared/tfroots/roots/) — the lock moved there so the pin and
+# the constraint it satisfies ship as one artifact. `cp -R <src>/. <dst>` copies
+# dotfiles, so the lock arrives with them and `tofu init` below validates the pair.
+# instance-template/terraform-iac-bootstrap/ now holds only .gitignore + AGENTS.md.
+mkdir -p "$BUILD/terraform-iac-bootstrap"
+cp -R tools/internal/shared/tfroots/roots/. "$BUILD/terraform-iac-bootstrap/"
 REL="../../../terraform-modules"
 
 find "$BUILD/terraform-iac-bootstrap" -name '*.tf' -print0 | while IFS= read -r -d '' f; do

@@ -7,6 +7,9 @@ locals {
   # one we attach this cluster's subnet to the caller-provided shared VPC.
   create_vpc = var.vpc_id == ""
   vpc_id     = local.create_vpc ? linode_vpc.this[0].id : var.vpc_id
+
+  # Consumed by the node firewall in firewall.tf.
+  has_runner_cidrs = length(var.github_runner_ipv4_cidrs) > 0 || length(var.github_runner_ipv6_cidrs) > 0
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -39,18 +42,7 @@ resource "linode_vpc_subnet" "nodes" {
   depends_on = [time_sleep.vpc_settle]
 }
 
-# ── Node firewall (bootstrap baseline) ───────────────────────────────────────
-
-module "node_firewall" {
-  source = "../llz-node-firewall"
-
-  label           = local.firewall_label
-  vpc_subnet_cidr = var.vpc_subnet_cidr
-  tags            = var.tags
-
-  github_runner_ipv4_cidrs = var.github_runner_ipv4_cidrs
-  github_runner_ipv6_cidrs = var.github_runner_ipv6_cidrs
-}
+# The node firewall lives in firewall.tf.
 
 # ── LKE Enterprise cluster ────────────────────────────────────────────────────
 
@@ -60,6 +52,9 @@ resource "linode_lke_cluster" "this" {
   k8s_version = var.k8s_version
   tier        = "enterprise"
   tags        = var.tags
+  # Managed App Platform (Linode installs+manages apl-core + provisions the
+  # akamai-apl.net domain). ForceNew. See ADR 0005 / var.apl_enabled.
+  apl_enabled = var.apl_enabled
   # Bind the cluster to OUR VPC. Both vpc_id and subnet_id must be set together:
   # passing subnet_id alone (vpc_id omitted) does NOT attach this VPC — LKE-E
   # silently provisions its own "lke<clusterID>" VPC instead, leaving the
@@ -78,8 +73,8 @@ resource "linode_lke_cluster" "this" {
         # Runner CIDRs are merged at bootstrap time so they can reach the API
         # server. The firewall-controller takes over ACL management after init,
         # which is why ignore_changes is set below.
-        ipv4 = concat(var.control_plane_acl_ipv4, module.node_firewall.acl_cidrs_ipv4)
-        ipv6 = concat(var.control_plane_acl_ipv6, module.node_firewall.acl_cidrs_ipv6)
+        ipv4 = concat(var.control_plane_acl_ipv4, var.github_runner_ipv4_cidrs)
+        ipv6 = concat(var.control_plane_acl_ipv6, var.github_runner_ipv6_cidrs)
       }
     }
   }
@@ -94,26 +89,85 @@ resource "linode_lke_cluster" "this" {
   # treats them as drift and nulls them out — which the API interprets as
   # "delete the pool" (observed in practice: a live pool was destroyed
   # this way).
+  # vpc_id/subnet_id are CREATE-TIME ONLY on the Linode API, and ignoring their
+  # drift is the only honest posture.
+  #
+  # The provider marks both as plain optional attributes, so a mismatch between
+  # state and the live cluster plans as a benign-looking `update in-place`:
+  #
+  #     ~ subnet_id = 814117 -> 806378
+  #     ~ vpc_id    = 580281 -> 575244
+  #
+  # That plan cannot do what it says. `PUT /lke/clusters/{id}` does not accept
+  # either field, so the apply either no-ops (and the identical diff returns on
+  # every subsequent plan, forever) or — worse, if Linode ever makes it real —
+  # moves a live cluster's nodes to a different subnet, which is a full node
+  # recycle presented as an in-place update. Neither is something an operator
+  # asked for by running `plan`.
+  #
+  # HOW A CLUSTER GETS INTO THAT STATE: the vpc_id argument above is newer than
+  # the module. A cluster created when only subnet_id was passed did NOT attach
+  # this VPC — LKE-E silently provisioned its own `lke<clusterID>` VPC (see the
+  # comment on vpc_id) — so the module's VPC sits orphaned and the cluster lives
+  # somewhere else. The first plan after upgrading past that fix is where it
+  # shows up, on a cluster that has been running fine for months.
+  #
+  # So: bind on CREATE (ignore_changes does not apply to creates, so a new
+  # cluster still gets the VPC this module made) and never fight it afterwards.
+  # The `check` block below is what makes the resulting mismatch visible, since
+  # ignoring drift silently is how it stayed unnoticed in the first place.
   lifecycle {
-    ignore_changes = [control_plane[0].acl, pool]
+    ignore_changes = [control_plane[0].acl, pool, vpc_id, subnet_id]
   }
 
   # Fail fast: force the node firewall (and, via vpc_id/subnet_id above, the VPC
-  # + subnet) to be created BEFORE the cluster. The cluster only references the
-  # firewall module through acl_cidrs_ipv4/ipv6, which are pass-throughs of input
-  # variables — so without this depends_on Terraform creates the firewall and the
+  # + subnet) to be created BEFORE the cluster. This depends_on is the ONLY edge
+  # to the firewall — the ACL above reads the runner CIDRs straight from the
+  # input variables — so without it Terraform creates the firewall and the
   # cluster in PARALLEL. A stale/duplicate firewall label then 400s immediately
   # ("Label must be unique among your Cloud Firewalls") while the ~20-30 min
   # cluster create is already in flight. Ordering firewall/VPC first surfaces
   # those cheap, instant failures before the expensive create begins.
-  depends_on = [module.node_firewall]
+  depends_on = [linode_firewall.this]
 }
 
-# ── Kubeconfig (optional) ─────────────────────────────────────────────────────
-
-resource "local_sensitive_file" "kubeconfig" {
-  count           = var.kubeconfig_path != "" ? 1 : 0
-  filename        = var.kubeconfig_path
-  content         = base64decode(linode_lke_cluster.this.kubeconfig)
-  file_permission = "0600"
+# Report — do not fail — when the cluster is not in the VPC this module built.
+#
+# A `check` block rather than a precondition/postcondition on purpose. The
+# condition is unfixable by any apply (vpc_id is create-time only), so asserting
+# it would wedge every future apply on an instance whose only real fault is that
+# it was created before the vpc_id argument existed. Blocking an operator from
+# applying an unrelated change until they recreate their cluster is a worse
+# outcome than the drift. A check warns each plan and lets the work proceed.
+#
+# It is worth warning about loudly, though, because two things downstream read
+# the module's VPC and both go quietly wrong when the cluster is not in it:
+#
+#   - `vpc_subnet_cidr` builds the node firewall's allow-vpc-intra-tcp/udp rules
+#     (firewall.tf) and is patched into the cloud-firewall-controller's VPC_CIDR.
+#     Pointed at the wrong VPC's range, those rules cover addresses no node has,
+#     so Cilium's VXLAN (8472) and health (4240) traffic is not actually allowed
+#     by the rules that exist to allow it.
+#   - `vpc_id`/`vpc_subnet_id` fill spec.cluster.databases.<name>.vpcId/subnetId.
+#     A Managed Postgres has no public endpoint, so attaching it to a VPC the
+#     nodes are not in yields a database the cluster cannot reach at all.
+#
+# Both are silent: nothing errors at apply time, and the diagnosis starts from a
+# symptom several layers away. Hence the ID in the message — the fix begins with
+# knowing which VPC the cluster is really in.
+check "cluster_is_in_this_modules_vpc" {
+  assert {
+    condition = tostring(linode_lke_cluster.this.vpc_id) == tostring(local.vpc_id)
+    error_message = format(
+      "cluster %s is attached to VPC %s, but this module manages VPC %s (subnet %s, %s).\n%s\n%s\n%s",
+      var.cluster_label,
+      tostring(linode_lke_cluster.this.vpc_id),
+      tostring(local.vpc_id),
+      linode_vpc_subnet.nodes.id,
+      var.vpc_subnet_cidr,
+      "  This cluster predates the module setting vpc_id, so LKE-E provisioned its own VPC and the one here is orphaned.",
+      "  Terraform CANNOT correct it: vpc_id is create-time only, so the move is a no-op the plan keeps re-proposing.",
+      "  Check before trusting vpc_subnet_cidr: `linode-cli vpcs subnets-list <live-vpc-id>`. If its range differs from the CIDR above, the node firewall's intra-VPC rules and any VPC-attached database are pointed at the wrong network.",
+    )
+  }
 }

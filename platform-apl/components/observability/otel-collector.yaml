@@ -1,0 +1,145 @@
+# Minimal OpenTelemetry Collector instance.
+#
+# Argo-synced with the observability component (previously a separate
+# `post-apl-bootstrap` tree kubectl-applied by bootstrap-openbao.yml — a split
+# whose stated reason was a server-side dry-run lint path that no longer
+# exists; today's checks build the manifest tree client-side only, which does
+# not resolve CRDs). The opentelemetry.io/v1beta1 CRD is registered by
+# apl-core's otel-operator helmfile, which races the first platform-bootstrap
+# sync: the app-level SkipDryRunOnMissingResource=true syncOption
+# (cluster-bootstrap/main.tf) keeps the missing CRD from failing the dry-run,
+# and the late sync-wave below + the app's retry budget (limit 20, capped 5m
+# backoff; argo-resync-nudger as the terminal backstop) re-applies until the
+# operator has registered it. Everything earlier-waved has already landed by
+# then, so the pre-CRD retries gate nothing. Riding the observability
+# component also fixes a latent bug in the old step: it applied the CR
+# unconditionally, which would hard-fail on an observability-disabled env
+# where the otel-operator (and its CRD) never installs.
+#
+# Why this exists: apl-core installs the otel-OPERATOR but does NOT create a
+# Collector instance. Without this CR the Service `otel-collector` doesn't
+# exist, and the `support-plane-alerts` OTelCollector scrape-health alert has
+# no target. An env that fronts the collector with an Istio Gateway routes to
+# `otel-collector.llz-observability.svc.cluster.local:4318`.
+#
+# Naming: the otel-operator creates the Service from the CR's metadata.name
+# with a `-collector` suffix. To get Service `otel-collector` the CR name MUST
+# be `otel`.
+#
+# Pipeline: OTLP-HTTP receiver → memory_limiter + batch → debug exporter
+# (stdout). INTENTIONALLY a no-op exporter for first bring-up — it makes the
+# Service exist and exercises the receive path without committing to a
+# downstream. Extend `exporters:` (loki / prometheusremotewrite / otlp) when a
+# real destination is wired. To enforce client auth, add a `bearertokenauth`
+# extension to the otlp receiver.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  # NAME MUST BE `otel` so the operator creates Service `otel-collector`.
+  name: otel
+  namespace: llz-observability
+  annotations:
+    # Last wave: the CRD may not exist until apl-core's helmfile installs the
+    # otel-operator; a failing apply here must not gate any other resource.
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: otlp-ingress
+spec:
+  mode: deployment
+  replicas: 1
+  config:
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+            include_metadata: true
+            # mTLS on the OTLP ingress. This receiver previously listened in the
+            # clear with no client authentication of any kind — the file's own
+            # header noted "to enforce client auth, add a bearertokenauth
+            # extension" as a TODO. Any pod that could reach :4318 could inject
+            # arbitrary telemetry.
+            #
+            # cert_file/key_file: the platform-otel-collector-tls Secret that
+            # otel-bootstrap-ca.yaml ALREADY ISSUES. That Certificate has existed
+            # and renewed this whole time while nothing mounted it — the serving
+            # cert was provisioned and then never used. This wires it up.
+            #
+            # client_ca_file: llz-client-ca, so callers must present an identity
+            # from the same root every other mTLS hop uses. mTLS rather than
+            # bearer tokens because there is no token to distribute here and the
+            # client-identity CA already exists.
+            #
+            # The operator mounts these from the CR's volumes/volumeMounts below.
+            tls:
+              cert_file: /etc/otel-tls/tls.crt
+              key_file: /etc/otel-tls/tls.key
+              client_ca_file: /etc/otel-client-ca/ca.crt
+              min_version: "1.2"
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 200
+        spike_limit_mib: 50
+      batch:
+        timeout: 5s
+        send_batch_size: 8192
+    exporters:
+      # Placeholder — emits to stdout (`kubectl logs deploy/otel-collector`).
+      # Replace/extend with real destinations when clients start sending data.
+      debug:
+        verbosity: detailed
+        sampling_initial: 5
+        sampling_thereafter: 200
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+  # TLS material for the OTLP receiver above. The OpenTelemetryCollector CR
+  # passes volumes/volumeMounts straight through to the generated Deployment.
+  volumes:
+    - name: otel-tls
+      secret:
+        secretName: platform-otel-collector-tls
+        defaultMode: 0444
+    # ca.crt only — the llz-client-ca root the receiver verifies callers against.
+    # Landed in this namespace by otel-client-ca.yaml's anchor Certificate.
+    - name: otel-client-ca
+      secret:
+        secretName: otel-client-ca
+        defaultMode: 0444
+        items:
+          - { key: ca.crt, path: ca.crt }
+  volumeMounts:
+    - { name: otel-tls, mountPath: /etc/otel-tls, readOnly: true }
+    - { name: otel-client-ca, mountPath: /etc/otel-client-ca, readOnly: true }
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  # PSS restricted compliance (llz-observability ships restricted).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
