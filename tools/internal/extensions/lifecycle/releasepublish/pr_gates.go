@@ -77,10 +77,20 @@ import (
 // built this probe. Triggering it on the throwaway PR while asserting nothing
 // about its verdict would leave the newest delivered gate in exactly the
 // unobserved state this verb exists to end.
+//
+// THE LIST IS NOT A CHOICE ANY MORE, and that is the fix for how it came to be
+// short. It was hand-maintained, so a delivered pull_request-gated job simply had
+// to be remembered here — and `Promotion pipeline up to date` was not. It failed
+// on the probe PR of every release-e2e from v0.0.47 on, in a run this verb graded
+// green, because a check it does not name was a check it did not read.
+// TestEveryPullRequestGatedJobIsAsserted (internal/cli) now derives this set from
+// llz-terraform.yml's own `if:` conditions and fails in the template repo when the
+// two disagree, so the next delivered PR gate cannot be forgotten the same way.
 var DefaultPRGateChecks = []string{
 	"Terraform Lint",
 	"Checkov IaC Security Scan",
 	"Repo readiness (upgrade prerequisites)",
+	"Promotion pipeline up to date",
 }
 
 // DefaultPRGateTouchPath is a file inside the terraform pipeline's paths: filter
@@ -202,6 +212,12 @@ type check struct {
 // ends the wait instead of burning the whole budget and then reporting a timeout.
 var pendingStates = map[string]bool{"PENDING": true, "QUEUED": true, "IN_PROGRESS": true, "WAITING": true, "REQUESTED": true}
 
+// extraSettlePolls is how much longer the poll loop waits, AFTER every wanted
+// check has settled, for the other checks on the PR to settle too — so a gate
+// that finishes a moment later is still read rather than missed. Bounded on
+// purpose: see the branch in awaitGateChecks that spends it.
+const extraSettlePolls = 6
+
 func isPending(state string) bool { return pendingStates[strings.ToUpper(state)] }
 
 // matchesCheck reports whether an observed check name is the wanted job.
@@ -279,6 +295,46 @@ func partitionChecks(raw []byte, want []string) (found []check, missing []string
 		found = append(found, *worst)
 	}
 	return found, missing, nil
+}
+
+// observedChecks reduces the payload to ONE ROW PER NAME — the worst state each
+// name carries — over every check on the PR, wanted or not.
+//
+// WHY THE VERB LOOKS AT CHECKS IT WAS NOT ASKED ABOUT. o.Checks is the list that
+// must APPEAR; it was also, wrongly, the list that could FAIL. A delivered gate
+// missing from it was therefore invisible in both directions: it could not be
+// reported absent, and it could not be reported red either. `Promotion pipeline
+// up to date` spent four releases failing on this PR while this verb printed
+// "All 3 PR-gated CI check(s) passed" over the top of it. The fixture repo is a
+// throwaway whose every check comes from the workflows this template delivers, so
+// a red row there is a delivered gate failing whatever its name — the presence
+// list has no business deciding which failures count.
+//
+// The same worst-row rule partitionChecks uses, for the same reason: a re-run
+// leaves both attempts in the payload, and trusting order is how a stale SUCCESS
+// comes to speak for the FAILURE that replaced it. Insertion order is preserved so
+// the diagnostic reads in the order gh reported.
+func observedChecks(raw []byte) ([]check, error) {
+	var all []check
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return nil, fmt.Errorf("parsing gh pr checks output: %w", err)
+	}
+	worst := make(map[string]check, len(all))
+	order := make([]string, 0, len(all))
+	for _, c := range all {
+		cur, seen := worst[c.Name]
+		if !seen {
+			order = append(order, c.Name)
+		}
+		if !seen || checkSeverity(c) > checkSeverity(cur) {
+			worst[c.Name] = c
+		}
+	}
+	out := make([]check, 0, len(order))
+	for _, n := range order {
+		out = append(out, worst[n])
+	}
+	return out, nil
 }
 
 // settled reports whether every found check has reached a terminal state.
@@ -498,7 +554,10 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			strings.Join(obs.missing, " / "), o.Instance, pr,
 			time.Duration(o.Retries-1)*o.Interval, o.TouchPath, seenMsg)
 	}
-	if bad := failures(obs.found); len(bad) > 0 {
+	// OVER EVERY CHECK ON THE PR, not just the ones o.Checks named — see
+	// observedChecks. This is the branch that was blind: a delivered gate absent
+	// from the list could fail here in silence, and one did, for four releases.
+	if bad := failures(obs.all); len(bad) > 0 {
 		var parts []string
 		for _, c := range bad {
 			parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.State))
@@ -545,7 +604,12 @@ func RunAssertInstancePRGates(o PRGatesOpts) error {
 			"excluded it, which IS a regression in the delivered gating: check the pull_request / head-repo "+
 			"conditions on %s#%s", strings.Join(parts, ", "), o.Instance, pr)
 	}
-	fmt.Printf("All %d PR-gated CI check(s) passed on %s#%s\n", len(o.Checks), o.Instance, pr)
+	// THE SENTENCE MAY ONLY CLAIM WHAT WAS COMPARED. "All 3 PR-gated CI check(s)
+	// passed" was printed over a run in which a fourth delivered check had failed —
+	// true about the three, and read by everyone as a verdict on the PR. Both
+	// numbers now, so a gap between them is visible in the log rather than implied.
+	fmt.Printf("All %d asserted PR-gated CI check(s) passed on %s#%s, and none of the %d check(s) on it failed\n",
+		len(o.Checks), o.Instance, pr, len(obs.all))
 	return nil
 }
 
@@ -606,7 +670,7 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 	out, err := gatesGH(o.Token, o.Host, "pr", "create", "--repo", o.Instance, "--base", o.Base, "--head", branch,
 		"--draft",
 		"--title", "e2e: PR-gated CI gates",
-		"--body", "Throwaway: proves tf-lint + checkov run in the pinned image. Opened as a draft — it is a probe, not a review request.")
+		"--body", "Throwaway: proves the pull_request-gated CI jobs run in the pinned image. Opened as a draft — it is a probe, not a review request.")
 	if pr := prNumber(out); pr != "" {
 		return pr, nil
 	}
@@ -678,6 +742,7 @@ func openGatePR(o PRGatesOpts, work, branch string) (string, error) {
 // for.
 func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 	obs := gateObservation{missing: append([]string(nil), o.Checks...)}
+	grace := 0
 	sleepUnlessLast := func(i int) {
 		if i < o.Retries-1 {
 			gatesSleep(o.Interval)
@@ -728,10 +793,34 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 			sleepUnlessLast(i)
 			continue
 		}
-		obs.found, obs.missing, obs.raw = f, m, out
+		a, err := observedChecks(out)
+		if err != nil {
+			obs.parseErr = fmt.Errorf("%w (gh printed %q)", err, truncate(strings.TrimSpace(string(out)), 300))
+			sleepUnlessLast(i)
+			continue
+		}
+		obs.found, obs.all, obs.missing, obs.raw = f, a, m, out
 		obs.parseErr, obs.ghErr, obs.priorUnreadable = nil, nil, nil
 		if len(m) == 0 && settled(f) {
-			return obs
+			// The wanted checks have all reported. Everything else on the PR is
+			// usually terminal by now — the delivered gates are jobs of ONE workflow
+			// run, so they finish together — and when it is, stop here exactly as
+			// before.
+			if settled(a) {
+				return obs
+			}
+			// A SIBLING STILL RUNNING BUYS A BOUNDED GRACE, NOT THE WHOLE BUDGET.
+			// Waiting for every check on the PR would make an unrelated slow job
+			// spend the full retry budget (20 minutes by default) on every release
+			// e2e, and then time out over checks this verb never asserted — paying
+			// the cost of a failure to observe nothing. Waiting for none of them is
+			// what let a red gate settle one poll after the verb had already
+			// declared the run green. A few extra polls covers the real case (a job
+			// that started late in the same run) and cannot run away.
+			grace++
+			if grace >= extraSettlePolls {
+				return obs
+			}
 		}
 		sleepUnlessLast(i)
 	}
@@ -744,7 +833,14 @@ func awaitGateChecks(o PRGatesOpts, pr string) gateObservation {
 // gates; ghErr is gh's own complaint about a PR that reported no checks, which is
 // a fact ABOUT the gates and belongs in that diagnosis rather than in place of it.
 type gateObservation struct {
-	found    []check
+	found []check
+	// all is every check on the PR, one worst row per name — the superset `found`
+	// is drawn from. Kept SEPARATE rather than replacing found: the presence,
+	// pending and inconclusive verdicts are still about the checks this verb
+	// ASKED for (an unwanted SKIPPED row is the delivered pipeline's apply jobs
+	// correctly not running on a pull request, not a regression), while a check
+	// that RAN AND FAILED is a failure whichever list it is on.
+	all      []check
 	missing  []string
 	raw      []byte // last payload; non-nil once anything at all was observed
 	parseErr error  // gh produced output this verb could not parse
