@@ -109,13 +109,16 @@ func TestPlanPrune(t *testing.T) {
 	}
 }
 
-// fakeBao records calls and answers `policy read` from a canned manifest.
+// fakeBao is a one-policy OpenBao: `policy read` of the manifest answers with
+// whatever was last written (or deleted), so the read-back is exercised for real.
 type fakeBao struct {
-	manifest string // "" = no manifest
+	manifest string // current stored text; "" = no manifest
 	readErr  error  // non-nil: a read failure that is NOT "no such policy"
 	failArgs string // a call whose joined args contain this fails
-	calls    []string
-	written  string
+	// strip simulates an OpenBao that drops comment lines on store.
+	strip   bool
+	calls   []string
+	written string
 }
 
 func (f *fakeBao) Run(_, _, stdin string, args ...string) (string, string, error) {
@@ -134,6 +137,18 @@ func (f *fakeBao) Run(_, _, stdin string, args ...string) (string, string, error
 		return f.manifest, "", nil
 	case strings.HasPrefix(joined, "policy write "+extManifestPolicy):
 		f.written = stdin
+		f.manifest = stdin
+		if f.strip {
+			var kept []string
+			for _, l := range strings.Split(stdin, "\n") {
+				if !strings.HasPrefix(l, "#") {
+					kept = append(kept, l)
+				}
+			}
+			f.manifest = strings.Join(kept, "\n")
+		}
+	case joined == "policy delete "+extManifestPolicy:
+		f.manifest = ""
 	}
 	return "", "", nil
 }
@@ -155,6 +170,21 @@ func TestReconcileExtensionManifest(t *testing.T) {
 		Roles:    append(desiredManifest(ext).Roles, "old-role"),
 	})
 
+	t.Run("an OpenBao that drops the record's comments fails the run", func(t *testing.T) {
+		f := &fakeBao{strip: true}
+		err := reconcileExtensionManifest(f, "p", "t", ext)
+		if err == nil || !strings.Contains(err.Error(), "not preserving the record") {
+			t.Fatalf("a manifest that does not read back must fail the run, got %v", err)
+		}
+	})
+	t.Run("a manifest that survives deletion fails the run", func(t *testing.T) {
+		f := &fakeBao{manifest: cur}
+		// Make the delete a silent no-op: the record is still there afterwards.
+		g := &stickyBao{fakeBao: f}
+		if err := reconcileExtensionManifest(g, "p", "t", clusterspec.OpenBaoExtensions{}); err == nil {
+			t.Fatal("a record that is still there after its delete must fail the run")
+		}
+	})
 	t.Run("never declared: one read, nothing written", func(t *testing.T) {
 		f := &fakeBao{}
 		if err := reconcileExtensionManifest(f, "p", "t", clusterspec.OpenBaoExtensions{}); err != nil {
@@ -210,4 +240,23 @@ func TestReconcileExtensionManifest(t *testing.T) {
 			}
 		}
 	})
+}
+
+// stickyBao is a fakeBao whose manifest delete reports success but keeps it.
+type stickyBao struct{ *fakeBao }
+
+func (s *stickyBao) Run(pod, token, stdin string, args ...string) (string, string, error) {
+	if strings.Join(args, " ") == "policy delete "+extManifestPolicy {
+		s.calls = append(s.calls, "policy delete "+extManifestPolicy)
+		return "", "", nil
+	}
+	return s.fakeBao.Run(pod, token, stdin, args...)
+}
+
+func TestSameManifestIsOrderInsensitive(t *testing.T) {
+	a := extManifest{Policies: []string{"b", "a"}, Roles: []string{"r"}}
+	b := extManifest{Policies: []string{"a", "b"}, Roles: []string{"r"}}
+	if !sameManifest(a, b) || sameManifest(a, extManifest{Policies: []string{"a"}, Roles: []string{"r"}}) {
+		t.Fatal("sameManifest must compare as sets")
+	}
 }

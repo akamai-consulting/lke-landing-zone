@@ -466,7 +466,12 @@ what it created in the deny-only policy `llz-spec-openbao-manifest` and deletes
 only names recorded there, so hand-made OpenBao objects are never touched; the
 first run after upgrading records without pruning. A removed **mount** is never
 disabled — that destroys its keys — so the run warns and leaves it to you
-(`bao secrets disable <mount>/`).
+(`bao secrets disable <mount>/`). Two consequences to know: deleting a role does
+not revoke tokens it already issued, so if their policy is still declared
+elsewhere they keep access until their TTL runs out (at most 1h, the `ttl` cap);
+and declaring a policy or role under the name of one you made by hand takes it
+over — `bao-configure` overwrites and records it, so removing it from the spec
+later deletes it.
 
 | field | meaning |
 |---|---|

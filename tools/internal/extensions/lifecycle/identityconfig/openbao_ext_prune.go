@@ -225,11 +225,54 @@ func reconcileExtensionManifest(bao baoRunner, pod, token string, ext clusterspe
 		if o, e, err := bao.Run(pod, token, "", "policy", "delete", extManifestPolicy); err != nil {
 			return fmt.Errorf("delete spec.openbao manifest: %s", strings.TrimSpace(firstNonEmpty(e, o)))
 		}
-		return nil
-	}
-	if o, e, err := bao.Run(pod, token, renderManifest(cur), "policy", "write", extManifestPolicy, "-"); err != nil {
+	} else if o, e, err := bao.Run(pod, token, renderManifest(cur), "policy", "write", extManifestPolicy, "-"); err != nil {
 		return fmt.Errorf("write spec.openbao manifest: %s", strings.TrimSpace(firstNonEmpty(e, o)))
 	}
-	fmt.Printf("spec.openbao manifest recorded (%d policies, %d roles, %d mounts).\n", len(cur.Policies), len(cur.Roles), len(cur.Mounts))
+	if err := verifyManifest(bao, pod, token, cur); err != nil {
+		return err
+	}
+	fmt.Printf("spec.openbao manifest recorded and read back (%d policies, %d roles, %d mounts).\n", len(cur.Policies), len(cur.Roles), len(cur.Mounts))
 	return nil
+}
+
+// verifyManifest reads the record back and requires it to say exactly what was
+// written (or, for an emptied spec, to be gone).
+//
+// WHY. Revocation rests on one assumption nothing else checks: that OpenBao
+// returns a policy's comment lines from `policy read`. If it stripped or
+// normalised them, every later run would parse an EMPTY manifest and prune
+// nothing — while logging "recorded" — so a removed role would keep its grants
+// under a run that reports success. Reading back turns that assumption into a
+// failure on the first bao-configure that writes a manifest, which release-e2e
+// does.
+func verifyManifest(bao baoRunner, pod, token string, want extManifest) error {
+	out, errOut, err := bao.Run(pod, token, "", "policy", "read", extManifestPolicy)
+	if want.empty() {
+		if err != nil && noManifestRe.MatchString(errOut+out) {
+			return nil
+		}
+		return fmt.Errorf("spec.openbao manifest (%s) should be deleted but still reads back — the next run would revoke against a stale record", extManifestPolicy)
+	}
+	if err != nil {
+		return fmt.Errorf("read back spec.openbao manifest (%s): %s", extManifestPolicy, strings.TrimSpace(firstNonEmpty(errOut, out)))
+	}
+	got, err := parseManifest(out)
+	if err != nil {
+		return fmt.Errorf("spec.openbao manifest (%s) does not read back cleanly: %w", extManifestPolicy, err)
+	}
+	if !sameManifest(got, want) {
+		return fmt.Errorf("spec.openbao manifest (%s) reads back as %+v, not the %+v written — OpenBao is not preserving the record, so removed entries could never be revoked", extManifestPolicy, got, want)
+	}
+	return nil
+}
+
+// sameManifest compares as sets. Pure.
+func sameManifest(a, b extManifest) bool {
+	eq := func(x, y []string) bool {
+		x, y = append([]string(nil), x...), append([]string(nil), y...)
+		sort.Strings(x)
+		sort.Strings(y)
+		return strings.Join(x, ",") == strings.Join(y, ",")
+	}
+	return eq(a.Policies, b.Policies) && eq(a.Roles, b.Roles) && eq(a.Mounts, b.Mounts)
 }
