@@ -25,6 +25,9 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
 #      so a green provision means "converged AND Loki is S3-backed".
+#   2b. day-2     — dispatch the delivered cron workflows against the converged
+#      cluster: scheduled-checks.yml, and secret-rotation.yml as a dry run
+#      (`llz ci assert-instance-workflow`), requiring every named check to RUN.
 #   3. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
 #      runs once provisioning started, so a paid cluster is never leaked.
 #   4. gate       — pass only if provision + teardown all succeeded.
@@ -344,12 +347,101 @@ jobs:
   # container-init + checkout + fresh kubeconfig/ACL cycle (~1-2m) from the gate.
   # The provision job's success now means "converged AND Loki is S3-backed".
 
+  # ── 2b. Day-2: the delivered cron workflows, run against the live cluster ────
+  # Until these two jobs the lane drove exactly ONE delivered workflow
+  # (terraform.yml). scheduled-checks.yml and secret-rotation.yml are cron entry
+  # points nothing in this repo ever executed, and the caller stub is where the
+  # failure lands: secret-rotation.yml died at `startup_failure` on a live adopter
+  # every night for months (caller job narrower than a callee's id-token: write —
+  # no jobs, no logs, no notification). The static gate holds that one shape; only
+  # running the workflow sees a workflow_call contract that drifted, a composite
+  # that fails at runtime, or a verb that resolves and then errors on real state.
+  #
+  # BETWEEN CONVERGE AND TEARDOWN, because the checks need a cluster to read, and
+  # teardown `needs:` both jobs so it cannot start while a dispatched run is still
+  # holding the control-plane ACL. They do not gate teardown: it still runs
+  # whatever they conclude.
+  #
+  # THE VERDICT IS PER CHECK, NOT PER RUN. Every cluster-touching job takes its
+  # kubeconfig with `allow-missing`, so a run whose cluster access silently failed
+  # is GREEN with every check skipped. `llz ci assert-instance-workflow` requires
+  # each named check to have RUN, for each deployment named here, and the expected
+  # set is in the verb's profile table — never read back from the run.
+  #
+  # Skipped on dry_run (no cluster) and when provision did not succeed (nothing to
+  # check against, and provision's own red already says why).
+  day2-scheduled-checks:
+    name: Day-2 — scheduled-checks.yml runs every check against the cluster
+    needs: provision
+    if: ${{ !inputs.dry_run && needs.provision.result == 'success' }}
+    runs-on: ubuntu-latest
+    # The verb's own budget for this profile is 45 minutes; the rest is checkout,
+    # the llz build and dispatch latency.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-llz
+        with:
+          install-path: ${{ github.workspace }}/bin/llz
+      - name: Dispatch scheduled-checks.yml and require every check to have run and passed
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-workflow --profile scheduled-checks --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+
+  # secret-rotation.yml as a DRY RUN, one dispatch per credential lifecycle. A
+  # real rotation here would mint and revoke ACCOUNT-scoped Linode PATs and
+  # TF-state OBJ keys on an account shared with other lanes, so every *-apply
+  # input is an explicit false; the verb's coupling test feeds those inputs through
+  # the real rotation router and fails if anything would be armed, and at runtime a
+  # mutating job (lke-admin, in-cluster PAT propagate, state passphrase, db-admin)
+  # that executes anyway fails the step. What a dry run still proves: the caller
+  # stub starts (the startup_failure class), the permissions contract, input
+  # forwarding, scope routing, the discover matrix, the linode-credentials
+  # composite, and that `llz credentials` authenticates and reads the account.
+  #
+  # lke-admin is deliberately NOT exercised: it has no dry-run mode, and a
+  # half-finished kubeconfig rotation is the one failure that could strand the
+  # teardown below and leak a cluster.
+  #
+  # Steps run in sequence (not a parallel matrix) because each dispatch is found
+  # among the workflow's runs by elimination; four concurrent dispatches of the
+  # same workflow would make that ambiguous. `!cancelled()` so one red scope does
+  # not hide the verdict on the other three.
+  day2-secret-rotation:
+    name: Day-2 — secret-rotation.yml dry runs start, route and authenticate
+    needs: provision
+    if: ${{ !inputs.dry_run && needs.provision.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Four dispatches at up to 20 minutes each is the theoretical ceiling; each
+    # measured dry-run job is a few minutes. Bounded well short of 4x20 because a
+    # rotation dispatch that needs anywhere near its budget is itself the finding.
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-llz
+        with:
+          install-path: ${{ github.workspace }}/bin/llz
+      - name: Linode PAT create (dry run)
+        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+      - name: Linode PAT revoke-old (dry run)
+        if: ${{ !cancelled() }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+      - name: TF-state OBJ key create (dry run)
+        if: ${{ !cancelled() }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+      - name: TF-state OBJ key revoke-old (dry run)
+        if: ${{ !cancelled() }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+
   # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
   teardown:
     name: Teardown (destroy + sweep)
-    needs: [instantiate, provision]
+    needs: [instantiate, provision, day2-scheduled-checks, day2-secret-rotation]
     # Run whenever provisioning actually started; skip only for a dry run (plan
-    # only — nothing was created).
+    # only — nothing was created). The day-2 jobs are in needs: only so this
+    # WAITS for them — always() means their result never stops it.
     if: ${{ always() && needs.provision.result != 'skipped' && (!inputs.dry_run) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -400,28 +492,31 @@ jobs:
   # ── 5. Gate — the release passes only if every stage above was green ─────────
   gate:
     name: E2E gate
-    needs: [llz-functional, provision, teardown]
+    needs: [llz-functional, provision, day2-scheduled-checks, day2-secret-rotation, teardown]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     # Bounded from measured history (p50 0.1 / max 0.1); GitHub's default is 6h.
     timeout-minutes: 5
     steps:
-      - name: Require llz-functional + provision + teardown to have succeeded
+      # ONE LIST OF RESULTS, judged by one loop. llz-functional and provision gate
+      # both modes (llz-functional is no-cloud; provision also asserts Loki is
+      # S3-backed via assert_loki=true, so the former `validate` result folds into
+      # it). The day-2 jobs and teardown only exist when a cluster was built, so
+      # the expression adds them on a full run and nothing on a dry run. Written as
+      # data + a loop rather than one `[[ ]]` per job so adding a stage is one word
+      # in the expression, not more untestable inline bash.
+      - name: Require every stage to have succeeded
         env:
-          F: ${{ needs.llz-functional.result }}
-          P: ${{ needs.provision.result }}
-          T: ${{ needs.teardown.result }}
+          RESULTS: >-
+            llz-functional=${{ needs.llz-functional.result }}
+            provision=${{ needs.provision.result }}
+            ${{ !inputs.dry_run && format('day2-scheduled-checks={0} day2-secret-rotation={1} teardown={2}', needs.day2-scheduled-checks.result, needs.day2-secret-rotation.result, needs.teardown.result) || '' }}
         run: |
           set -euo pipefail
-          echo "llz-functional=$F provision=$P teardown=$T (dry_run=${DRY_RUN})"
+          echo "${RESULTS} (dry_run=${DRY_RUN})"
           fail=0
-          # F + P gate both modes (F is no-cloud). provision now also asserts Loki
-          # is S3-backed (assert_loki=true → bootstrap-openbao converge), so the
-          # former separate `validate` result folds into P. T only when a cluster
-          # was built.
-          [[ "$F" == "success" ]] || { echo "::error::llz-functional $F"; fail=1; }
-          [[ "$P" == "success" ]] || { echo "::error::provision $P"; fail=1; }
-          if [[ "${DRY_RUN}" != "true" ]]; then
-            [[ "$T" == "success" ]] || { echo "::error::teardown $T — a cluster may have leaked; check ${INSTANCE_REPO} state"; fail=1; }
-          fi
+          for r in ${RESULTS}; do
+            [[ "${r#*=}" == success ]] || { echo "::error::${r%%=*} ${r#*=}"; fail=1; }
+          done
+          [[ "${RESULTS}" != *teardown=* || "${RESULTS}" == *teardown=success* ]] || echo "::error::teardown did not succeed — a cluster may have leaked; check ${INSTANCE_REPO} state"
           exit $fail

@@ -240,6 +240,25 @@ func (p rotationPlan) outputLines() []string {
 	}
 }
 
+// RouteOutputs is the routing decision as the `key=value` step outputs the
+// rotation jobs gate on — exactly what RunRotationPlan writes to GITHUB_OUTPUT,
+// without writing it.
+//
+// EXPORTED FOR ONE CALLER, a coupling test. The release-e2e lane dispatches
+// secret-rotation.yml as a DRY RUN (`llz ci assert-instance-workflow`), and the
+// property that makes that safe on a shared Linode account — nothing armed,
+// no lke-admin rotation — is decided HERE, not in the profile that names the
+// inputs. A test that restated the table would pass while this one routed the
+// e2e dispatch into a real mint; feeding the profile's real inputs through the
+// real router is the only version of that check that cannot drift.
+func RouteOutputs(in RotationInputs) ([]string, error) {
+	p, err := routeRotation(in)
+	if err != nil {
+		return nil, err
+	}
+	return p.outputLines(), nil
+}
+
 // RunRotationPlan maps the dispatch inputs onto the job-gating outputs the
 // rotation jobs key on. A routing refusal is an error: nothing downstream runs.
 func RunRotationPlan(d Deps, in RotationInputs) error {

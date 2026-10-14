@@ -357,3 +357,31 @@ workflow for two reasons:
 
 CVE-auditing the tools module belongs in the template repo's own CI — see
 `docs/designs/cross-org-reuse-pattern.md`.
+
+---
+
+## How release-e2e exercises this workflow
+
+Until #421 nothing in the template repo ran this workflow; its verbs were
+unit-tested and its caller stub was not. The release lane's
+`day2-scheduled-checks` job now dispatches `scheduled-checks.yml` on the
+converged e2e instance, between converge and teardown:
+
+```
+llz ci assert-instance-workflow --profile scheduled-checks --instance <repo> --deployment e2e
+```
+
+A dispatch runs **every** job (each cron selects a subset; `workflow_dispatch`
+selects them all). The verdict is per check, not per run: every cluster-touching
+job takes its kubeconfig through `cluster-access` with `allow-missing`, so a run
+whose cluster access silently failed is green with every check skipped. The
+verb requires each check its profile names — OpenBao/ESO, cert-manager,
+lke-admin age, app-scope converge, the credential single pane, both
+PrometheusRule checks, and the drift comparison — to have **run** and passed,
+for each `--deployment` the lane names.
+
+Known limit: the e2e instance carries a minimal `.copier-answers.yml` with no
+`_src_path`/`_commit`, so `template-drift` resolves its provenance from the
+checkout's own remote and compares the instance with itself. The job and its
+step run (which is what this proves); the drift *number* it reports there is not
+meaningful.

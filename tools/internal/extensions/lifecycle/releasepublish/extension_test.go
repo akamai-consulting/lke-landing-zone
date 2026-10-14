@@ -37,7 +37,7 @@ func TestUnbindableHalfStaysMarked(t *testing.T) {
 	if !strings.Contains(inc, "publish-charts") {
 		t.Error("the note no longer names the half that cannot be declared")
 	}
-	want := map[string]bool{"pin-images": true, "assert-pr-gates": true}
+	want := map[string]bool{"pin-images": true, "assert-pr-gates": true, "assert-day2-workflows": true}
 	for _, b := range Extension().Bindings {
 		if !want[b.Name] {
 			t.Errorf("undeclared binding %q — if publish-charts gained one, it must have acquired "+

@@ -36,6 +36,7 @@ inputs are forwarded by the caller as `workflow_call` inputs.
 - [Job: `revoke-linode-pat`](#job-revoke-linode-pat)
 - [Job: `create-tf-state-key`](#job-create-tf-state-key)
 - [Job: `revoke-tf-state-key`](#job-revoke-tf-state-key)
+- [How release-e2e exercises this workflow](#how-release-e2e-exercises-this-workflow)
 
 <!-- /toc -->
 
@@ -406,3 +407,34 @@ and `environment: infra-<first deployment>` would be invalid.
 Read-only drain, but the `LINODE_API_TOKEN` it lists keys with is an
 `infra-<env>` environment secret — read it from the first deployment's
 environment.
+
+---
+
+## How release-e2e exercises this workflow
+
+Until #421 nothing in the template repo ran this workflow — the static
+`reusable-workflow-caller-permissions` gate was the only thing standing between
+the caller stub and another months-long `startup_failure`. The release lane's
+`day2-secret-rotation` job now dispatches `secret-rotation.yml` on the e2e
+instance once per credential lifecycle, as a **dry run**:
+
+```
+llz ci assert-instance-workflow --profile rotation-linode-pat --instance <repo> --deployment e2e
+```
+
+(and `rotation-linode-pat-revoke`, `rotation-tf-state-key`,
+`rotation-tf-state-key-revoke`). Every `*-apply` input is passed as an explicit
+`false`. The verb's coupling test feeds those inputs through the real
+`llz ci rotation-plan` router and fails if any mutation would be armed, and at
+runtime a run that executes `rotate`, `propagate-linode-pat`,
+`rotate-state-passphrase` or `rotate-db-admin` fails the lane.
+
+What a dry run proves: the stub starts (the `startup_failure` class), its
+permissions and input forwarding match the body, the router accepts the
+confirmation phrases, `discover` emits the deployment, and the
+`linode-credentials` composite runs `llz credentials` against the account with
+the instance's real token. What it does not prove: a mint, a GitHub secret
+write, a revoke, or the `lke-admin` rotation — which has no dry-run mode, and
+whose half-finished failure is the one that could strand the lane's teardown.
+If you rename a job or step the profile names, `TestInstanceWorkflowProfilesMatchTheDeliveredWorkflows`
+fails at PR time.

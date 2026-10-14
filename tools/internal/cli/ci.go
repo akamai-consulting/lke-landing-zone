@@ -216,8 +216,11 @@ func ciCmd() *cobra.Command {
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow,
 	// then prove the delivered pull_request-gated jobs (tf-lint, checkov) actually
-	// run and pass in that pinned image — nothing had ever triggered them.
-	c.AddCommand(releasepublish.PinInstanceImagesCmd(), releasepublish.AssertInstancePRGatesCmd())
+	// run and pass in that pinned image — nothing had ever triggered them. The
+	// third is the lane's day-2 half: dispatch a delivered cron workflow
+	// (scheduled-checks, secret-rotation as a dry run) on the converged instance
+	// and prove its checks ran — nothing had ever executed those stubs (#421).
+	c.AddCommand(releasepublish.PinInstanceImagesCmd(), releasepublish.AssertInstancePRGatesCmd(), releasepublish.AssertInstanceWorkflowCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
