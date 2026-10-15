@@ -212,6 +212,16 @@ func ObjVeleroBucket(prefix, env string) string {
 	return objLabel(prefix, "velero", env)
 }
 
+// ObjCnpgBucket is the bucket apl-core's CNPG backups go to when the cnpgBackup
+// component is on: the obj overlay names it as buckets.cnpg (RenderObjOverlayEnv),
+// which apl-core's otomi-db chart turns into every ObjectStore's destinationPath;
+// the platform key is scoped to it (the obj-platform rotation-table entry —
+// apl-core has no per-app key, so it is NOT a dedicated one); and the backup gate
+// reads it back. One derivation, so the four cannot name different buckets.
+func ObjCnpgBucket(prefix, env string) string {
+	return objLabel(prefix, "cnpg", env)
+}
+
 // ObjBucketLabels are EVERY bucket the llz-object-storage module creates for a
 // deployment, in module order. The preflights that ask "are this deployment's
 // buckets there?" read this rather than each keeping a literal list, which is how
@@ -219,7 +229,9 @@ func ObjVeleroBucket(prefix, env string) string {
 // list existed when the fifth (openbao-backup) arrived.
 //
 // It is NOT the scope of any one key — the broad platform key deliberately does
-// not cover the backup bucket. Use it for presence, never for grants.
+// not cover the openbao-backup or velero buckets (it DOES cover cnpg: apl-core's
+// CNPG backups can only authenticate with it). Use it for presence, never for
+// grants.
 func ObjBucketLabels(prefix, env string) []string {
 	if prefix == "" || env == "" {
 		return nil
@@ -231,6 +243,7 @@ func ObjBucketLabels(prefix, env string) []string {
 		ObjHarborRegistryBucket(prefix, env),
 		ObjOpenBaoBackupBucket(prefix, env),
 		ObjVeleroBucket(prefix, env),
+		ObjCnpgBucket(prefix, env),
 	}
 }
 

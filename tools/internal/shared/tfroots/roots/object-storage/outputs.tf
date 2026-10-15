@@ -27,6 +27,11 @@ output "velero_bucket" {
   value       = module.object_storage.velero_bucket
 }
 
+output "cnpg_bucket" {
+  description = "CloudNativePG backup bucket label for this region (apl-core's platformBackups, when the cnpgBackup component is on)."
+  value       = module.object_storage.cnpg_bucket
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster so destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = module.object_storage.s3_endpoint

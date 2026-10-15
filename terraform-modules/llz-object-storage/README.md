@@ -1,7 +1,7 @@
 # `object-storage`
 
 Linode Object Storage buckets for a platform's container registry, log
-storage, OpenBao Raft snapshots, and Velero backups. **Buckets only** — the scoped access keys are NOT Terraform-managed.
+storage, OpenBao Raft snapshots, Velero backups, and CloudNativePG database backups. **Buckets only** — the scoped access keys are NOT Terraform-managed.
 
 > **MAJOR interface change (SemVer):** earlier releases minted the Loki/Harbor
 > scoped keys here with a 120-day `time_rotating` clock and exported them as
@@ -33,7 +33,7 @@ setting values instead of copying YAML. The operational scars travel with the mo
 
 | Resource | Count | Notes |
 |---|---|---|
-| `linode_object_storage_bucket` | 6 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>`, `<prefix>-velero-<suffix>` |
+| `linode_object_storage_bucket` | 7 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>`, `<prefix>-velero-<suffix>`, `<prefix>-cnpg-<suffix>` |
 
 The `openbao-backup` bucket holds OpenBao Raft snapshots (barrier-encrypted
 ciphertext). It is its own bucket so the llz-minted backup key can be scoped to
@@ -52,6 +52,17 @@ is created on every deployment and stays empty unless the component is enabled; 
 scoped key is minted by llz only where it is. Versioned like `openbao-backup`, with
 noncurrent versions expiring after `velero_noncurrent_days` (default 14).
 
+The `cnpg` bucket holds apl-core's CloudNativePG database backups (Harbor and
+Keycloak: barman base backups plus the continuous WAL archive) when the
+`cnpgBackup` component is on — see
+`docs/runbooks/cnpg-backup-restore.md`.
+Unlike `openbao-backup` and `velero` it has **no key of its own**: apl-core gives
+every app one object-storage credential, so the platform key Loki and Harbor use
+is scoped to this bucket too, and anything holding it can delete database
+backups. Versioning with noncurrent versions kept for `cnpg_noncurrent_days`
+(default 30) is the mitigation. Created on every deployment; empty unless the
+component is enabled.
+
 ## Inputs
 
 | Variable | Type | Default | Description |
@@ -61,16 +72,17 @@ noncurrent versions expiring after `velero_noncurrent_days` (default 14).
 | `label_prefix` | string | `"platform"` | Bucket label prefix. **Override per sibling deployment** so labels don't collide. Key labels (minted by llz) mirror it. |
 | `openbao_backup_noncurrent_days` | number | `30` | Days a deleted/overwritten OpenBao snapshot stays recoverable as a noncurrent version in the versioned `openbao-backup` bucket. |
 | `velero_noncurrent_days` | number | `14` | Days a deleted/overwritten Velero backup object stays recoverable as a noncurrent version in the versioned `velero` bucket. |
+| `cnpg_noncurrent_days` | number | `30` | Days a deleted/overwritten CNPG backup object (base backup or WAL segment) stays recoverable as a noncurrent version in the versioned `cnpg` bucket. |
 
 ## Outputs
 
-`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `velero_bucket`, `s3_endpoint`.
+`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `velero_bucket`, `cnpg_bucket`, `s3_endpoint`.
 
 ## Provider
 
 Inherits the `linode` provider from the calling root (configure
 `provider "linode" { token = … }` there). The root's provider must also be able to
-make S3 calls for the `openbao-backup` and `velero` buckets' versioning and lifecycle rules:
+make S3 calls for the `openbao-backup`, `velero` and `cnpg` buckets' versioning and lifecycle rules:
 set `obj_use_temp_keys = true` (as the embedded root does) or supply
 `obj_access_key`/`obj_secret_key`.
 
@@ -86,7 +98,7 @@ set `obj_use_temp_keys = true` (as the embedded root does) or supply
 ```hcl
 provider "linode" {
   token             = var.linode_token
-  obj_use_temp_keys = true # versioning + lifecycle on the openbao-backup and velero buckets
+  obj_use_temp_keys = true # versioning + lifecycle on the openbao-backup, velero and cnpg buckets
 }
 
 module "object_storage" {

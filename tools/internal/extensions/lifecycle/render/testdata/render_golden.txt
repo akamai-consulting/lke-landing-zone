@@ -1766,7 +1766,7 @@ label_prefix = "goldeninst"
 --- terraform-iac-bootstrap/object-storage/backend.tf  sha256=35ab77b664436bc69caf9b63cf2218279689ea451acb552b41d03cc09dac903f  bytes=1109
 --- terraform-iac-bootstrap/object-storage/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/object-storage/main.tf  sha256=be8c7e2043de7ae2fcdea9ea9b2ec57a8b33f7b3b292a197b2e92a869199619e  bytes=1227
---- terraform-iac-bootstrap/object-storage/outputs.tf  sha256=c789265c51e0978c3837035bf9e26112e0d2d039d759e329a476ef1107b81b68  bytes=1670
+--- terraform-iac-bootstrap/object-storage/outputs.tf  sha256=c2a50c292de456dbbedd194085880d7928f4bd38210b363c1b83cc02002043b8  bytes=1881
 === terraform-iac-bootstrap/object-storage/prod.tfvars
 # object-storage — Linode Object Storage buckets (registry + logs). Consumed by
 # Harbor and Loki. Buckets only: the scoped access keys are minted by
@@ -1820,7 +1820,7 @@ obj_cluster = "us-sea-1"
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
 # TF_VAR_linode_token Linode account API token (object-storage:read_write)
 --- terraform-iac-bootstrap/object-storage/variables.tf  sha256=4e19d9244519fe2e3f48e4166c8d7ccb338d71cb9165be218fb5d83e171479c7  bytes=2990
---- terraform-iac-bootstrap/object-storage/versions.tf  sha256=e3e7acf289aff7e50fb7ff23f8fed6ae4bb925f9671c67b4dc95d212d8b60e23  bytes=675
+--- terraform-iac-bootstrap/object-storage/versions.tf  sha256=fb61319500e9eeb3f4001a70b4a7a12635a3b4812ad63278b4efd40d891277eb  bytes=681
 --- terraform-iac-bootstrap/vpc/backend.tf  sha256=5079fd70224c8b0a7a4ba7229ca655b7d779ee5e2d80bed952db0b4d40ab7081  bytes=1151
 --- terraform-iac-bootstrap/vpc/encryption.tf  sha256=9d1102e1e7be771140534a8cac12fb8b215cf7b27eed93a91cdaadce72f8e5d8  bytes=4243
 --- terraform-iac-bootstrap/vpc/main.tf  sha256=1e1abaab4ae5dbe4cbfd1b359c6825cd7c7fef661315cff36cf7a7aa540accce  bytes=843

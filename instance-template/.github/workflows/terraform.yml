@@ -127,7 +127,7 @@ on:
         required: false
         type: string
       drain_data_buckets:
-        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images. Also the consent a module=object-storage destroy needs to delete the OpenBao backup and Velero buckets while they hold backups (it refuses otherwise).'
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images. Also the consent a module=object-storage destroy needs to delete the OpenBao backup, Velero and CNPG buckets while they hold backups (it refuses otherwise).'
         required: false
         type: boolean
         default: false

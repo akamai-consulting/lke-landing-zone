@@ -22,6 +22,11 @@ output "velero_bucket" {
   value       = linode_object_storage_bucket.velero.label
 }
 
+output "cnpg_bucket" {
+  description = "CloudNativePG backup bucket label for this region. apl-core's platformBackups writes the Harbor and Keycloak database backups here when the cnpgBackup component is on; llz render derives the same label from the instance spec (clusterspec.ObjCnpgBucket) for the obj overlay's buckets.cnpg rather than reading this output, and a coupling test holds the two together."
+  value       = linode_object_storage_bucket.cnpg.label
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (the full endpoint host, e.g. 'us-ord-10' → E3), which the buckets above are pinned to via endpoint_type — so this host actually serves them, and destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = "https://${var.obj_cluster}.linodeobjects.com"

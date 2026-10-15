@@ -199,6 +199,72 @@ resource "linode_object_storage_bucket" "velero" {
   }
 }
 
+# ── CloudNativePG backup bucket ───────────────────────────────────────────────
+# Holds apl-core's CNPG database backups when the `cnpgBackup` component is on:
+# barman-cloud base backups and the continuous WAL archive of the Harbor
+# (harbor-otomi-db) and Keycloak (keycloak-db) Postgres clusters, under
+# s3://<this bucket>/<db>-<generation>/<cluster>/{base,wals}/. apl-core writes it
+# — LLZ only points apl-core's NATIVE platformBackups settings at it (the
+# AplObjectStorage CR's buckets.cnpg + env/settings/platformBackups.yaml); see
+# docs/runbooks/cnpg-backup-restore.md.
+#
+# NOT ITS OWN KEY, and that is the one thing about this bucket that differs from
+# openbao_backup and velero above. apl-core's otomi-db chart reads ONE credential
+# for every app it runs — the `linode-creds` Secret it builds from
+# obj.provider.linode.accessKeyId plus obj-secrets — so the barman sidecar can
+# only authenticate with the platform key llz mints for Loki and Harbor
+# (`<prefix>-obj-<suffix>`, rotation-table entry obj-platform), and that key is
+# scoped to this bucket too. The consequence, stated plainly: anything holding
+# the platform key — Loki, Harbor, anyone who can read obj-secrets — can read
+# and DELETE these database backups. The dedicated-key answer the OpenBao and
+# Velero buckets use is not available, because apl-core exposes no per-app
+# object-storage credential to point at one.
+#
+# VERSIONED, WITH NONCURRENT VERSIONS EXPIRED, AND THAT IS THE MITIGATION. A
+# delete or overwrite by the shared key — a Loki or Harbor bug, a compromised
+# pod, barman's own retention — leaves the object recoverable as a noncurrent
+# version for var.cnpg_noncurrent_days. 30 days, longer than the velero bucket's
+# 14, BECAUSE the key is shared: the window is how long a destructive write by
+# something that was never meant to touch these objects stays reversible. It
+# does NOT protect against a key holder deleting versions on purpose (Linode has
+# no object lock); the runbook says so. Both arguments are S3 calls — the calling
+# root's provider needs obj_use_temp_keys.
+#
+# ENCRYPTION AT REST FOLLOWS objProxy. barman-cloud can emit SSE-C, but
+# apl-core's chart exposes no setting for it. barman addresses the endpoint
+# path-style, so with spec.components.objProxy on its requests are captured by the
+# proxy's CoreDNS rewrite and written SSE-C (the objProxy component trusts its CA
+# into apl-core's ObjectStores for exactly this); without objProxy the objects are
+# plaintext at rest. Registered with the at-rest guard for that reason.
+#
+# CREATED ON EVERY DEPLOYMENT, like velero: an empty bucket costs nothing, and
+# one unconditional bucket set keeps clusterspec.ObjBucketLabels a single list.
+#
+# Its contents survive the deployment: a module=object-storage destroy refuses
+# while this bucket holds any version unless the caller opts in with
+# drain_data_buckets (`llz ci openbao-backup-destroy-guard` guards it).
+resource "linode_object_storage_bucket" "cnpg" {
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-cnpg-${var.region_suffix}"
+
+  versioning = true
+
+  lifecycle_rule {
+    id      = "expire-noncurrent-backups"
+    enabled = true
+    # No prefix: everything in this bucket is barman's (one <db>-<generation>/
+    # prefix per database).
+    noncurrent_version_expiration {
+      days = var.cnpg_noncurrent_days
+    }
+    # barman-cloud uploads base backups MULTIPART (boto3's transfer manager); an
+    # instance killed mid-backup leaves parts that are billed and invisible to
+    # every LIST. Abort them after a day.
+    abort_incomplete_multipart_upload_days = 1
+  }
+}
+
 # NOTE — the gitea_backup bucket + key + outputs were removed in the
 # apl-core anti-pattern cleanup. The off-cluster gitea backup integration
 # was blocked by apl-core's list-REPLACE behaviour on _rawValues.
