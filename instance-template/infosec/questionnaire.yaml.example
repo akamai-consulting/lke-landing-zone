@@ -1,0 +1,175 @@
+# Answered security checklist — the generic starting point.
+#
+# `llz ci cis-evidence` carries this file's answers in every evidence pack, next to
+# the live evidence, so an approver reads the claim and its proof together. The
+# pack reads infosec/questionnaire.yaml (override with --questionnaire); this
+# .example is template-managed and is overwritten on `llz upgrade`, so COPY it:
+#
+#   cp infosec/questionnaire.yaml.example infosec/questionnaire.yaml
+#
+# then renumber, retitle and re-answer the rows to match YOUR org's checklist —
+# add rows for org-only requirements (training, attribution formats, intake
+# tickets), delete rows that do not apply. Validate before committing:
+#
+#   llz ci cis-evidence --check-questionnaire
+#
+# The format is documented in docs/infosec/control-mapping.md ("The questionnaire
+# file"). It is strict: an unknown key is an error, every row needs a title and at
+# least one of llz / instance / adopter, and `gates` must name real `llz ci` verbs.
+#
+# THE `llz` ANSWERS BELOW ARE THE TEMPLATE'S OWN CLAIMS, and the template's tests
+# hold each one to the code it describes. If you edit one, you own its accuracy.
+#
+# CITE ONLY GATES THE PACK RECORDS. The scheduled job passes the outcomes of
+# token-inventory, assert-rotation-health and alert-eval. A gate cited here that
+# the job does not run shows "not run" on its row — never passed — so build- and
+# bootstrap-time gates are named in the prose instead.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: EvidenceQuestionnaire
+metadata:
+  name: generic-production-checklist
+  source: Generic production-account security checklist (replace with your org's checklist name)
+requirements:
+  - num: 1
+    title: Approved production account
+    adopter: Request a production cloud account and obtain security approval through your org's intake process.
+
+  - num: 2
+    title: Required resource tags applied
+    llz: Every tag in spec.cluster.tags is stamped onto the LKE cluster, its node pool and the node Cloud Firewall.
+    instance: Set spec.cluster.tags to your org's ownership / environment / data-classification tags.
+    adopter: Apply any account-level tags in the cloud console (LLZ manages resources, not the account).
+    gap: No validator requires a tag; an empty tags list passes.
+    refs:
+      - terraform-modules/llz-cluster/main.tf
+      - terraform-modules/llz-cluster/firewall.tf
+      - tools/internal/shared/tfroots/roots/cluster/main.tf
+
+  - num: 3
+    title: Cloud firewall with default deny
+    llz: >-
+      The node Cloud Firewall is created with inbound_policy DROP (hardcoded, not a variable) and
+      attached to the node pool. Every other inbound rule is scoped to the VPC subnet, the LKE
+      control-plane range or the NodeBalancer range (plus spec.cluster.apiServerAllowCIDRs, see #10).
+    adopter: Any operator ingress (bastion SSH, admin HTTPS) is added and reviewed under your org's own firewall process; the baseline ships none.
+    gap: The baseline allows ICMP from 0.0.0.0/0 and ::/0. Record an exception or narrow the rule.
+    refs:
+      - terraform-modules/llz-cluster/firewall.tf
+
+  - num: 4
+    title: Cloud accounts enrolled in CSPM
+    adopter: Enroll each cloud account (dev / test / prod) with your CSPM provider. LLZ ships no CSPM integration.
+
+  - num: 5
+    title: CSPM cluster integration
+    adopter: >-
+      Install your CSPM vendor's Kubernetes integration as an instance-owned Argo CD Application
+      (kubernetes-custom/), with its credential delivered through OpenBao + External Secrets rather
+      than committed values.
+    gap: >-
+      LLZ ships no CSPM connector. Vendor connectors usually hold cluster-wide read; review the
+      ClusterRole they install (and whether it includes Secrets) before approving.
+
+  - num: 6
+    title: Port exposure review
+    llz: >-
+      Beyond the VPC and LKE control-plane ranges, the node firewall exposes only the NodePort range,
+      and only to the NodeBalancer range (plus spec.cluster.apiServerAllowCIDRs when set).
+    adopter: Review each externally reachable port (every LoadBalancer Service a team creates) before go-live.
+    refs:
+      - terraform-modules/llz-cluster/firewall.tf
+
+  - num: 7
+    title: Administrative SSH access
+    llz: >-
+      Not applicable to nodes: the landing zone declares no standalone instances, and the node firewall
+      admits TCP/22 only from the cluster's own VPC subnet (the intra-cluster all-ports rule); there is
+      no external SSH rule.
+    refs:
+      - terraform-modules/llz-cluster/firewall.tf
+
+  - num: 8
+    title: Credential rotation schedule
+    llz: >-
+      Credential single pane: the daily token-inventory measures every CI token's expiry,
+      assert-rotation-health fails any credential past the 90-day SLA, and alert-eval reads the
+      credential alerts. Scheduled rotation covers the lke-admin token, the Linode PAT and the
+      object-storage keys.
+    instance: Provide the credentials as GitHub environment secrets; optionally enable broadPatRotator for in-cluster PAT rotation.
+    adopter: Set and track the rotation cadence of every credential LLZ does not hold (third-party service accounts, CSPM tokens).
+    gap: One 90-day SLA applies to every credential LLZ measures; credentials outside LLZ are not measured.
+    refs:
+      - instance-template/.github/workflows/llz-scheduled-checks.yml
+      - instance-template/.github/workflows/llz-secret-rotation.yml
+      - docs/runbooks/linode-credential-rotation.md
+    gates:
+      - token-inventory
+      - assert-rotation-health
+      - alert-eval
+
+  - num: 9
+    title: Encryption at rest and network segmentation
+    llz: >-
+      Node disks and block volumes are encrypted (disk_encryption on every node pool; the encrypted
+      default StorageClass), secrets live in OpenBao and reach pods through External Secrets,
+      Terraform state is encrypted, and platform namespaces run default-deny NetworkPolicies. The
+      encryption half is enforced at PR time by `llz ci at-rest-guard` and at bootstrap by
+      `llz ci assert-volume-encryption`; the daily pack reports the StorageClass and NetworkPolicy
+      signals it reads live.
+    instance: Enable objProxy to encrypt Object Storage (SSE-C); keep workloads on the encrypted StorageClass.
+    adopter: Classify the data; keep regulated data off shared networks your classification forbids.
+    gap: >-
+      LKE-E's control plane reaches nodes over a shared private range, so the node firewall admits that
+      whole range on the kubelet / DNS / BGP ports rather than individual addresses.
+    refs:
+      - tools/internal/extensions/lifecycle/bootstrapcluster/manifests/block-storage-class.yaml
+      - kubernetes-charts/llz-cluster-foundation/templates/network-policies.yaml
+      - platform-apl/components/objProxy/kustomization.yaml
+
+  - num: 10
+    title: Kubernetes control-plane IP allowlist
+    llz: >-
+      The cluster is created with the control-plane ACL enabled (hardcoded). Open-world (/0) entries
+      are refused by the CIDR validator that `llz env add` and the spec readiness scan both apply.
+    instance: >-
+      Set spec.cluster.apiServerAllowCIDRs to the operator and CI egress ranges that must reach the
+      API. A connector-style integration that dials out (most CSPM brokers) needs no entry; only a
+      scanner that calls the API server inbound does.
+    gap: >-
+      apiServerAllowCIDRs also opens the NodePort range on the node firewall to the same CIDRs; there
+      is no ACL-only list. After creation Terraform ignores ACL drift, so later changes are made
+      through the API, not by re-applying.
+    refs:
+      - terraform-modules/llz-cluster/main.tf
+      - tools/internal/shared/validate/validate.go
+
+  - num: 11
+    title: Managed Kubernetes tier
+    llz: >-
+      The cluster is created with tier enterprise (hardcoded); the pinned Kubernetes version is
+      checked against the account's Enterprise catalog before every apply by
+      `llz ci assert-k8s-version`.
+    refs:
+      - terraform-modules/llz-cluster/main.tf
+
+  - num: 12
+    title: Node disk encryption
+    llz: >-
+      Node pools are created with disk_encryption enabled (hardcoded); `llz ci at-rest-guard` fails a
+      pull request that adds a node pool or instance without it.
+    refs:
+      - tools/internal/shared/tfroots/roots/cluster/main.tf
+      - tools/internal/extensions/lifecycle/atrest/atrest.go
+
+  - num: 13
+    title: Secret rotation runbook
+    llz: Rotation runbooks ship with every instance (lke-admin token, Linode credentials) alongside the secrets reference.
+    adopter: Accept or remediate the documented position on the OpenBao seal and recovery keys, which are static by design.
+    refs:
+      - docs/secrets.md
+      - docs/runbooks/lke-admin-rotation.md
+      - docs/runbooks/linode-credential-rotation.md
+
+  - num: 14
+    title: Single sign-on
+    adopter: Cloud-console access through your org's SSO. Federate App Platform's Keycloak to your identity provider if your checklist covers in-cluster logins.

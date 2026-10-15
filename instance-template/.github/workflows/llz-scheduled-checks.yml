@@ -438,6 +438,7 @@ jobs:
       # WRITER: measure token expiry, push the llz-token-inventory ConfigMap the
       # reconciler re-exposes as metrics. Only metadata leaves; never a token.
       - name: Write token inventory to the cluster
+        id: tokeninv
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci token-inventory | kubectl apply -f -
 
@@ -460,6 +461,7 @@ jobs:
       # default leaves almost no margin over that, and a gate that flakes on its
       # own propagation delay is a gate people learn to re-run rather than read.
       - name: Assert the credential funnel end to end
+        id: funnel
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-rotation-health --require-inventory --settle 300
 
@@ -477,6 +479,7 @@ jobs:
       # upgrades. The settle loop above polls for exactly those series, so once it
       # passes they are in the metric-name set this step reads.
       - name: Read cluster credential alert status
+        id: credalerts
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"
 
@@ -503,6 +506,50 @@ jobs:
         if: steps.kubeconfig.outputs.available == 'true'
         continue-on-error: true
         run: llz ci alert-eval --match '^(Loki|Harbor|Grafana|OTel|SupportPlane)' --summary "Support-plane alerts (${REGION})"
+
+      # AUDITOR EVIDENCE PACK (docs/infosec/control-mapping.md). Rides this job
+      # rather than its own: it records the outcomes of the gates above, and a
+      # separate job would open and revoke the shared control-plane ACL a second
+      # time for the same cluster. The gates are passed by OUTCOME, so a gate that
+      # never ran reads "skipped" in the pack, never "pass" — and these three are
+      # exactly the gates the shipped example questionnaire cites (a test holds the
+      # two together, so a cited gate cannot silently read "not run" forever).
+      #
+      # The answers come from infosec/questionnaire.yaml in this checkout (copy
+      # infosec/questionnaire.yaml.example). Absent, the pack says so; present but
+      # invalid, no pack is written and the upload below (if-no-files-found: error)
+      # fails the job — a questionnaire that does not validate is a config error to
+      # fix, not a finding to read. `llz ci cis-evidence --check-questionnaire`
+      # catches it before it lands.
+      #
+      # --strict: a pack whose compliance scan did not happen is NOT_COLLECTED and
+      # fails this step, by design. On managed App Platform that is today's state —
+      # apl-core runs trivy-operator with its cluster-compliance scanner off, and no
+      # LLZ channel reaches that setting — so this step is red until it is turned
+      # on. continue-on-error keeps that from failing the credential job, whose own
+      # gates already fail it on their own steps; the red step and the artifact are
+      # the record that the pack is not compliance evidence.
+      #
+      # No cosign attestation: keyless signing needs id-token: write, which the
+      # caller stub does not grant. The pack carries a sha256 sidecar instead.
+      - name: Build the compliance evidence pack
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
+        env:
+          EVIDENCE_OUT_DIR:  ${{ runner.temp }}/evidence
+          GATE_TOKENINV:     ${{ steps.tokeninv.outcome }}
+          GATE_FUNNEL:       ${{ steps.funnel.outcome }}
+          GATE_CREDALERTS:   ${{ steps.credalerts.outcome }}
+        run: llz ci cis-evidence --strict --cluster "${REGION}" --gate "token-inventory=${GATE_TOKENINV}" --gate "assert-rotation-health=${GATE_FUNNEL}" --gate "alert-eval=${GATE_CREDALERTS}"
+
+      - name: Upload the compliance evidence pack
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cis-evidence-${{ matrix.region }}
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: error
+          retention-days: 90
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

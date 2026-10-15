@@ -147,7 +147,7 @@ spec:
       # keyRotationDays: DEPRECATED/ignored — rotation is owned by the
       # in-cluster linodeCredRotator CronJob (obj_key_rotation_days was removed).
   # components omitted → all default-enabled except gitea, cidrFirewall,
-  # broadPatRotator, clusterHealthWorkflow (see "Component defaults")
+  # broadPatRotator, objProxy, clusterHealthWorkflow (see "Component defaults")
 ```
 
 ```yaml
@@ -197,7 +197,7 @@ spec:
 ## Minimal example
 
 The smallest valid spec — components default to all-on except `gitea`,
-`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`:
+`cidrFirewall`, `broadPatRotator`, `objProxy`, and `clusterHealthWorkflow`:
 
 ```yaml
 # landingzone.yaml
@@ -321,7 +321,7 @@ enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
 adds the loki ExternalSecret + alert rules.
 
 Omit the `components:` block and every component is enabled except `gitea`,
-`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`. A partial
+`cidrFirewall`, `broadPatRotator`, `objProxy`, and `clusterHealthWorkflow`. A partial
 block changes only the components you name — an explicit `enabled: false` sticks;
 unmentioned components default on. `enabled` is tri-state: omitting it (a tune-only
 toggle, see below) inherits the default rather than reading as a disable. The set:
@@ -330,7 +330,8 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `openbao` (requires `externalSecrets` + `certManagerBootstrapCA`),
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
-`cidrFirewall`, `broadPatRotator` (requires `externalSecrets`),
+`cidrFirewall`, `broadPatRotator` (requires `externalSecrets`), `objProxy`
+(requires `externalSecrets`),
 `llzReconciler` (requires `observability`), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.

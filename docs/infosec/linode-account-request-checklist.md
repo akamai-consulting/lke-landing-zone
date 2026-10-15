@@ -1,7 +1,7 @@
 # Linode Account Request — Checklist
 
 **Sources:** Internal account-creation process docs, Linode VM Policies & Best Practices, your org's security requirements (e.g. SOG), InfoSec Approval Process
-**Last Updated:** 2026-05-05
+**Last Updated:** 2026-10-14
 
 This checklist walks a `<project>` team through requesting a Linode account for a secure-by-default LKE-Enterprise + apl-core landing zone, and obtaining the InfoSec approval required before production go-live. Linode and LKE-Enterprise are hard givens for this landing zone. Replace `<org>`, `<project>`, and `<cluster_domain>` with your own values; substitute your organization's equivalents for any org-specific tools, distribution lists, or portals named below.
 
@@ -73,8 +73,8 @@ The requirements below are generic production-security controls (these map to a 
 | 9 | No sensitive data on Private LAN | Encrypt all secrets at rest; no cross-customer PII on the shared private network (e.g. `192.168.128.0/17`) |
 | 10 | LKE-Enterprise required | Use LKE-Enterprise for production clusters (a hard given for this landing zone) |
 | 11 | LKE secret rotation runbook | Document the process for rotating secrets-manager seal/recovery keys + service credentials (see [docs/secrets.md](../secrets.md)) |
-| 12 | LKE Control Plane IP ACL | Enable IP ACL; whitelist your CSPM scanner IP ranges |
-| 13 | LKE disk encryption (LDE) | Automated via Terraform — `disk_encryption = "enabled"` is enforced by the secure-by-default node-pool module at cluster bootstrap; no manual LKE engineering request required |
+| 12 | LKE Control Plane IP ACL | Enable IP ACL; allowlist your CSPM scanner IP ranges only if it scans the API server inbound — an outbound connector/broker needs no entry, and every `apiServerAllowCIDRs` entry also opens NodePorts to that range (see [control-mapping.md](./control-mapping.md) #10) |
+| 13 | LKE disk encryption (LDE) | Automated via Terraform — `disk_encryption = "enabled"` is hardcoded on the node pool in the cluster Terraform root and enforced by `llz ci at-rest-guard`; no manual LKE engineering request required |
 | 14 | Account attribution format | Set Company Name: `<org> - <project> - [Workload] Prod` |
 | 15 | SSO for org accounts | All team members must authenticate via your org's Control Center SSO |
 | 16 | Annual Linode Practitioner Training | Completed by all team members with account access |
@@ -99,8 +99,8 @@ After the account is provisioned and InfoSec approval received:
     --namespace kube-system \
     --set linodeToken=<service-PAT>
   ```
-- [ ] Enable **LKE Control Plane IP ACL** and add your CSPM scanner IP ranges
-- [ ] Confirm **LKE disk encryption (LDE)** is enabled — automated by the secure-by-default node-pool Terraform module (`disk_encryption = "enabled"`); verify the node pool was created with disk encryption (check `terraform show` or Cloud Manager node pool details)
+- [ ] Enable **LKE Control Plane IP ACL**; add CSPM scanner IP ranges only for an inbound (agentless) scanner — not for an outbound connector
+- [ ] Confirm **LKE disk encryption (LDE)** is enabled — automated by the cluster Terraform root (`disk_encryption = "enabled"`); verify the node pool was created with disk encryption (check `terraform show` or Cloud Manager node pool details)
 - [ ] Install your CSPM **LKE auto-enroll** Helm chart on each cluster
 
 ### Account & Identity
@@ -122,6 +122,7 @@ After the account is provisioned and InfoSec approval received:
 
 ## Related Docs
 
+- [Control mapping & evidence pack](./control-mapping.md) — answering this table in `infosec/questionnaire.yaml`, and the evidence pack that carries it
 - [Secrets management](../secrets.md) — secret rotation, seal/recovery keys, and service credentials
 - [Adopter guide](../adopter-guide.md) — onboarding a `<project>` onto the landing zone
 - [apl-core migration runbook](../apl-core-migration-runbook.md) — migrating workloads onto apl-core

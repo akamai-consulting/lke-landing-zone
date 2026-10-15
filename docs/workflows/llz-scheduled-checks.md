@@ -264,8 +264,9 @@ lives in the command rather than in workflow YAML.
 ## Job: `credential-single-pane`
 
 Runs daily. It replaces the former per-provider probe jobs (the Linode
-`cred-audit` and `gh-pat-expiry-health`) with a cluster-as-source-of-truth flow:
-two steps sharing one kubeconfig.
+`cred-audit` and `gh-pat-expiry-health`) with a cluster-as-source-of-truth flow
+sharing one kubeconfig, and then builds the auditor evidence pack from what that
+flow just proved.
 
 It runs per-region because Linode PATs are per-env while GitHub PATs are
 instance-wide, so each cluster's reconciler exposes that region's view. It
@@ -295,6 +296,34 @@ metric, e.g. because the funnel is down. This catches a broken pipeline that the
 per-provider probes used to mask: they would happily report "no findings" while
 the thing that produces findings was dead. `--summary` writes the verdict table
 to the job summary (see `llz ci alert-eval`).
+
+### Step: Build the compliance evidence pack
+
+`llz ci cis-evidence --strict` assembles the pack for
+`docs/infosec/control-mapping.md`: the trivy-operator compliance-scanner switch
+and apl-core's `ClusterComplianceReport`s, NetworkPolicy / restricted-PSS /
+StorageClass-encryption signals, the instance's answered checklist
+(`infosec/questionnaire.yaml`), and the outcomes of this job's gates
+(`--gate <verb>=<outcome>` for `token-inventory`, `assert-rotation-health` and
+`alert-eval` — exactly the gates the shipped example questionnaire cites; a gate
+whose step did not run is recorded as skipped, never pass). The JSON, Markdown and
+sha256 sidecar upload as the `cis-evidence-<env>` artifact (90-day retention).
+
+It fails closed: a report with no `status.updateTimestamp`, 0 pass / 0 fail, or
+older than a day is NOT_COLLECTED, and the whole pack is NOT_COLLECTED while the
+compliance scanner is off — which `--strict` turns into a failed step. On managed
+App Platform that is the expected state today: apl-core runs trivy-operator with
+`clusterComplianceEnabled: false`, and LLZ's `_rawValues` channel does not reach
+that release (control-mapping.md, Section B explains why). So this step is red
+until the scanner is on.
+
+`continue-on-error: true`, deliberately: every gate the pack records already fails
+the job on its own step, and the red step plus the artifact are the record. An
+invalid questionnaire writes no pack, and the upload's `if-no-files-found: error`
+then fails the job — that is a config error to fix (`llz ci cis-evidence
+--check-questionnaire`). The sha256 sidecar stands in for a cosign attestation,
+which would need `id-token: write` on the caller stub — an instance that wants a
+signed bundle adds that permission and signs the artifact in its own step.
 
 ---
 
