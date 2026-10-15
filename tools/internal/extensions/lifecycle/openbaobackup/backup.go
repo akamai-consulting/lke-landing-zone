@@ -141,7 +141,7 @@ func RunBackup(ctx context.Context, keep int) (Record, error) {
 		return rec, fmt.Errorf("%s does not exist — `llz ci mint-bootstrap-objkeys` seeds it at bootstrap and the reconciler's linode-creds lane re-mints it; "+
 			"on an upgraded deployment, apply the object-storage root (it creates the backup bucket) and let the reconciler mint the key", baosnap.KeyPath)
 	}
-	st, err := baosnap.FieldsToStore(kvStrings(raw))
+	st, err := baosnap.FieldsToStore(baosnap.KVStrings(raw))
 	if err != nil {
 		return rec, err
 	}
@@ -203,16 +203,6 @@ func RunBackup(ctx context.Context, keep int) (Record, error) {
 		rec.Pruned = []string{}
 	}
 	return rec, nil
-}
-
-// kvStrings flattens a KV v2 read (`data.data`) to string fields.
-func kvStrings(raw map[string]any) map[string]string {
-	out := map[string]string{}
-	inner, _ := raw["data"].(map[string]any)
-	for k, v := range inner {
-		out[k] = cli.AsString(v)
-	}
-	return out
 }
 
 // printRecord emits the audit line, then any prune errors as warnings.

@@ -772,9 +772,9 @@ func TestDrillPutsBackACredentialRotatedDuringTheWindow(t *testing.T) {
 }
 
 func TestCredsToReapply(t *testing.T) {
-	before := credState{"a": {"k": "2"}, "b": {"k": "1"}, "c": nil, "d": {"k": "1"}}
-	after := credState{"a": {"k": "1"}, "b": {"k": "1"}, "c": {"k": "x"}}
-	got := CredsToReapply(before, after)
+	before := baosnap.CredState{"a": {"k": "2"}, "b": {"k": "1"}, "c": nil, "d": {"k": "1"}}
+	after := baosnap.CredState{"a": {"k": "1"}, "b": {"k": "1"}, "c": {"k": "x"}}
+	got := baosnap.CredsToReapply(before, after)
 	if strings.Join(got, ",") != "a,d" {
 		t.Errorf("CredsToReapply = %v, want [a d] (a reverted, d deleted by the rollback; c did not exist before)", got)
 	}
