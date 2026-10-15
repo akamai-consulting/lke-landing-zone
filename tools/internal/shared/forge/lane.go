@@ -40,3 +40,17 @@ func LaneSuffix(flavor Flavor) string {
 func LaneName(flavor Flavor, base string) string {
 	return base + LaneSuffix(flavor)
 }
+
+// IsLaneDeployment reports whether region is base as one of the e2e harness's
+// forge lanes would name it (LaneName over every forge flavour). It is the ONE
+// answer to "is this a throwaway e2e deployment?" that the drills which act in
+// place — the OpenBao restore drill and the Velero backup→restore drill — refuse
+// to run without, so the two cannot disagree about which deployments are safe.
+func IsLaneDeployment(base, region string) bool {
+	for _, f := range []Flavor{GitHub, GHEC, GHES, GitLab} {
+		if region == LaneName(f, base) {
+			return true
+		}
+	}
+	return false
+}

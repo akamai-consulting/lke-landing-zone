@@ -203,6 +203,15 @@ func ObjOpenBaoBackupBucket(prefix, env string) string {
 	return objLabel(prefix, "openbao-backup", env)
 }
 
+// ObjVeleroBucket is the bucket the velero component's BackupStorageLocation
+// names (RenderVeleroPatch), the bucket Velero's key is scoped to (the rotation
+// table), and the bucket the backup drill reads back from — one derivation, so the
+// three cannot name different buckets. The module creates it on every deployment;
+// it stays empty unless spec.components.velero is enabled.
+func ObjVeleroBucket(prefix, env string) string {
+	return objLabel(prefix, "velero", env)
+}
+
 // ObjBucketLabels are EVERY bucket the llz-object-storage module creates for a
 // deployment, in module order. The preflights that ask "are this deployment's
 // buckets there?" read this rather than each keeping a literal list, which is how
@@ -221,6 +230,7 @@ func ObjBucketLabels(prefix, env string) []string {
 		objLabel(prefix, "loki-admin", env),
 		ObjHarborRegistryBucket(prefix, env),
 		ObjOpenBaoBackupBucket(prefix, env),
+		ObjVeleroBucket(prefix, env),
 	}
 }
 
@@ -234,7 +244,8 @@ func ObjKeyLabels(prefix, env string) []string {
 	if prefix == "" || env == "" {
 		return nil
 	}
-	// FOUR LABELS, THOUGH ONLY `obj` AND `openbao-backup` ARE STILL MINTED. The per-app loki and
+	// FIVE LABELS, THOUGH ONLY `obj`, `openbao-backup` AND `velero` ARE STILL MINTED
+	// (`velero` only where that component is enabled). The per-app loki and
 	// harbor-registry keys were retired — their ExternalSecrets had been deleted,
 	// so nothing consumed them — but every cluster bootstrapped before that still
 	// has both keys in the Linode account, and teardown is the only thing that
@@ -251,6 +262,9 @@ func ObjKeyLabels(prefix, env string) []string {
 		objLabel(prefix, "obj", env),
 		// The OpenBao backup key, scoped to the openbao-backup bucket alone.
 		objLabel(prefix, "openbao-backup", env),
+		// Velero's key, scoped to the velero bucket alone. Reaped whether or not the
+		// component is enabled now: it may have been when the key was minted.
+		objLabel(prefix, "velero", env),
 	}
 }
 

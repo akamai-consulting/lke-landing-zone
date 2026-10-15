@@ -41,6 +41,8 @@ path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
 path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
 path "secret/data/obj/platform"                 { capabilities = ["read"] }
 path "secret/data/obj/ssec"                     { capabilities = ["read"] }
+path "secret/data/obj/velero"                   { capabilities = ["read"] }
+path "secret/data/obj/velero-ssec"              { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
 path "secret/metadata/alerts/webhooks"              { capabilities = ["read", "list"] }
@@ -57,6 +59,8 @@ path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "l
 path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
 path "secret/metadata/obj/platform"                 { capabilities = ["read", "list"] }
 path "secret/metadata/obj/ssec"                     { capabilities = ["read", "list"] }
+path "secret/metadata/obj/velero"                   { capabilities = ["read", "list"] }
+path "secret/metadata/obj/velero-ssec"              { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
 
@@ -100,11 +104,14 @@ path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read
 //
 // secret/obj/openbao-backup is the second object-storage key the rotation table
 // owns (scoped to the OpenBao backup bucket alone); the reconciler rotates it on
-// the same cadence, so it needs the same write.
+// the same cadence, so it needs the same write. secret/obj/velero is the third
+// (the velero bucket alone, component-gated): rotated once seeded, same write.
 const policyLinodeRotator = `path "secret/data/obj/platform"       { capabilities = ["create", "update", "read"] }
 path "secret/metadata/obj/platform"       { capabilities = ["read"] }
 path "secret/data/obj/openbao-backup"     { capabilities = ["create", "update", "read"] }
 path "secret/metadata/obj/openbao-backup" { capabilities = ["read"] }
+path "secret/data/obj/velero"             { capabilities = ["create", "update", "read"] }
+path "secret/metadata/obj/velero"         { capabilities = ["read"] }
 `
 
 // harbor-provisioner: read/write on exactly the two robot-credential paths the
@@ -141,6 +148,7 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 const policyReconcilerRead = `path "secret/data/obj/platform"     { capabilities = ["read"] }
 path "secret/metadata/obj/platform" { capabilities = ["read"] }
 path "secret/metadata/obj/openbao-backup" { capabilities = ["read"] }
+path "secret/metadata/obj/velero" { capabilities = ["read"] }
 path "secret/metadata/grafana/admin" { capabilities = ["read"] }
 path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
 path "secret/metadata/harbor/admin"  { capabilities = ["read"] }

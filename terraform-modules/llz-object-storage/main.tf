@@ -134,6 +134,71 @@ resource "linode_object_storage_bucket" "openbao_backup" {
   }
 }
 
+# ── Velero backup bucket ──────────────────────────────────────────────────────
+# Holds what the `velero` component's Velero server writes: one tarball of
+# Kubernetes resources per backup (every included namespace's objects, its
+# Secrets among them), plus Velero's metadata, logs and result files beside it.
+# Resources only — no volume data (the component does not snapshot PVs; see
+# docs/runbooks/velero-dr.md, "What is not backed up").
+#
+# ITS OWN BUCKET, for the same reason as openbao_backup: Linode scopes keys per
+# bucket, so only a dedicated bucket lets Velero's key (`<prefix>-velero-<suffix>`,
+# minted by llz, never by Terraform) reach these backups and nothing else, and
+# keeps the broad platform key apl-core hands to Loki and Harbor from reading —
+# or deleting — a copy of every included namespace's Secrets.
+#
+# CREATED ON EVERY DEPLOYMENT, even where spec.components.velero is off. An empty
+# bucket costs nothing and holds nothing; the key is what grants access, and llz
+# mints it only where the component is enabled. One unconditional bucket set
+# keeps clusterspec.ObjBucketLabels — what the bucket-presence preflights read —
+# a single list rather than a per-component one that can drift from this file.
+#
+# CONFIDENTIALITY IS SSE-C, applied by Velero itself. Velero's AWS object-store
+# plugin sends the SSE-C headers on every PUT/GET (customerKeyEncryptionSecret),
+# with a 32-byte key llz generates once into OpenBao (secret/obj/velero-ssec) and
+# ESO projects into the llz-velero namespace. Linode encrypts each object under
+# it and keeps no copy, so a holder of this bucket's key alone reads nothing.
+# Not the objProxy gateway: Velero can emit SSE-C natively, so the backup path
+# does not take a dependency on a default-off component sitting on Loki's and
+# Harbor's write path. The key lives in OpenBao, which is restored from its OWN
+# Raft snapshots (openbao_backup above, never from Velero), so a lost cluster
+# recovers OpenBao first and then has the key to read these backups.
+#
+# VERSIONED, WITH NONCURRENT VERSIONS EXPIRED, like openbao_backup: Velero's
+# garbage collector deletes a backup's objects when its TTL lapses, and a
+# GC bug, a mistaken `velero backup delete`, or an overwrite would otherwise be
+# final. A deleted backup stays recoverable as noncurrent versions for
+# var.velero_noncurrent_days (copying one back needs the SSE-C key, as reading
+# any of them does). It does NOT protect against a holder of the velero key or
+# LINODE_API_TOKEN deleting versions on purpose; the runbook says so. Both
+# arguments are S3 calls — the calling root's provider needs obj_use_temp_keys.
+#
+# Its contents also survive the deployment: a module=object-storage destroy
+# refuses while this bucket holds any version unless the caller opts in with
+# drain_data_buckets (`llz ci openbao-backup-destroy-guard` guards both backup
+# buckets).
+resource "linode_object_storage_bucket" "velero" {
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-velero-${var.region_suffix}"
+
+  versioning = true
+
+  lifecycle_rule {
+    id      = "expire-noncurrent-backups"
+    enabled = true
+    # No prefix: everything in this bucket is Velero's (backups/, restores/,
+    # and the metadata beside them).
+    noncurrent_version_expiration {
+      days = var.velero_noncurrent_days
+    }
+    # Velero's plugin uploads large tarballs MULTIPART (the AWS SDK upload
+    # manager); a Velero pod killed mid-upload leaves parts that are billed and
+    # invisible to every LIST. Abort them after a day.
+    abort_incomplete_multipart_upload_days = 1
+  }
+}
+
 # NOTE — the gitea_backup bucket + key + outputs were removed in the
 # apl-core anti-pattern cleanup. The off-cluster gitea backup integration
 # was blocked by apl-core's list-REPLACE behaviour on _rawValues.

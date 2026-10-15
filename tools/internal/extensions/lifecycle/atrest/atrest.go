@@ -220,6 +220,21 @@ var atRestAllowed = map[string]atRestRule{
 			"rewrite never captures it. Exit is a bucket-level encryption mode whose key does not live " +
 			"in the store being backed up — which Linode does not offer today",
 	},
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.velero": {
+		reason: "Velero backups: a tarball of every included namespace's Kubernetes objects, its " +
+			"Secrets among them. The objects are written SSE-C by Velero's own AWS plugin " +
+			"(customerKeyEncryptionSecret, a 32-byte key generated once into secret/obj/velero-ssec and " +
+			"synced into llz-velero by ESO), so they ARE encrypted at rest under a key Linode does not " +
+			"keep — but that is an application-level setting this guard cannot read off a bucket " +
+			"resource, which is why the bucket is registered rather than checked. The bucket stays " +
+			"empty where spec.components.velero is off. llz-openbao is excluded from every schedule " +
+			"(the seal key and the Raft volumes must never share a bucket with anything), and " +
+			"`llz ci assert-velero-restore` reads a backup's tarball back keyless and requires the 400 " +
+			"that proves it is SSE-C. See docs/runbooks/velero-dr.md",
+		exit: "the same bucket-level encryption mode every other bucket here is waiting on; once Linode " +
+			"offers one the plugin's SSE-C setting can be dropped for it, as docs/designs/" +
+			"obj-sse-c-gateway.md plans for the gateway",
+	},
 }
 
 // ── the levers, and how they are spelled ────────────────────────────────────

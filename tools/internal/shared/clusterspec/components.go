@@ -481,6 +481,48 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-openbao-backup", AppWave: 5, Namespace: "llz-openbao-backup"},
 	},
 	{
+		// Velero — scheduled backups of Kubernetes RESOURCES (every included
+		// namespace's objects, Secrets among them) to this deployment's velero
+		// bucket, SSE-C-encrypted by Velero's AWS plugin under a key held in
+		// OpenBao. Resources only: no volume data (Linode Block Storage has no
+		// snapshot API, the platform denies snapshot-sourced PVCs, and file-system
+		// backup would need a privileged node-agent). llz-openbao is never in a
+		// backup (VeleroMandatoryExcludes); OpenBao is openbaoBackup's.
+		//
+		// DEFAULT-DISABLED. Unlike openbaoBackup, nothing here is the only copy of
+		// anything the platform needs: platform state is re-derived from Git,
+		// Terraform and OpenBao, and apl-core's platformBackups covers its CNPG
+		// databases and Gitea. What Velero adds is point-in-time resource state for
+		// the workloads an instance runs — a choice per deployment, and one that puts
+		// a copy of every included Secret in a bucket. Opt in per env.
+		//
+		// DependsOn externalSecrets (its two Secrets come from OpenBao through ESO)
+		// and observability (the ServiceMonitor/PrometheusRule CRDs, and the
+		// freshness alerts are what make a stopped backup visible).
+		//
+		// ENABLING IT ON AN EXISTING DEPLOYMENT needs the bootstrap re-run once:
+		// mint-bootstrap-objkeys mints the component-gated key and seed-ssec-key
+		// generates the SSE-C key, and until both exist the ExternalSecrets fail and
+		// the server never starts. The object-storage root already created the bucket.
+		Name:              "velero",
+		DefaultDisabled:   true,
+		DependsOn:         []string{"externalSecrets", "observability"},
+		ManifestResources: []string{"velero"},
+		// Bucket, endpoint, cadence, TTL and namespace scope (RenderVeleroPatch) —
+		// a merge patch on the chart's Application, always emitted.
+		Patches: []Patch{{
+			Path:    "velero-values-patch.yaml",
+			Group:   "argoproj.io",
+			Version: "v1alpha1",
+			Kind:    "Application",
+			Name:    VeleroApplication,
+		}},
+		// Its own health-gated Application, like openbaoBackup: a Velero that
+		// cannot converge fails llz-velero, never platform-bootstrap. Wave 5, after
+		// OpenBao and the ESO store its Secrets come through.
+		CarvedApp: &CarvedApp{AppName: "llz-velero", AppWave: 5, Namespace: VeleroNamespace},
+	},
+	{
 		// ON-DEMAND cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
 		// running `llz ci health-incluster` (kubectl-free) on the slim llz image. It
 		// authenticates with the workflow pod's ServiceAccount (read-only RBAC), so it

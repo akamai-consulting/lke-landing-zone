@@ -130,11 +130,14 @@ func TestEvalRotationHealthOptionalPathAbsentIsNotAFinding(t *testing.T) {
 // the sampler and the gate read the same table, and a second list would be the
 // split contract docs/e2e-gates.md is about.
 func TestCredPathsMarksTheOptInFirewallTokenOptional(t *testing.T) {
+	// The opt-in paths: the firewall token, and Velero's key, which is minted only
+	// where spec.components.velero (default off) is enabled.
+	optIn := map[string]bool{"linode-cloud-firewall": true, "obj-velero": true}
 	var seen bool
 	for _, cp := range credpaths.CredPaths {
 		if cp.Cred != "linode-cloud-firewall" {
-			if cp.Optional {
-				t.Errorf("%s is marked optional; every other declared path is seeded on every deployment", cp.Cred)
+			if cp.Optional != optIn[cp.Cred] {
+				t.Errorf("%s optional=%v; only the opt-in paths %v may be optional — every other declared path is seeded on every deployment", cp.Cred, cp.Optional, optIn)
 			}
 			continue
 		}

@@ -660,6 +660,7 @@ var sizingKnobs = map[string][]string{
 	"harbor":          {"registryStorage"},
 	"broadPatRotator": {"broadPATLabel", "broadPATDeployments"},
 	"openbaoBackup":   {"backupIntervalHours", "backupKeep"},
+	"velero":          {"backupIntervalHours", "retention", "backupIncludeNamespaces", "backupExcludeNamespaces"},
 }
 
 // validateComponentSizing rejects sizing knobs set on a component that does not
@@ -695,6 +696,12 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	if t.BackupKeep != nil {
 		set["backupKeep"] = ""
 	}
+	if t.BackupIncludeNamespaces != "" {
+		set["backupIncludeNamespaces"] = t.BackupIncludeNamespaces
+	}
+	if t.BackupExcludeNamespaces != "" {
+		set["backupExcludeNamespaces"] = t.BackupExcludeNamespaces
+	}
 	for knob := range set {
 		if !allowed[knob] {
 			errs = append(errs, fmt.Errorf("environments.%s.components.%s: %s is not a valid setting for this component (it reads: %s)", env, name, knob, knobList(name)))
@@ -712,6 +719,9 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	}
 	if t.Retention != "" && !durationRe.MatchString(t.Retention) {
 		errs = append(errs, fmt.Errorf("environments.%s.components.%s.retention %q is not a duration (e.g. 7d, 720h)", env, name, t.Retention))
+	}
+	if name == "velero" {
+		errs = append(errs, validateVeleroKnobs(env, t)...)
 	}
 	for knob, v := range map[string]string{"storage": t.Storage, "registryStorage": t.RegistryStorage} {
 		if v != "" && !quantityRe.MatchString(v) {

@@ -333,7 +333,10 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `cidrFirewall`, `broadPatRotator` (requires `externalSecrets`),
 `llzReconciler` (requires `observability`), `openbaoBackup` (requires `openbao` +
 `observability`; the scheduled OpenBao Raft snapshot — see
-[runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md)), `clusterHealthWorkflow`
+[runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md)), `velero` (default
+**off**; requires `externalSecrets` + `observability`; scheduled Kubernetes-resource
+backups to object storage, never including `llz-openbao` — see
+[runbooks/velero-dr](runbooks/velero-dr.md)), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
@@ -383,6 +386,15 @@ image-store PVC, default `20Gi`); `broadPatRotator` takes `broadPATLabel` +
 cluster id**; 1–1000; default `28`). Unlike the four knobs above, the two `openbaoBackup`
 knobs **do** reach the cluster: `llz render` writes them into the carved
 `llz-openbao-backup` app as a CronJob patch, defaults included.
+`velero` takes `backupIntervalHours` (every N hours at :37, N a divisor of 24; default
+`24`, daily at 01:37 UTC), `retention` (the backups' TTL; default `30d`; at least two
+intervals and a day, at most a year — the one `retention` that DOES reach a cluster),
+`backupIncludeNamespaces` (space-separated names or globs; default `*`; may not name
+`llz-openbao` or `llz-velero`) and `backupExcludeNamespaces` (space-separated; replaces
+the default list of credential-holding and provider namespaces; `llz-openbao` and
+`llz-velero` are always appended). `llz render` writes them into the carved `llz-velero`
+app as a patch on the chart Application, with this deployment's bucket and endpoint.
+Example: `velero: { enabled: true, backupIntervalHours: 12, retention: 14d }`.
 Those are the whole set. An unset knob keeps the base default; a knob set
 on a component that doesn't read it (or a bad duration/quantity) is a validation
 error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.

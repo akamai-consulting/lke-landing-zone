@@ -2,6 +2,8 @@ package objenc
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -83,4 +85,63 @@ func TestSSECKVPathIsStable(t *testing.T) {
 		t.Errorf("SSECKVPath = %q — the ExternalSecret's remoteRef.key and the bao-configure "+
 			"read policy must move with it", SSECKVPath)
 	}
+	if VeleroSSECKVPath != "secret/obj/velero-ssec" {
+		t.Errorf("VeleroSSECKVPath = %q — the velero-ssec-key ExternalSecret and the bao-configure "+
+			"read policy must move with it", VeleroSSECKVPath)
+	}
+}
+
+// Each SSE-C key is seeded only where its own component is enabled, at its own
+// path, and the two keys are independent: enabling Velero must not mint the
+// objProxy key (more copies of an unrecoverable secret than needed) or the reverse.
+// The velero ExternalSecret decodes the value base64 → 32 raw bytes, which is what
+// Velero's AWS plugin demands of customerKeyEncryptionSecret.
+func TestSeedSSECKeySeedsEachKeyOnlyForItsComponent(t *testing.T) {
+	for _, tc := range []struct {
+		objProxy, velero bool
+		want             []string
+	}{
+		{false, false, nil},
+		{false, true, []string{VeleroSSECKVPath}},
+		{true, false, []string{SSECKVPath}},
+		{true, true, []string{SSECKVPath, VeleroSSECKVPath}},
+	} {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		lz := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n"
+		env := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: ClusterDefinition\nmetadata:\n  name: prod\nspec:\n  cluster:\n    region: us-ord\n  components:\n" +
+			"    objProxy: {enabled: " + boolStr(tc.objProxy) + "}\n    velero: {enabled: " + boolStr(tc.velero) + "}\n"
+		if err := os.WriteFile(filepath.Join(dir, "landingzone.yaml"), []byte(lz), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "environments"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "environments", "prod.yaml"), []byte(env), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		d, _ := withSSECSeedStubs(t, func(string, string) (string, KVVerdict) { return "", KVAbsent })
+		var paths []string
+		d.KVPut = func(p string, f map[string]string) error {
+			raw, err := base64.StdEncoding.DecodeString(f["key"])
+			if err != nil || len(raw) != ssecKeyRawBytes {
+				t.Errorf("%s: seeded %q, want base64 of %d bytes", p, f["key"], ssecKeyRawBytes)
+			}
+			paths = append(paths, p)
+			return nil
+		}
+		if err := RunSeedSSECKey(d, "prod"); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(paths, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("objProxy=%v velero=%v seeded %v, want %v", tc.objProxy, tc.velero, paths, tc.want)
+		}
+	}
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }

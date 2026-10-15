@@ -43,6 +43,11 @@ spec:
   #   - argoproj.github.io/argo-helm: Argo WORKFLOWS + EVENTS (NOT Argo CD —
   #     apl-core owns that). apl-core doesn't ship workflows/events; cert-automation
   #     needs their CRDs, so we install them as direct upstream sources.
+  #   - vmware-tanzu.github.io/helm-charts: VELERO, for the llz-velero-server
+  #     Application alone (spec.components.velero, default off). Deployed upstream
+  #     like argo-workflows rather than republished, because its cluster-admin RBAC
+  #     is correct for a backup tool and is exactly what a first-party chart's
+  #     kube-linter gate refuses. apl-core ships no Velero.
   # openbao.github.io is intentionally ABSENT: openbao is a vendored subchart of
   # llz-openbao-platform (bundled into the OCI artifact at publish), so Argo never
   # pulls it from upstream at runtime.
@@ -50,6 +55,7 @@ spec:
     - 'ghcr.io/akamai-consulting/charts'
     - 'ghcr.io/akamai-consulting/charts/*'
     - 'https://argoproj.github.io/argo-helm'
+    - 'https://vmware-tanzu.github.io/helm-charts'
   destinations:
     # Namespaces cluster-foundation creates (wave -20) + the apl-core-managed
     # namespaces the support-plane charts deploy into. A destination missing here
@@ -68,6 +74,8 @@ spec:
     - { namespace: llz-argo-events,            server: https://kubernetes.default.svc }
     - { namespace: llz-observability,          server: https://kubernetes.default.svc }
     - { namespace: llz-linode-volume-labeler,  server: https://kubernetes.default.svc }
+    # Velero (spec.components.velero); its namespace is created by the component.
+    - { namespace: llz-velero,                 server: https://kubernetes.default.svc }
   clusterResourceWhitelist:
     # cluster-foundation creates Namespaces + the storage-class-patcher
     # ClusterRole/Binding; the firewall reconciler needs cluster-scoped reads.

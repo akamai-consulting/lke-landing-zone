@@ -169,8 +169,9 @@ So: **any Velero `Schedule` / `Backup` (or any other namespace- or volume-level 
 must exclude `llz-openbao`** — e.g. `excludedNamespaces: [llz-openbao]` beside
 `includedNamespaces: ["*"]`. OpenBao is backed up by this component, through the API,
 as an archive whose integrity is checked before it is uploaded and again before it is
-restored. The landing zone's own Velero component carries that exclusion with a test
-that holds it; a Schedule you add yourself needs the same line.
+restored. The landing zone's own `velero` component excludes it from every Schedule,
+with a test over every rendered shape and a check of the live Schedule on every
+bootstrap ([velero-dr](velero-dr.md)); a Schedule you add yourself needs the same line.
 
 ## What a restore needs
 

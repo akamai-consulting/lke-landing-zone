@@ -93,6 +93,11 @@ var CredPaths = []CredPath{
 	// rotated by the same in-cluster rotator as obj-platform, so `automated`: a
 	// breach means the rotator is broken, and with it the next backup's upload.
 	{"secret/obj/openbao-backup", "obj-openbao-backup", CredClassAutomated, false},
+	// Velero's key (velero bucket only). Rotated by the same in-cluster rotator, so
+	// `automated` — but OPTIONAL: it is minted only where spec.components.velero is
+	// enabled (default off), so an absent path is a deployment that does not run
+	// Velero, not a missing credential.
+	{"secret/obj/velero", "obj-velero", CredClassAutomated, true},
 	// The narrow in-cluster PAT. Re-minted monthly per region by
 	// secret-rotation.yml → `rotate-incluster-pat`, so it is genuinely
 	// `automated` and belongs on the 90d SLA: a stalled rotation workflow is

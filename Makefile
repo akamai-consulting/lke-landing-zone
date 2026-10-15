@@ -116,6 +116,7 @@ COVERAGE_MINS := \
 	internal/extensions/lifecycle/environments=40 \
 	internal/extensions/lifecycle/openbao=53 \
 	internal/extensions/lifecycle/openbaobackup=68 \
+	internal/extensions/lifecycle/velero=75 \
 	internal/shared/pathglob=93 \
 	internal/shared/promwire=92 \
 	internal/extensions/lifecycle/promote=90 \

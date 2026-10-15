@@ -147,7 +147,7 @@ func TestBackupGuardPassesAnEmptyOrAbsentBucket(t *testing.T) {
 		t.Error("a bare delete marker was left to block the bucket delete")
 	}
 	// No bucket at all (state predating it, or already destroyed).
-	f, _ = guardHarness(t, guardFakeAPI{buckets: []map[string]any{{"label": "inst-loki-chunks-prod", "region": "us-ord"}}},
+	_, _ = guardHarness(t, guardFakeAPI{buckets: []map[string]any{{"label": "inst-loki-chunks-prod", "region": "us-ord"}}},
 		baosnap.Version{Key: "openbao-raft/a.snap", VersionID: "1"})
 	if err := RunOpenBaoBackupGuard("prod", false, true); err != nil {
 		t.Errorf("absent bucket: %v", err)
@@ -204,5 +204,49 @@ func TestDestroyJobGuardsTheBackupsBeforeDraining(t *testing.T) {
 	}
 	if strings.Contains(job[d:x], "openbao_backup_bucket") {
 		t.Error("the drain step still drains the OpenBao backup bucket itself")
+	}
+}
+
+// The Velero bucket is held to the same rule by the same verb: a destroy without
+// consent refuses while it holds any version, even when the OpenBao bucket is
+// empty — and refuses BEFORE emptying anything, so the bare marker in the OpenBao
+// bucket is still there afterwards. With consent both are emptied.
+func TestBackupGuardAlsoGuardsTheVeleroBucket(t *testing.T) {
+	both := guardFakeAPI{buckets: []map[string]any{
+		{"label": "inst-openbao-backup-prod", "region": "us-ord"},
+		{"label": "inst-velero-prod", "region": "us-ord"},
+	}}
+	guardHarness(t, both) // spec, token, seams; the store is replaced below
+	bao := &guardFakeS3{versions: []baosnap.Version{{Key: "x", VersionID: "dm", DeleteMarker: true}}}
+	vel := &guardFakeS3{versions: []baosnap.Version{
+		{Key: "backups/velero-cluster-1/velero-cluster-1.tar.gz", VersionID: "1"},
+		{Key: "backups/velero-cluster-1/velero-backup.json", VersionID: "1"},
+	}}
+	srvs := map[string]*httptest.Server{}
+	for name, f := range map[string]*guardFakeS3{"inst-openbao-backup-prod": bao, "inst-velero-prod": vel} {
+		srv := httptest.NewServer(f)
+		t.Cleanup(srv.Close)
+		srvs[name] = srv
+	}
+	backupGuardStore = func(_ context.Context, _ baosnap.KeyAPI, _, _, bucket, _, _ string) (baosnap.Store, func(), error) {
+		srv, ok := srvs[bucket]
+		if !ok {
+			t.Fatalf("guard opened unexpected bucket %q", bucket)
+		}
+		return baosnap.Store{AccessKey: "AK", SecretKey: "SK", Endpoint: srv.URL, Bucket: bucket, HTTP: srv.Client()}, func() {}, nil
+	}
+
+	err := RunOpenBaoBackupGuard("prod", false, true)
+	if err == nil || !strings.Contains(err.Error(), "inst-velero-prod") || !strings.Contains(err.Error(), "2 Velero backup object version") {
+		t.Fatalf("guard without consent = %v, want a refusal naming the velero bucket", err)
+	}
+	if bao.deletes != 0 || vel.deletes != 0 {
+		t.Errorf("a refusal deleted versions (openbao=%d velero=%d); every bucket must be judged before any is emptied", bao.deletes, vel.deletes)
+	}
+	if err := RunOpenBaoBackupGuard("prod", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(bao.versions) != 0 || len(vel.versions) != 0 {
+		t.Errorf("after a consented guard: openbao %d, velero %d version(s) left", len(bao.versions), len(vel.versions))
 	}
 }

@@ -1665,7 +1665,13 @@ categories:
     #                       handles from its declaration (deps.go), so no installer
     #                       landed here; backup, restore and drill logic are in
     #                       openbaobackup and shared/baosnap, unit-tested.
-    budget: 1955
+    #   1,956 / 129 files  +1 the import of lifecycle/velero, whose one verb
+    #                       (`llz ci assert-velero-restore`, the Velero backup
+    #                       check and e2e restore drill) rides the same existing
+    #                       AddCommand line. Its handles come from its own
+    #                       declaration (deps.go); the logic is in lifecycle/velero
+    #                       and shared/clusterspec, unit-tested.
+    budget: 1956
     exact: true
     include:
       - "tools/internal/cli/*.go"

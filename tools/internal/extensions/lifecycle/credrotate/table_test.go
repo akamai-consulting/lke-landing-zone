@@ -82,8 +82,8 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := BuildRotationTable("acme", "primary", "us-ord-1")
-	if len(table) != 2 {
-		t.Fatalf("table has %d entries, want 2 (obj-platform + openbao-backup; the two per-app keys were retired)", len(table))
+	if len(table) != 3 {
+		t.Fatalf("table has %d entries, want 3 (obj-platform + openbao-backup + velero; the two per-app keys were retired)", len(table))
 	}
 	byName := map[string]CredEntry{}
 	for _, e := range table {
@@ -140,6 +140,64 @@ func TestBuildRotationTable(t *testing.T) {
 		if bf[k] != v {
 			t.Errorf("openbao-backup field %s = %q, want %q", k, bf[k], v)
 		}
+	}
+
+	// Velero's key: its one bucket, read_write (Velero's GC deletes expired
+	// backups), component-gated, and at the path the velero ExternalSecret reads.
+	// Neither other key may reach the velero bucket — it holds every included
+	// namespace's Secrets.
+	vk := byName["velero"]
+	if vk.Kind != CredKindObjKey || vk.BaoPath != VeleroBaoPath || vk.Component != "velero" ||
+		strings.Join(vk.Buckets, ",") != "acme-velero-primary" || vk.Permissions != "read_write" ||
+		vk.Label != "acme-velero-primary" {
+		t.Errorf("velero entry = %+v", vk)
+	}
+	if vf := vk.Fields("AK", "SK"); len(vf) != 2 || vf["AWS_ACCESS_KEY_ID"] != "AK" || vf["AWS_SECRET_ACCESS_KEY"] != "SK" {
+		t.Errorf("velero fields = %v", vf)
+	}
+	for _, e := range table {
+		if e.Name == "velero" {
+			continue
+		}
+		for _, b := range e.Buckets {
+			if b == "acme-velero-primary" {
+				t.Errorf("%s is scoped to the velero bucket", e.Name)
+			}
+		}
+	}
+}
+
+// A component-gated key the bootstrap never seeded (the component is off here)
+// must not be minted by the in-cluster rotator, which has no spec to ask: an empty
+// rotated_at reads as "due" to IsDue. Once seeded it rotates like any other.
+func TestRotatorLeavesAnUnseededGatedKeyAlone(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	t.Setenv("REGION", "primary")
+	t.Setenv("OBJ_CLUSTER", "us-ord-1")
+	t.Setenv("OBJ_LABEL_PREFIX", "acme")
+	t.Setenv("LINODE_TOKEN", "minting")
+	recent := strconvI(now.Unix() - 1*86400)
+	old := strconvI(now.Unix() - 100*86400)
+
+	lc := &stubLinode{}
+	bao := &stubBao{data: map[string]map[string]string{
+		"secret/obj/platform":       {"rotated_at": recent},
+		"secret/obj/openbao-backup": {"rotated_at": recent},
+	}}
+	withRotatorStubs(t, lc, bao, now)
+	if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if lc.objCreates != 0 || len(bao.data[VeleroBaoPath]) != 0 {
+		t.Errorf("the rotator minted the unseeded velero key (mints=%d, %s=%v)", lc.objCreates, VeleroBaoPath, bao.data[VeleroBaoPath])
+	}
+
+	bao.data[VeleroBaoPath] = map[string]string{"rotated_at": old, "AWS_ACCESS_KEY_ID": "OLD"}
+	if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if lc.objCreates != 1 || bao.data[VeleroBaoPath]["AWS_ACCESS_KEY_ID"] != "AK" {
+		t.Errorf("a seeded, due velero key was not rotated (mints=%d, %v)", lc.objCreates, bao.data[VeleroBaoPath])
 	}
 }
 

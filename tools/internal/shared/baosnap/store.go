@@ -201,6 +201,26 @@ func (s Store) HashObject(ctx context.Context, key string) (string, int64, error
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+// GetStatus issues a plain signed GET for key — no SSE-C headers — and returns
+// only the status code and S3 error code, discarding the body. It is the
+// consumer-side encryption probe for buckets written SSE-C (the velero bucket):
+// an SSE-C object cannot be read without its key, so a 400 proves the object is
+// encrypted and a 200 proves it is plaintext. The probe never holds the
+// customer key. A transport error is returned as such, never as a status.
+func (s Store) GetStatus(ctx context.Context, key string) (int, string, error) {
+	resp, err := s.do(ctx, http.MethodGet, key, "", nil)
+	if err != nil {
+		return 0, "", fmt.Errorf("get %s/%s: %w", s.Bucket, key, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	code := resp.Header.Get("x-amz-error-code")
+	if code == "" {
+		code = s3sig.ErrorCode(string(b))
+	}
+	return resp.StatusCode, code, nil
+}
+
 // Delete removes key. A 404 is success — the object is gone either way.
 func (s Store) Delete(ctx context.Context, key string) error {
 	resp, err := s.do(ctx, http.MethodDelete, key, "", nil)

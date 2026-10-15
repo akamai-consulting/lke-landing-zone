@@ -94,6 +94,7 @@ spec:
         objectStorage: { cluster: us-ord-7 }
       components:
         harbor: { enabled: false }
+        velero: { enabled: true, backupIntervalHours: 12, retention: 14d, backupExcludeNamespaces: "kube-system team-scratch" }
     staging:
       cluster:
         clusterLabel: platform-staging
@@ -102,6 +103,8 @@ spec:
         nodePool: { type: g6-standard-4, count: 2 }
         bootstrap: { name: platform-staging, domainSuffix: staging.example.com }
         objectStorage: { cluster: us-sea-1 }
+      components:
+        velero: { enabled: true }
 `
 
 const goldenPath = "testdata/render_golden.txt"

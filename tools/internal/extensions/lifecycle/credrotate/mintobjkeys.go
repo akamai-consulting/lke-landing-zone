@@ -76,9 +76,20 @@ func RunMintBootstrapObjkeys(region string, reseed bool) error {
 	if err != nil {
 		return err
 	}
+	enabled, err := componentsFor(region)
+	if err != nil {
+		return err
+	}
 	for _, e := range BuildRotationTable(prefix, region, objCluster) {
 		if e.Kind != CredKindObjKey {
 			continue // the DNS PAT is seeded from LINODE_DNS_TOKEN / minted by the rotator
+		}
+		if e.Component != "" && !enabled(e.Component) {
+			// A key for a component this deployment does not run — never minted, so
+			// the account holds no credential nothing consumes. Enabling the
+			// component later and re-running bootstrap mints it then.
+			fmt.Printf("%s: spec.components.%s is not enabled for %s — not minting %s.\n", e.Name, e.Component, region, e.Label)
+			continue
 		}
 		// Idempotency: a seeded path means an earlier bootstrap (or the rotator)
 		// owns a live key — minting again would orphan it until the next drain.
@@ -154,6 +165,23 @@ func RunMintBootstrapObjkeys(region string, reseed bool) error {
 		}
 	}
 	return nil
+}
+
+// componentsFor reads which spec components are enabled for region, for the
+// component-gated table entries (CredEntry.Component). A deployment the spec does
+// not name enables NOTHING gated — the safe direction: a gated key is then simply
+// not minted, and the ungated keys (whose labels and buckets come from the prefix
+// and the tfvars, not the env) are unaffected.
+func componentsFor(region string) (func(string) bool, error) {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return nil, fmt.Errorf("mint-bootstrap-objkeys: load the instance spec: %w", err)
+	}
+	e, ok := lz.Env(region)
+	if !ok {
+		return func(string) bool { return false }, nil
+	}
+	return func(c string) bool { return clusterspec.ComponentEnabled(e.Components, c) }, nil
 }
 
 // objKeyKeepNewest is how many same-labelled keys survive a drain, INCLUDING the

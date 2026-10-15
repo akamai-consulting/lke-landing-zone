@@ -1,0 +1,111 @@
+# Alerts that make a stopped or failing Velero loud. Same doctrine as the OpenBao
+# backup's: FRESHNESS (when did a backup last succeed) and the OUTCOME of the most
+# recent attempt — never the presence of objects in the bucket, which keeps its
+# history for a month after the producer dies.
+#
+# Inputs are Velero's own metrics (the chart's ServiceMonitor, scraped from
+# `monitoring` through the velero-server NetworkPolicy), all labelled
+# schedule="velero-cluster" — the Schedule the chart names from the release
+# (clusterspec.VeleroScheduleName; TestVeleroAlertsAndPolicyTargetTheChart pins
+# the two together). Metric names are Velero v1.18's pkg/metrics; bump the chart
+# and re-check them.
+#
+# NOT SCHEDULE-RENDERED, ON PURPOSE. The interval is a spec knob
+# (components.velero.backupIntervalHours, a divisor of 24, default 24), and Velero
+# publishes no "next run" time to derive an interval from. So Stale is set for the
+# LONGEST allowed interval: two missed daily runs plus an hour (49h). That can
+# never false-fire for any allowed interval, and a shorter interval only makes it
+# slower to notice a schedule that stopped running — Failing still pages on the
+# first failed attempt whatever the interval.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llz-velero-alerts
+  namespace: llz-velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system}. Without it the rule is never loaded.
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: llz-velero
+      interval: 60s
+      rules:
+        - alert: LLZVeleroBackupFailing
+          # The most recent backup of the schedule did not complete (Failed,
+          # PartiallyFailed, FailedValidation). Velero initialises this gauge to 1
+          # when the Schedule is created, so a fresh install does not fire before
+          # its first run; the first-backup step bootstrap runs makes that run
+          # happen at install, not a day later.
+          expr: |
+            max by (namespace, schedule) (velero_backup_last_status{schedule="velero-cluster"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: velero
+          annotations:
+            summary: The most recent Velero backup did not complete
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/velero-dr.md"
+            description: The newest backup from the velero-cluster schedule ended Failed or PartiallyFailed. `kubectl -n llz-velero get backups --sort-by=.metadata.creationTimestamp` and the Backup's status.errors / status.failureReason name what failed. LLZVeleroBackupStale escalates if it persists.
+        - alert: LLZVeleroBackupStale
+          # Two missed runs of the longest allowed interval (24h) plus an hour —
+          # see the header for why this is not rendered per schedule.
+          expr: |
+            time() - max by (namespace, schedule) (velero_backup_last_successful_timestamp{schedule="velero-cluster"}) > 176400
+          for: 15m
+          labels:
+            severity: critical
+            service: velero
+          annotations:
+            summary: No Velero backup has succeeded for over 49 hours
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/velero-dr.md"
+            description: The velero-cluster schedule's last successful backup is more than two daily intervals old. Every hour this persists widens the window of cluster state no restore can bring back.
+        - alert: LLZVeleroBackupNeverSucceeded
+          # The case neither rule above can see: a schedule that exists (its
+          # counters are initialised at creation) but has never produced a
+          # successful backup — never scheduled, paused, or failing before Velero
+          # records a status. 26h: past the first run of the longest interval.
+          expr: |
+            max by (namespace, schedule) (velero_backup_attempt_total{schedule="velero-cluster"})
+            unless on (namespace, schedule)
+            max by (namespace, schedule) (velero_backup_last_successful_timestamp{schedule="velero-cluster"})
+          for: 26h
+          labels:
+            severity: warning
+            service: velero
+          annotations:
+            summary: Velero has never completed a backup on this cluster
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/velero-dr.md"
+            description: The velero-cluster schedule has existed for over a day with no successful backup. Common causes are a BackupStorageLocation that never became Available (wrong key, bucket not applied), a paused schedule, or a missing velero-ssec-key Secret.
+        - alert: LLZVeleroStorageUnavailable
+          # Velero validates the BackupStorageLocation every minute; 0 means it
+          # cannot list the bucket — a revoked or mis-scoped key, a bucket that was
+          # never applied, or the endpoint unreachable. Every backup fails until it
+          # clears, so it pages before the first failed run does.
+          expr: |
+            max by (namespace, backup_location_name) (velero_backup_location_status_gauge{backup_location_name="default"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: velero
+          annotations:
+            summary: Velero cannot reach its backup bucket
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/velero-dr.md"
+            description: The default BackupStorageLocation is Unavailable. `kubectl -n llz-velero get backupstoragelocation default -o yaml` carries the validation error (status.message).
+        - alert: LLZVeleroMetricsAbsent
+          # Every rule above evaluates over Velero's own series, so a Velero that
+          # is down — or scraped by nothing — silences all of them at once. This is
+          # the one that notices the silence.
+          expr: |
+            absent(velero_backup_attempt_total{schedule="velero-cluster"})
+          for: 30m
+          labels:
+            severity: warning
+            service: velero
+          annotations:
+            summary: Velero's metrics are missing — its backup alerts cannot fire
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/velero-dr.md"
+            description: No velero_backup_attempt_total series for the velero-cluster schedule. Either the Velero server is not running (`kubectl -n llz-velero get deploy velero`), the Schedule does not exist, or Prometheus is not scraping it (the ServiceMonitor's prometheus=system label, or the velero-server NetworkPolicy's :8085 ingress from monitoring).

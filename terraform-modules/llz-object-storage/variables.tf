@@ -49,3 +49,20 @@ variable "openbao_backup_noncurrent_days" {
     error_message = "openbao_backup_noncurrent_days must be a whole number of days >= 1."
   }
 }
+
+# How long a DELETED or OVERWRITTEN Velero backup object stays recoverable as a
+# noncurrent version in the versioned velero bucket. 14 days: two weeks past the
+# moment Velero's GC (or an operator) deleted a backup is long enough to notice
+# "the backup we needed expired" or a GC bug, while a resources-only backup set
+# stays small. It does not change how long backups are KEPT — that is the
+# Schedule's TTL, spec.components.velero.retention (default 30d).
+variable "velero_noncurrent_days" {
+  description = "Days a deleted/overwritten Velero backup object is kept as a noncurrent version in the versioned velero bucket before expiring."
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = var.velero_noncurrent_days >= 1 && floor(var.velero_noncurrent_days) == var.velero_noncurrent_days
+    error_message = "velero_noncurrent_days must be a whole number of days >= 1."
+  }
+}

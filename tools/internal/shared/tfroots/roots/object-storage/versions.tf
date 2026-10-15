@@ -9,8 +9,8 @@ terraform {
   }
 }
 
-# obj_use_temp_keys: the openbao-backup bucket is VERSIONED and carries a
-# lifecycle rule (llz-object-storage), and both are S3 calls that need an
+# obj_use_temp_keys: the openbao-backup and velero buckets are VERSIONED and carry
+# a lifecycle rule (llz-object-storage), and both are S3 calls that need an
 # object-storage key, not just the Linode API token. With this set the provider
 # mints a short-lived key from LINODE_TOKEN for each operation that needs one and
 # deletes it afterwards — so no key lives in state or in a tfvars, which is the

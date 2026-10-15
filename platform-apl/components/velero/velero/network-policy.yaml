@@ -1,0 +1,70 @@
+# Default-deny for llz-velero + the server's minimal allows.
+#
+# Egress — DNS; the LKE-E apiserver; and Linode Object Storage. Velero talks to
+# nothing else: no OpenBao (ESO brings its two Secrets in), no Linode API.
+#
+#   * The apiserver on BOTH 443 and 6443. Cilium evaluates policy post-DNAT, so a
+#     443-only rule silently drops every API call (docs/lessons-learned.md). A bare
+#     `ports` rule with no `to:`, like the reconciler's: there is no in-cluster
+#     kube-apiserver pod to select on managed LKE-E, and the control-plane address
+#     is LKE's, not ours to pin.
+#   * Object Storage on 443 (<bucket>.<cluster>.linodeobjects.com, virtual-hosted).
+#     Its addresses are Linode's to change, so it is port-scoped rather than
+#     address-scoped — the same posture as every other platform workload that
+#     reaches a Linode endpoint. It rides the same bare 443 as the apiserver; drop
+#     that and backups fail at the upload, not at a NetworkPolicy you can see.
+#
+# Ingress — ONLY the Prometheus scrape of :8085 from `monitoring`, where
+# apl-core's Prometheus runs. Without it the ServiceMonitor is discovered, every
+# scrape is dropped, and every Velero alert evaluates over nothing.
+#
+# Sync-wave -10 with the default-deny: an allow that lands after the server starts
+# is a Velero that crash-loops on its first apiserver call for no reason.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-velero-default-deny
+  namespace: llz-velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: velero-server
+  namespace: llz-velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  # The chart labels the server pod app.kubernetes.io/name=velero (helm template
+  # of the pinned chart). A selector that matches nothing leaves the pod under the
+  # default-deny alone — TestVeleroAlertsAndPolicyTargetTheChart pins it.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: velero
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { protocol: TCP, port: 8085 }
+  egress:
+    # DNS — kube-system by NAMESPACE only: LKE-Enterprise CoreDNS is not labelled
+    # k8s-app=kube-dns, so a kube-dns podSelector matches nothing and every lookup
+    # times out.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # kube-apiserver, dual-port (post-DNAT 6443), and Object Storage on 443.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

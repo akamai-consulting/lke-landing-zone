@@ -286,6 +286,14 @@ type ComponentToggle struct {
 	// RenderOpenBaoBackupPatch. Unset means the defaults (every 6h, keep 28).
 	BackupIntervalHours *int `json:"backupIntervalHours,omitempty"` // CronJob schedule: every N hours (a divisor of 24)
 	BackupKeep          *int `json:"backupKeep,omitempty"`          // KEEP: snapshots retained PER OpenBao cluster id
+	// velero → the Schedule's namespace scope, rendered by RenderVeleroPatch (the
+	// velero component also reads backupIntervalHours and retention above).
+	// SPACE-separated, like broadPATDeployments, so `llz env set` can write them.
+	// Unset means the defaults: include "*", exclude VeleroDefaultExcludes. An
+	// exclude list REPLACES the default one; VeleroMandatoryExcludes (llz-openbao,
+	// llz-velero) are appended whatever it says.
+	BackupIncludeNamespaces string `json:"backupIncludeNamespaces,omitempty"` // Schedule includedNamespaces
+	BackupExcludeNamespaces string `json:"backupExcludeNamespaces,omitempty"` // Schedule excludedNamespaces (+ the mandatory ones)
 }
 
 // Cluster maps to the three per-env tfvars (cluster, cluster-bootstrap,

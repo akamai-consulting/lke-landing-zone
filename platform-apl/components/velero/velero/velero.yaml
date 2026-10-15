@@ -1,0 +1,190 @@
+# Velero — Kubernetes-resource backup to Linode Object Storage (wave 0 in the
+# llz-velero carved App).
+#
+# THE UPSTREAM CHART, DEPLOYED DIRECTLY, like argo-workflows: Velero's server
+# needs cluster-admin by design (it reads every object it backs up and recreates
+# every object it restores), which is correct for a backup tool and is exactly
+# what kube-linter would flag in a first-party chart. The llz glue — namespace,
+# NetworkPolicies, the two ExternalSecrets, the alerts — ships beside it in this
+# component. vmware-tanzu.github.io/helm-charts is in the platform-support
+# AppProject's sourceRepos for this Application alone.
+#
+# WHAT THE PER-ENV PATCH OWNS. `llz render` writes velero-values-patch.yaml
+# (clusterspec.RenderVeleroPatch), a merge patch that REPLACES
+# configuration.backupStorageLocation and schedules.cluster wholesale (lists merge
+# by replacement in a CRD patch). Everything marked REPLACED-BY-LLZ-RENDER below
+# is a placeholder that fails closed if the patch is ever missing: a bucket name
+# no deployment has, and a schedule template that still excludes llz-openbao.
+#
+# RESOURCES ONLY — NO VOLUME DATA. snapshotsEnabled false, no VolumeSnapshotLocation,
+# no node-agent, defaultVolumesToFsBackup false. Linode Block Storage has no
+# snapshot API for the CSI driver to drive, and this platform DENIES
+# snapshot/clone-sourced PVCs at admission (the pvc-deny-untaggable-clone
+# ValidatingAdmissionPolicy: the clone path cannot tag the Volume, so it could
+# never be reaped). File-system backup (kopia) would need a privileged hostPath
+# node-agent, which restricted PSS refuses — an owner decision, not a default.
+# PVs and PVCs are backed up as OBJECTS; see docs/runbooks/velero-dr.md for what
+# a restore does with them.
+#
+# CONFIDENTIALITY. Backups hold every included namespace's Secrets. The AWS plugin
+# writes every object SSE-C (customerKeyEncryptionSecret, a 32-byte key from
+# OpenBao via the velero-ssec-key ExternalSecret), so the bucket holds ciphertext
+# Linode cannot read. Addressed VIRTUAL-HOSTED (s3ForcePathStyle "false"), so the
+# objProxy gateway's exact-host CoreDNS rewrite never captures it: the proxy would
+# inject its own SSE-C key over Velero's, and Velero does not trust its CA.
+# Consequence worth knowing: `velero backup logs` / `describe --details` download
+# through presigned URLs, which an SSE-C object refuses without the key headers —
+# read results off the Backup/Restore CRs instead (the runbook says how).
+#
+# llz-openbao IS EXCLUDED FROM EVERY SCHEDULE, and the render cannot be told
+# otherwise. Its openbao-unseal-key Secret IS OPENBAO_SEAL_KEY and its Raft volumes
+# are the store; a backup of both puts seal key and data in one bucket, so read
+# access to it would be the whole of OpenBao. OpenBao is backed up by the
+# openbaoBackup component (verified Raft snapshots, a bucket that never holds the
+# seal key) and restored ONLY from those. TestVeleroScheduleNeverIncludesOpenBao
+# holds this file and every rendered patch to it, and `llz ci
+# assert-velero-restore` re-checks the LIVE Schedule.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-velero-server
+  namespace: argocd
+  annotations:
+    # After the two ExternalSecrets (-5): the server mounts one and the plugin
+    # reads the other at its first BackupStorageLocation validation.
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: platform-support
+  source:
+    repoURL: https://vmware-tanzu.github.io/helm-charts
+    chart: velero
+    # 12.2.1 ships Velero v1.18.2. The AWS plugin below must be the matching
+    # minor (v1.14.x ↔ Velero v1.18.x — the plugin's compatibility table); bump
+    # the two together.
+    targetRevision: 12.2.1
+    helm:
+      # `velero` → Deployment velero, Schedule velero-cluster (the name the alerts
+      # and the drill key on: clusterspec.VeleroScheduleName).
+      releaseName: velero
+      valuesObject:
+        image:
+          repository: docker.io/velero/velero
+          tag: v1.18.2
+          # Digest-pinned: the tag is mutable upstream.
+          digest: sha256:37396519f399536e5f01427d723565ae69294ec3fb5625cf1c87c09eaa9de16b
+        initContainers:
+          # The S3 object-store plugin (Linode Object Storage is S3-compatible),
+          # copied into the shared plugins emptyDir.
+          - name: velero-plugin-for-aws
+            image: docker.io/velero/velero-plugin-for-aws:v1.14.4@sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
+            imagePullPolicy: IfNotPresent
+            volumeMounts:
+              - mountPath: /target
+                name: plugins
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              capabilities:
+                drop: [ALL]
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests: { cpu: 10m, memory: 32Mi }
+              limits: { memory: 128Mi }
+        configuration:
+          # PLACEHOLDER — replaced per env (RenderVeleroPatch).
+          backupStorageLocation:
+            - name: default
+              provider: aws
+              bucket: REPLACED-BY-LLZ-RENDER
+              default: true
+              config:
+                region: REPLACED-BY-LLZ-RENDER
+                s3Url: https://REPLACED-BY-LLZ-RENDER.linodeobjects.com
+                s3ForcePathStyle: "false"
+                checksumAlgorithm: ""
+                customerKeyEncryptionSecret: velero-ssec-key/customer-key
+          volumeSnapshotLocation: []
+          logFormat: json
+        credentials:
+          useSecret: true
+          existingSecret: velero-cloud-credentials
+        backupsEnabled: true
+        snapshotsEnabled: false
+        deployNodeAgent: false
+        # CRDs come from the chart's crds/ on every Argo sync; the upgrade-CRDs
+        # hook Job is a bare kubectl pod restricted PSS would refuse.
+        upgradeCRDs: false
+        cleanUpCRDs: false
+        # PLACEHOLDER — replaced per env (RenderVeleroPatch). Kept safe as written.
+        schedules:
+          cluster:
+            disabled: false
+            schedule: "37 1 * * *"
+            useOwnerReferencesInBackup: false
+            template:
+              ttl: 720h
+              storageLocation: default
+              snapshotVolumes: false
+              defaultVolumesToFsBackup: false
+              includedNamespaces:
+                - REPLACED-BY-LLZ-RENDER
+              excludedNamespaces:
+                - llz-openbao
+                - llz-velero
+        metrics:
+          enabled: true
+          serviceMonitor:
+            # Not autodetected: Argo renders without cluster capabilities, and a
+            # ServiceMonitor that silently fails to render is an alert that never
+            # evaluates.
+            autodetect: false
+            enabled: true
+            additionalLabels:
+              # REQUIRED for pickup: apl-core's Prometheus selects {prometheus: system}.
+              prometheus: system
+          # The rules ship as a raw PrometheusRule beside this Application.
+          prometheusRule:
+            autodetect: false
+            enabled: false
+        # The image's user is `cnb` (uid 1002, gid 1000), a NAME runAsNonRoot
+        # cannot verify — so the ids are stated.
+        podSecurityContext:
+          runAsNonRoot: true
+          runAsUser: 1002
+          runAsGroup: 1000
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        containerSecurityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits: { memory: 1Gi }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llz-velero
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      # First boot races the two ExternalSecrets (OpenBao seeded later in the same
+      # bootstrap); ~20 retries @ 3m cap rides out that window.
+      limit: 20
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      # llz-velero is created (restricted PSS) by namespace.yaml at wave -20; let it
+      # be the sole Namespace owner.
+      - CreateNamespace=false
+      - ServerSideApply=true
