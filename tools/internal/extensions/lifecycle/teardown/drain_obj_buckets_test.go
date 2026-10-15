@@ -287,3 +287,43 @@ func TestDeleteObjectsTreatsAnEmptyBodyAsSuccess(t *testing.T) {
 		}
 	}
 }
+
+// The CNPG archive bucket is drained on the e2e lane's deployments and NEVER on
+// a real one. On e2e a leftover archive makes the next run's fresh database
+// clusters refuse to archive ("Expected empty archive"); on a real deployment
+// that same leftover is the backup a rebuild restores from.
+func TestDrainEmptiesTheCnpgArchiveOnlyOnLaneDeployments(t *testing.T) {
+	root := t.TempDir()
+	lz := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: inst\nspec:\n  instance:\n    upstreamOrg: akamai-consulting\n    repo: acme/inst\n    forge: github\n"
+	_ = os.WriteFile(root+"/landingzone.yaml", []byte(lz), 0o644)
+	_ = os.MkdirAll(root+"/environments", 0o755)
+	for _, env := range []string{"e2e", "prod"} {
+		body := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: ClusterDefinition\nmetadata:\n  name: " + env +
+			"\nspec:\n  cluster:\n    region: us-ord\n    objectStorage:\n      cluster: us-ord-10\n"
+		_ = os.WriteFile(root+"/environments/"+env+".yaml", []byte(body), 0o644)
+	}
+	t.Chdir(root)
+	prev := drainObjMintKey
+	t.Cleanup(func() { drainObjMintKey = prev })
+	var got []string
+	drainObjMintKey = func(_, _ string, buckets []string) (string, string, func(), error) {
+		got = buckets
+		return "", "", nil, fmt.Errorf("stop here: the scope is what is under test")
+	}
+	for env, wantCnpg := range map[string]bool{"e2e": true, "prod": false} {
+		got = nil
+		_ = RunDrainObjBuckets(env, true)
+		has := false
+		for _, b := range got {
+			if b == "inst-cnpg-"+env {
+				has = true
+			}
+		}
+		if has != wantCnpg {
+			t.Errorf("%s: drain scope %v includes the cnpg bucket = %v, want %v", env, got, has, wantCnpg)
+		}
+		if len(got) < 2 {
+			t.Errorf("%s: drain scope %v lost the Loki/Harbor buckets", env, got)
+		}
+	}
+}

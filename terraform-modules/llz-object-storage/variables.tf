@@ -66,3 +66,22 @@ variable "velero_noncurrent_days" {
     error_message = "velero_noncurrent_days must be a whole number of days >= 1."
   }
 }
+
+# How long a DELETED or OVERWRITTEN CNPG backup object (a base backup or an
+# archived WAL segment) stays recoverable as a noncurrent version in the versioned
+# cnpg bucket. 30 days, longer than velero's 14, because this bucket's key is
+# SHARED with Loki and Harbor (apl-core has one object-storage credential for every
+# app — see main.tf): the window is how long a destructive write by something that
+# should never touch database backups stays reversible. It does not change how
+# long backups are KEPT — that is barman's retentionPolicy,
+# spec.components.cnpgBackup.retention (default 30d).
+variable "cnpg_noncurrent_days" {
+  description = "Days a deleted/overwritten CNPG backup object is kept as a noncurrent version in the versioned cnpg bucket before expiring."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.cnpg_noncurrent_days >= 1 && floor(var.cnpg_noncurrent_days) == var.cnpg_noncurrent_days
+    error_message = "cnpg_noncurrent_days must be a whole number of days >= 1."
+  }
+}

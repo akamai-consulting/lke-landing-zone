@@ -250,3 +250,49 @@ func TestBackupGuardAlsoGuardsTheVeleroBucket(t *testing.T) {
 		t.Errorf("after a consented guard: openbao %d, velero %d version(s) left", len(bao.versions), len(vel.versions))
 	}
 }
+
+// The cnpg bucket (apl-core's database backups) is the third bucket the guard
+// holds to the same rule: a version there refuses the destroy without consent,
+// with nothing deleted from any bucket; consent empties it.
+func TestBackupGuardAlsoGuardsTheCnpgBucket(t *testing.T) {
+	all := guardFakeAPI{buckets: []map[string]any{
+		{"label": "inst-openbao-backup-prod", "region": "us-ord"},
+		{"label": "inst-velero-prod", "region": "us-ord"},
+		{"label": "inst-cnpg-prod", "region": "us-ord"},
+	}}
+	guardHarness(t, all)
+	fakes := map[string]*guardFakeS3{
+		"inst-openbao-backup-prod": {},
+		"inst-velero-prod":         {},
+		"inst-cnpg-prod": {versions: []baosnap.Version{
+			{Key: "keycloak-1/keycloak-db/base/20261015T000700/backup.info", VersionID: "1"},
+			{Key: "keycloak-1/keycloak-db/wals/0000000100000000/000000010000000000000003.gz", VersionID: "1"},
+		}},
+	}
+	srvs := map[string]*httptest.Server{}
+	for name, f := range fakes {
+		srv := httptest.NewServer(f)
+		t.Cleanup(srv.Close)
+		srvs[name] = srv
+	}
+	backupGuardStore = func(_ context.Context, _ baosnap.KeyAPI, _, _, bucket, _, _ string) (baosnap.Store, func(), error) {
+		srv, ok := srvs[bucket]
+		if !ok {
+			t.Fatalf("guard opened unexpected bucket %q", bucket)
+		}
+		return baosnap.Store{AccessKey: "AK", SecretKey: "SK", Endpoint: srv.URL, Bucket: bucket, HTTP: srv.Client()}, func() {}, nil
+	}
+	err := RunOpenBaoBackupGuard("prod", false, true)
+	if err == nil || !strings.Contains(err.Error(), "inst-cnpg-prod") || !strings.Contains(err.Error(), "2 CNPG database backup object version") {
+		t.Fatalf("guard without consent = %v, want a refusal naming the cnpg bucket", err)
+	}
+	if fakes["inst-cnpg-prod"].deletes != 0 {
+		t.Error("a refusal deleted CNPG backups")
+	}
+	if err := RunOpenBaoBackupGuard("prod", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fakes["inst-cnpg-prod"].versions); n != 0 {
+		t.Errorf("after a consented guard the cnpg bucket still holds %d version(s)", n)
+	}
+}

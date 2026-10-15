@@ -110,7 +110,9 @@ func TestBuildRotationTable(t *testing.T) {
 	// The broad managed platform-obj key: seeded at secret/obj/platform, scoped to
 	// every provisioned bucket (loki chunks/ruler/admin + harbor), AWS_* fields.
 	obj := byName["obj-platform"]
-	wantObjBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary,acme-harbor-registry-primary"
+	// The cnpg bucket rides on obj-platform because apl-core's CNPG backups can
+	// only authenticate with the one platform key (see the entry's comment).
+	wantObjBuckets := "acme-loki-chunks-primary,acme-loki-ruler-primary,acme-loki-admin-primary,acme-harbor-registry-primary,acme-cnpg-primary"
 	if obj.Kind != CredKindObjKey || obj.BaoPath != "secret/obj/platform" || strings.Join(obj.Buckets, ",") != wantObjBuckets {
 		t.Errorf("obj-platform entry = %+v (want buckets %s)", obj, wantObjBuckets)
 	}
@@ -388,6 +390,7 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 				map[string]any{"bucket_name": "acme-loki-ruler-primary", "permissions": "read_write"},
 				map[string]any{"bucket_name": "acme-loki-admin-primary", "permissions": "read_write"},
 				map[string]any{"bucket_name": "acme-harbor-registry-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-cnpg-primary", "permissions": "read_write"},
 			},
 		}}}
 		bao := &stubBao{data: map[string]map[string]string{
@@ -402,6 +405,34 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 		}
 		if lc.objCreates != 0 {
 			t.Errorf("objCreates=%d, want 0 — a healthy key must not be rotated off-schedule", lc.objCreates)
+		}
+	})
+
+	// THE UPGRADE PATH for the cnpg bucket. Every platform key minted before the
+	// bucket joined obj-platform's scope grants the four Loki/Harbor buckets and
+	// not cnpg; apl-core's CNPG backups would 403 on it for up to 120 days if age
+	// were the only trigger. The scope check must see the gap and rotate once.
+	t.Run("pre-cnpg key -> rotated off-schedule", func(t *testing.T) {
+		lc := &stubLinode{objkeys: []map[string]any{{
+			"id": jn(10), "label": "acme-obj-primary", "access_key": "OLD",
+			"bucket_access": []any{
+				map[string]any{"bucket_name": "acme-loki-chunks-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-loki-ruler-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-loki-admin-primary", "permissions": "read_write"},
+				map[string]any{"bucket_name": "acme-harbor-registry-primary", "permissions": "read_write"},
+			},
+		}}}
+		bao := &stubBao{data: map[string]map[string]string{
+			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+			baosnap.KeyPath:       {"rotated_at": recent},
+		}}
+		withRotatorStubs(t, lc, bao, now)
+		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		if lc.objCreates != 1 || bao.data["secret/obj/platform"]["AWS_ACCESS_KEY_ID"] != "AK" {
+			t.Errorf("objCreates=%d, platform=%v — a platform key without the cnpg bucket must be replaced",
+				lc.objCreates, bao.data["secret/obj/platform"])
 		}
 	})
 

@@ -297,9 +297,10 @@ jobs:
           # inside the cluster access it already holds. Harmless on a plan (the
           # apply-gated bootstrap chain doesn't run).
           # restore_drill=true arms the OpenBao backup -> restore drill, which rolls
-          # the e2e cluster's OpenBao back in place, and the Velero backup -> restore
-          # drill of a canary namespace. Its own input, never implied by
-          # assert_loki, and refused by both verbs on any non-e2e deployment.
+          # the e2e cluster's OpenBao back in place, the Velero backup -> restore
+          # drill of a canary namespace, and the CNPG restore of a canary database
+          # into a scratch cluster. Its own input, never implied by assert_loki, and
+          # refused by all three verbs on any non-e2e deployment.
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \

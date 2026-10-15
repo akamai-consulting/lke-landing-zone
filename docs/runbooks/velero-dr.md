@@ -48,7 +48,7 @@ The platform's own state is not Velero's job. It comes back from elsewhere:
 | Cluster, network, buckets | Terraform (the `object-storage` root's buckets survive a cluster destroy) |
 | Platform configuration — apl-core values, LLZ components | Git (the instance repo and the `apl-<env>` values branch) |
 | Every platform secret | OpenBao, restored from its own Raft snapshots ([openbao-backup-restore](openbao-backup-restore.md)) |
-| apl-core's CNPG databases (Harbor, Gitea, Keycloak) and Gitea repositories | apl-core's `platformBackups` — configured in the App Platform Console, not by LLZ |
+| apl-core's CNPG databases (Harbor, Keycloak) | apl-core's `platformBackups`, switched on and pointed at the cnpg bucket by the `cnpgBackup` component — [cnpg-backup-restore](cnpg-backup-restore.md). Velero backs up the Cluster objects, not the data; restore the databases from their own archive |
 
 apl-core ships no Velero. What this component adds is **point-in-time Kubernetes
 resource state for the workloads you run** — the Deployments, ConfigMaps, Secrets and

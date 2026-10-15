@@ -161,6 +161,9 @@ func TestComponentLinksArePinned(t *testing.T) {
 		// the gate drives the Velero the component deploys: with it off there is
 		// no Schedule to back up from and nothing to restore
 		"velero": "velero",
+		// the gate checks the database backups the component switches on: with it
+		// off LLZ asked apl-core for none
+		"cnpg-backup": "cnpgBackup",
 	}
 	got := ComponentLinks()
 	for name, comp := range want {

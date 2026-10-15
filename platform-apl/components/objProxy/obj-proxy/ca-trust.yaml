@@ -48,3 +48,33 @@ spec:
   issuerRef:
     name: llz-serving-ca
     kind: ClusterIssuer
+---
+# THE SAME BUNDLE, INTO THE KEYCLOAK NAMESPACE, for apl-core's CloudNativePG
+# backups (spec.components.cnpgBackup). barman-cloud addresses object storage
+# path-style at https://<cluster>.linodeobjects.com — botocore forces path style
+# whenever an endpoint_url is set — so with the rewrite live its requests reach the
+# proxy exactly as Harbor's do, and fail x509 the same way without the CA. The
+# harbor database reads the bundle above; this one is Keycloak's. The Kyverno
+# policy that points each ObjectStore at it is kyverno-cnpg-ca.yaml.
+#
+# Issued whether or not cnpgBackup is on: a CA bundle nobody mounts is inert, and
+# issuing it ahead of the ObjectStore is what lets the plugin find it on the first
+# instance pod rather than the next.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: obj-proxy-ca
+  namespace: keycloak
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  secretName: obj-proxy-ca
+  commonName: obj-proxy-ca-bundle
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: llz-serving-ca
+    kind: ClusterIssuer

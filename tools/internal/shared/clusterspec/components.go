@@ -523,6 +523,45 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-velero", AppWave: 5, Namespace: VeleroNamespace},
 	},
 	{
+		// apl-core's OWN database backups — CloudNativePG base backups and the
+		// continuous WAL archive of the Harbor (harbor-otomi-db) and Keycloak
+		// (keycloak-db) Postgres clusters — switched on through apl-core's NATIVE
+		// platformBackups settings and pointed at this deployment's cnpg bucket. LLZ
+		// runs no backup code: the render emits two apl-overlay fragments
+		// (obj.yaml buckets.cnpg, which is unconditional, and platformBackups.yaml,
+		// which is this component), and apl-core's otomi-db chart builds the
+		// ObjectStore, the WAL-archiving plugin and the ScheduledBackup from them.
+		// See cnpgbackup.go.
+		//
+		// NOT ManagedConditionalOn: Keycloak is part of apl-core's minimal core, so
+		// the component always has a database to back up. Harbor's database exists
+		// only where the harbor component emits, and the DEFAULT database set drops
+		// it there (CnpgBackupSettingsFor) — a per-database condition, which the
+		// component-level gate cannot express.
+		//
+		// DEFAULT-DISABLED. Turning it on rotates nothing and installs nothing, but it
+		// does put the identity provider's database — users, credential hashes, realm
+		// signing keys — into a bucket the shared platform key can read (apl-core
+		// has one object-storage credential for every app; see the obj-platform
+		// rotation-table entry), and plaintext at rest unless objProxy is on. That is
+		// a choice per deployment, not a default. Opt in per env.
+		//
+		// DependsOn observability: the PrometheusRule CRD, and the staleness alerts
+		// are what make a stopped backup visible. objProxy is NOT a conflict: barman
+		// is path-style, so its traffic is captured by the proxy's rewrite like
+		// Loki's and Harbor's, and the objProxy component trusts its CA into apl-core's
+		// ObjectStores (kyverno-cnpg-ca.yaml). The backup gate checks which of the
+		// two happened, consumer-side.
+		Name:              CnpgBackupComponent,
+		DefaultDisabled:   true,
+		DependsOn:         []string{"observability"},
+		ManifestResources: []string{"cnpg-backup"},
+		// Its own health-gated Application, like velero: a rule group that cannot
+		// sync fails llz-cnpg-backup, never platform-bootstrap. Wave 5 with the
+		// other carved backup components.
+		CarvedApp: &CarvedApp{AppName: "llz-cnpg-backup", AppWave: 5, Namespace: CnpgBackupNamespace},
+	},
+	{
 		// ON-DEMAND cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
 		// running `llz ci health-incluster` (kubectl-free) on the slim llz image. It
 		// authenticates with the workflow pod's ServiceAccount (read-only RBAC), so it

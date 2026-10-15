@@ -1,6 +1,9 @@
 package clusterspec
 
 import (
+	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -162,5 +165,43 @@ func TestValidateAplValuesRepo(t *testing.T) {
 	}
 	if !strings.Contains(errs[0].Error(), "environments.lab") {
 		t.Errorf("error should name the deployment: %v", errs[0])
+	}
+}
+
+// THE MODULE AND THE DERIVATION ARE ONE LIST. Every bucket llz-object-storage
+// creates is a label llz derives from the spec — for the presence preflights, for
+// the obj overlay's buckets (buckets.cnpg, which apl-core turns into every CNPG
+// ObjectStore's destinationPath), for key scopes and for the backup gates. The
+// module output descriptions say a coupling test holds the two together; this is
+// it. A bucket added to main.tf but not to ObjBucketLabels — or a label spelled
+// differently on either side — fails here instead of as a 403/NoSuchBucket in a
+// cluster.
+func TestObjBucketLabelsMatchTheModule(t *testing.T) {
+	raw, err := os.ReadFile("../../../../terraform-modules/llz-object-storage/main.tf")
+	if err != nil {
+		t.Fatalf("read the module (%v) — skipping would leave the coupling unchecked", err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*label\s*=\s*"\$\{var\.label_prefix\}-([a-z0-9-]+)-\$\{var\.region_suffix\}"`)
+	var module []string
+	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
+		module = append(module, "P-"+m[1]+"-E")
+	}
+	derived := append([]string(nil), ObjBucketLabels("P", "E")...)
+	sort.Strings(module)
+	sort.Strings(derived)
+	if len(module) == 0 {
+		t.Fatal("no bucket labels parsed from the module — the pattern no longer matches main.tf")
+	}
+	if strings.Join(module, ",") != strings.Join(derived, ",") {
+		t.Errorf("module buckets %v != ObjBucketLabels %v", module, derived)
+	}
+	for _, want := range []string{ObjCnpgBucket("P", "E"), ObjVeleroBucket("P", "E"), ObjOpenBaoBackupBucket("P", "E")} {
+		found := false
+		for _, m := range module {
+			found = found || m == want
+		}
+		if !found {
+			t.Errorf("the module creates no %s", want)
+		}
 	}
 }

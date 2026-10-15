@@ -42,12 +42,17 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/harborauth"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/s3sig"
 )
+
+// cnpgLaneBase is the e2e lane's deployment base name (forge.LaneName makes it
+// forge-unique) — the only deployments whose CNPG archive the drain may empty.
+const cnpgLaneBase = "e2e"
 
 func RunDrainObjBuckets(region string, yes bool) error {
 	if region == "" {
@@ -71,6 +76,21 @@ func RunDrainObjBuckets(region string, yes bool) error {
 	buckets := []string{
 		clusterspec.ObjLokiChunksBucket(lz.ObjLabelPrefix(), region),
 		clusterspec.ObjHarborRegistryBucket(lz.ObjLabelPrefix(), region),
+	}
+	// THE CNPG BACKUP BUCKET, ON THE E2E LANE'S OWN DEPLOYMENTS ONLY. A CloudNativePG
+	// cluster refuses to archive WAL into a destination that already holds another
+	// cluster's archive (barman-cloud-check-wal-archive: "Expected empty archive"),
+	// and every cluster the lane creates is a new one writing to the same
+	// <db>-<generation>/ prefix — so the second run's databases would never back up,
+	// which is the cross-generation poisoning this verb exists for, by another route.
+	//
+	// NEVER on a real deployment. There the leftover archive IS the backup a rebuild
+	// restores from, and the refusal to overwrite it is the protection, not the bug:
+	// the runbook's restore bumps components.cnpgBackup.backupGeneration so the
+	// rebuilt cluster archives beside it. forge.IsLaneDeployment is the same
+	// predicate the restore drills refuse to run without.
+	if forge.IsLaneDeployment(cnpgLaneBase, region) {
+		buckets = append(buckets, clusterspec.ObjCnpgBucket(lz.ObjLabelPrefix(), region))
 	}
 
 	// The SAME credential the consumers use, read from the cluster's own Secret, is

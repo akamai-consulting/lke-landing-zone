@@ -33,6 +33,12 @@ package teardown
 // verb and the same consent, rather than by a second step a workflow edit could
 // drop. Each bucket is judged on its own: an empty or absent one never blocks the
 // other. The verb keeps its name because the delivered workflow calls it by name.
+//
+// THREE, WITH THE cnpg BUCKET: apl-core's CloudNativePG backups of the Harbor and
+// Keycloak databases (spec.components.cnpgBackup). Same reason, same rule, same
+// consent — and the one of the three a destroy is likeliest to take by accident,
+// because nothing about "destroy object-storage" says "and the identity
+// provider's database".
 
 import (
 	"context"
@@ -88,6 +94,12 @@ var (
 		inspect: "`velero backup get -n llz-velero` lists them while the cluster is up; the objects are SSE-C, so " +
 			"copying them out needs secret/obj/velero-ssec — see docs/runbooks/velero-dr.md",
 	}
+	cnpgGuarded = guarded{
+		what: "CNPG database backup object",
+		inspect: "they are barman base backups and WAL under <db>-<generation>/<cluster>/ — copy the prefixes out " +
+			"with any S3 client (objects written through objProxy are SSE-C under secret/obj/ssec); see " +
+			"docs/runbooks/cnpg-backup-restore.md",
+	}
 )
 
 func guardVerdict(g guarded, bucket string, data, markers int, allowDelete bool) (deleteAll bool, err error) {
@@ -115,7 +127,7 @@ func RunOpenBaoBackupGuard(region string, allowDelete, yes bool) error {
 		return fmt.Errorf("--region is required")
 	}
 	if allowDelete && !yes {
-		return fmt.Errorf("--allow-delete deletes every OpenBao and Velero backup of %q — pass --yes as well", region)
+		return fmt.Errorf("--allow-delete deletes every OpenBao, Velero and CNPG database backup of %q — pass --yes as well", region)
 	}
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
@@ -151,6 +163,7 @@ func RunOpenBaoBackupGuard(region string, allowDelete, yes bool) error {
 	}{
 		{clusterspec.ObjOpenBaoBackupBucket(prefix, region), openBaoGuarded},
 		{clusterspec.ObjVeleroBucket(prefix, region), veleroGuarded},
+		{clusterspec.ObjCnpgBucket(prefix, region), cnpgGuarded},
 	} {
 		if !bucketExists(all, b.label, objCluster) {
 			fmt.Printf("no %s in the account — no %ss to protect there.\n", b.label, b.g.what)

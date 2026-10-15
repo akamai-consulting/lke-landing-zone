@@ -18,12 +18,15 @@ func DrainObjBucketsCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "drain-obj-buckets",
-		Short: "delete every object in the deployment's Loki/Harbor buckets, leaving the buckets in place",
+		Short: "delete every object in the deployment's Loki/Harbor buckets (and, on e2e lane deployments only, its CNPG archive), leaving the buckets in place",
 		Long: "Empties the data buckets a deployment owns. DESTRUCTIVE: it deletes log chunks\n" +
 			"and registry blobs. Requires --yes.\n\n" +
 			"For a lane that recreates a cluster over the same buckets. Each cluster mints its\n" +
 			"own SSE-C key, so a previous cluster's objects are permanently unreadable and make\n" +
-			"Loki's index-gateway fail whole tables rather than skip them.\n\n" +
+			"Loki's index-gateway fail whole tables rather than skip them. On the e2e lane's own\n" +
+			"deployments (e2e, e2e-<forge>) it also empties the cnpg bucket: a fresh CNPG cluster\n" +
+			"refuses to archive over another cluster's WAL. Never on a real deployment, where that\n" +
+			"archive is the backup a rebuild restores from.\n\n" +
 			"EMPTIES rather than deletes: Linode does not free a bucket NAME promptly after\n" +
 			"deletion, so destroying the buckets fails the next provision with\n" +
 			"\"already exists\".",
@@ -43,10 +46,10 @@ func OpenBaoBackupDestroyGuardCmd() *cobra.Command {
 	var allow bool
 	c := &cobra.Command{
 		Use:   "openbao-backup-destroy-guard",
-		Short: "before an object-storage destroy: refuse while a backup bucket (OpenBao snapshots, Velero backups) holds data, unless --allow-delete",
+		Short: "before an object-storage destroy: refuse while a backup bucket (OpenBao snapshots, Velero backups, CNPG database backups) holds data, unless --allow-delete",
 		Long: "Run by the object-storage destroy job before anything is drained. The deployment's\n" +
-			"openbao-backup and velero buckets exist to outlive the cluster, so a destroy may not\n" +
-			"delete either while it holds any object version (noncurrent ones included) unless the\n" +
+			"openbao-backup, velero and cnpg buckets exist to outlive the cluster, so a destroy may not\n" +
+			"delete any of them while it holds any object version (noncurrent ones included) unless the\n" +
 			"caller opts in with --allow-delete (the workflow's drain_data_buckets). Every bucket is\n" +
 			"judged before any is emptied. With the opt-in it deletes every version and delete marker\n" +
 			"and re-lists to prove each bucket is empty. Fails closed on anything it cannot read.\n" +
@@ -58,6 +61,6 @@ func OpenBaoBackupDestroyGuardCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose backup buckets to guard")
-	c.Flags().BoolVar(&allow, "allow-delete", false, "consent to deleting the OpenBao and Velero backups with their buckets (drain_data_buckets)")
+	c.Flags().BoolVar(&allow, "allow-delete", false, "consent to deleting the OpenBao, Velero and CNPG database backups with their buckets (drain_data_buckets)")
 	return c
 }

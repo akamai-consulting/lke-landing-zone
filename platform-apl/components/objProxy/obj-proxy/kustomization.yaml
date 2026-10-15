@@ -11,6 +11,10 @@ resources:
   # The Kyverno mutation that mounts that bundle into harbor-registry pods. Lives
   # here, not in tools/internal/extensions/lifecycle/bootstrapcluster/manifests/, because nothing applies that directory.
   - kyverno-harbor-ca.yaml
+  # The same CA for apl-core's CloudNativePG backups: barman is path-style, so its
+  # traffic is captured by the rewrite too. Points each ObjectStore's endpointCA
+  # at the bundle ca-trust.yaml issues into harbor and keycloak.
+  - kyverno-cnpg-ca.yaml
   - externalsecret.yaml
   # The obj key the proxy re-signs with (#397). Listed with the other secrets, ahead
   # of the DaemonSet that mounts it.

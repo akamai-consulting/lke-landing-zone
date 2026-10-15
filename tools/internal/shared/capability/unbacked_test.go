@@ -122,7 +122,11 @@ var unbackedGrants = map[string]bool{
 	// Writer, as a manifest — no Custodian operation places a Kubernetes Secret)
 	// and the temporary bucket key it holds (minted through CloudFor on the drill
 	// binding, in deps.go, which backs its cloud-mutate).
-	"velero/SecretCustody":          true,
+	"velero/SecretCustody": true,
+	// The CNPG drill's custody is the same shape: a Secret holding the temporary
+	// read-only bucket key, placed through the Writer as a manifest, minted through
+	// CloudFor on the drill binding (deps.go, which backs its cloud-mutate).
+	"cnpgbackup/SecretCustody":      true,
 	"openbao/SecretCustody":         true,
 	"reconcilelanes/CloudMutate":    true,
 	"reconcilelanes/SecretCustody":  true,

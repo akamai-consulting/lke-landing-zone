@@ -113,6 +113,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/velero"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/extension"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/cnpgbackup"
 )
 
 // declarations is the built-in set — 62 extensions from 61 packages (credrotate
@@ -141,6 +143,7 @@ var declarations = []func() extension.Extension{
 	openbao.Extension,
 	openbaobackup.Extension,
 	velero.Extension,
+	cnpgbackup.Extension,
 	harbor.Extension,
 	identityconfig.Extension,
 	reconciler.Extension,
@@ -277,7 +280,7 @@ func Validate() []error { return extension.ValidateSet(All()) }
 // first time a package moved.
 //
 // WHY AN OPERATOR NEEDS IT. The extension NAME and the package name differ for
-// forty-one of the seventy-seven — half of them: `assert-storage` lives in assertions/volumes,
+// forty-one of the seventy-eight — half of them: `assert-storage` lives in assertions/volumes,
 // `posture-at-rest` in lifecycle/atrest, `import-brownfield` in
 // lifecycle/brownfield. Every error message, gate exemption and ratchet entry in
 // this tree names the EXTENSION, so a reader holding a failure has no route to the

@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       restore_drill:
-        description: 'RELEASE-E2E ONLY. Forwarded to bootstrap-openbao: run the OpenBao backup -> restore drill, which ROLLS BACK the live OpenBao of this deployment to a seconds-old snapshot, and the Velero canary-namespace backup -> restore drill. Default false; the verb refuses any deployment that is not an e2e lane (e2e, e2e-<forge>). Not implied by assert_loki.'
+        description: 'RELEASE-E2E ONLY. Forwarded to bootstrap-openbao: run the OpenBao backup -> restore drill, which ROLLS BACK the live OpenBao of this deployment to a seconds-old snapshot, the Velero canary-namespace backup -> restore drill, and the CNPG database restore drill into a scratch cluster. Default false; the verb refuses any deployment that is not an e2e lane (e2e, e2e-<forge>). Not implied by assert_loki.'
         required: false
         type: boolean
         default: false
@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       drain_data_buckets:
-        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable. ALSO the explicit consent to delete OpenBao and Velero backups: a module=object-storage destroy refuses, before deleting anything, while the openbao-backup or velero bucket holds any version, unless this is true. A cluster destroy never touches those buckets.'
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable. ALSO the explicit consent to delete OpenBao, Velero and CNPG database backups: a module=object-storage destroy refuses, before deleting anything, while the openbao-backup, velero or cnpg bucket holds any version, unless this is true. A cluster destroy never touches the openbao-backup or velero bucket, and empties the cnpg bucket only on the e2e lane deployments (e2e, e2e-<forge>), whose next fresh database clusters would otherwise refuse to archive over it.'
         required: false
         type: boolean
         default: false
@@ -1080,6 +1080,10 @@ jobs:
       # OPT-IN, default false: on a real deployment these buckets hold the logs and
       # the registry, and destroying a cluster is not consent to erase them. Only a
       # caller that owns the data (the e2e lane) passes this.
+      #
+      # On the e2e lane's own deployments (e2e, e2e-<forge>) the verb ALSO empties
+      # the cnpg bucket: a fresh CloudNativePG cluster refuses to archive over the
+      # previous run's WAL. It never does that on any other deployment.
       - name: Empty the data buckets (drain_data_buckets)
         if: ${{ always() && steps.confirm.outcome == 'success' && inputs.drain_data_buckets }}
         # NO working-directory: this reads landingzone.yaml from the REPO ROOT to
@@ -1391,10 +1395,10 @@ jobs:
           github-token:          ${{ github.token }}
 
       # ── The backups are NOT this destroy's to delete by default ───────────────
-      # The openbao-backup and velero buckets exist to OUTLIVE the cluster they back
-      # up, and "destroy object-storage" is exactly what a team runs while
+      # The openbao-backup, velero and cnpg buckets exist to OUTLIVE the cluster they
+      # back up, and "destroy object-storage" is exactly what a team runs while
       # rebuilding after a loss. So before anything is drained, this refuses while
-      # either bucket holds any object version (both are versioned; pruned or
+      # any of them holds any object version (all are versioned; pruned or
       # expired backups count) unless the caller opted in with
       # drain_data_buckets=true — in which case it deletes every version and delete
       # marker and re-lists to prove each bucket empty, so TF can delete them. Every
@@ -1402,15 +1406,15 @@ jobs:
       # read. The decision is in Go (`llz ci openbao-backup-destroy-guard`,
       # unit-tested), not here; the verb name predates the velero bucket.
       # NO working-directory: it reads the spec at the repo root for the buckets.
-      - name: Guard the OpenBao and Velero backup buckets (refuses unless drain_data_buckets)
+      - name: Guard the OpenBao, Velero and CNPG backup buckets (refuses unless drain_data_buckets)
         env:
           LINODE_API_TOKEN:   ${{ secrets.LINODE_API_TOKEN }}
           DRAIN_DATA_BUCKETS: ${{ inputs.drain_data_buckets }}
         run: llz --yes ci openbao-backup-destroy-guard --region "$REGION" --allow-delete="${DRAIN_DATA_BUCKETS:-false}"
 
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
-      # destroy with "bucket is not empty" — drain first. The OpenBao backup and
-      # velero buckets are NOT drained here: the guard above already emptied them
+      # destroy with "bucket is not empty" — drain first. The OpenBao backup, velero
+      # and cnpg buckets are NOT drained here: the guard above already emptied them
       # (with consent) or stopped the job. Uses s5cmd (static Go
       # binary) because TF_IMAGE ships neither awscli nor python+pip. Tolerant by
       # design: a failed drain only warns, and TF destroy then names the bucket.

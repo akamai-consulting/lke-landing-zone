@@ -93,6 +93,9 @@ var componentGatedRuleGroups = map[string]string{
 	"llz-velero": "spec.components.velero (default off); `assert-velero-restore` re-runs " +
 		"`assert-scrape-targets --monitors llz-velero/velero --rule-groups llz-velero` on every " +
 		"deployment that enables it, from bootstrap-openbao, and e2e enables it",
+	"llz-cnpg-backup": "spec.components.cnpgBackup (default off); `assert-cnpg-backup` re-runs " +
+		"`assert-scrape-targets --rule-groups llz-cnpg-backup` on every deployment that enables it, " +
+		"from bootstrap-openbao, and e2e enables it",
 }
 
 // activeTarget is the subset of a /api/v1/targets active target the gate reads.

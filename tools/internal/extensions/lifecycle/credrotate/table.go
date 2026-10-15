@@ -130,11 +130,29 @@ func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
 			// and the reconciler fills obj.yaml.accessKeyId from AWS_ACCESS_KEY_ID.
 			Name: "obj-platform", Kind: CredKindObjKey, Label: prefix + "-obj-" + region,
 			ObjCluster: objCluster,
+			//
+			// AND THE CNPG BACKUP BUCKET, which is the one grant here that is a
+			// compromise rather than a choice. apl-core's otomi-db chart builds the
+			// barman credential (`linode-creds`) from the SAME accessKeyId + obj-secrets
+			// pair every other app reads; there is no per-app object-storage key to
+			// point at a dedicated one, which is the answer openbao-backup and velero
+			// below take. So Loki, Harbor and anything holding obj-secrets can read and
+			// DELETE the Harbor and Keycloak database backups. The bucket is versioned
+			// with a 30-day noncurrent window (llz-object-storage, cnpg_noncurrent_days)
+			// so such a delete stays reversible — that is the whole mitigation, and
+			// docs/runbooks/cnpg-backup-restore.md states the residual risk.
+			//
+			// UNCONDITIONAL, NOT COMPONENT-GATED: this entry's scope is one list the
+			// in-cluster rotator (which has no spec) re-mints against, so it cannot
+			// vary per component. The bucket exists on every deployment. On upgrade
+			// the rotator's scope check (currentKeyStillGrants) sees the existing key
+			// lacks the cnpg bucket and rotates it off-schedule once — no operator step.
 			Buckets: []string{
 				prefix + "-loki-chunks-" + region,
 				prefix + "-loki-ruler-" + region,
 				prefix + "-loki-admin-" + region,
 				prefix + "-harbor-registry-" + region,
+				clusterspec.ObjCnpgBucket(prefix, region),
 			},
 			Permissions: "read_write",
 			BaoPath:     "secret/obj/platform", PresentField: "AWS_ACCESS_KEY_ID",

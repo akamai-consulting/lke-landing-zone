@@ -186,6 +186,28 @@ load wherever it is on. Response: [runbooks/velero-dr](runbooks/velero-dr.md).
 | Velero's series are absent (server down or unscraped — every rule above blind) | `LLZVeleroMetricsAbsent` | warning | ✅ covered |
 | A backup is encrypted and restores | — | — | gate, not an alert: `llz ci assert-velero-restore` (every bootstrap; `--drill` in release-e2e) |
 
+#### CNPG database backups (when the `cnpgBackup` component is enabled)
+
+Covered by `llz-cnpg-backup` (in
+[platform-apl/components/cnpgBackup/](../platform-apl/components/cnpgBackup/), shipped with
+the default-off `cnpgBackup` component), over the barman-cloud plugin's own
+`barman_cloud_cloudnative_pg_io_*` gauges for the `harbor` and `keycloak` databases, served
+by every instance through the PodMonitor apl-core's chart creates. Not the in-core
+`cnpg_collector_*` backup gauges apl-core's own `Backup*DbFailing` rules read: the plugin
+supersedes them, and CNPG still exports them on every instance whether or not it is backed
+up. `LLZCnpgBackupMetricsAbsent` is the presence companion. Component-gated in the scrape
+gate; the component's own gate (`llz ci assert-cnpg-backup`) asserts the rule load wherever
+it is on. Response: [runbooks/cnpg-backup-restore](runbooks/cnpg-backup-restore.md).
+
+| Condition | Alert | Severity | Status |
+|-----------|-------|----------|--------|
+| The newest backup attempt failed | `LLZCnpgBackupFailing` | warning | ✅ covered |
+| No successful base backup for 49h (two runs of the longest allowed interval + 1h) | `LLZCnpgBackupStale` | critical | ✅ covered |
+| Backups configured for 26h with no success (incl. "Expected empty archive") | `LLZCnpgBackupNeverSucceeded` | warning | ✅ covered |
+| An instance's WAL archiver is failing (the RPO stopped advancing) | `LLZCnpgWalArchivingFailing` | warning | ✅ covered |
+| No plugin backup series for either database (every rule above blind) | `LLZCnpgBackupMetricsAbsent` | warning | ✅ covered |
+| A backup lands where a recovery reads, and restores | — | — | gate, not an alert: `llz ci assert-cnpg-backup` (every bootstrap; `--drill` in release-e2e) |
+
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under

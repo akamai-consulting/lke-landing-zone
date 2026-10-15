@@ -235,6 +235,19 @@ var atRestAllowed = map[string]atRestRule{
 			"offers one the plugin's SSE-C setting can be dropped for it, as docs/designs/" +
 			"obj-sse-c-gateway.md plans for the gateway",
 	},
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.cnpg": {
+		reason: "CloudNativePG backups of apl-core's Harbor and Keycloak databases (barman base backups and " +
+			"the WAL archive: Keycloak's users, credential hashes and realm keys; Harbor's metadata), written " +
+			"by apl-core's otomi-db chart when spec.components.cnpgBackup is on, empty otherwise. barman-cloud " +
+			"addresses the endpoint path-style, so with spec.components.objProxy on its writes go through the " +
+			"SSE-C gateway and ARE encrypted under secret/obj/ssec; without objProxy they are plaintext at rest, " +
+			"because apl-core's chart exposes no SSE-C setting for barman. Neither is readable off a bucket " +
+			"resource, which is why the bucket is registered rather than checked. `llz ci assert-cnpg-backup` " +
+			"probes a backup object keyless and FAILS on a plaintext read where objProxy is on. See " +
+			"docs/runbooks/cnpg-backup-restore.md",
+		exit: "a bucket-level encryption mode Linode does not offer today, or apl-core exposing barman's SSE-C " +
+			"key setting on its platformBackups so the backups can be encrypted without the gateway",
+	},
 }
 
 // ── the levers, and how they are spelled ────────────────────────────────────
