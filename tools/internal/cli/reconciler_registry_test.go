@@ -51,11 +51,6 @@ var invariantExempt = map[string]string{
 	"health-sla/rotation-sla":        "runs from llz-scheduled-checks.yml on a cron, not in the daemon",
 	"health-sla/component-readiness": "runs from llz-scheduled-checks.yml on a cron, not in the daemon",
 
-	// Held by a Kubernetes object rather than by a loop. The SSE-C gateway is a
-	// DaemonSet: the invariant "objects land encrypted" is maintained by the proxy
-	// being in the data path, and the daemon has nothing to reconcile toward it.
-	"obj-encryption/obj-proxy": "held by the objProxy DaemonSet being in the path, not by a reconcile loop",
-
 	// A static posture gate over Terraform declarations. It holds continuously in
 	// the sense that every root must always declare encryption, and it is checked
 	// at PR time by `llz ci at-rest-guard` — there is no cluster state to drive.

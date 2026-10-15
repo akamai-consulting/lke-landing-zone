@@ -156,9 +156,9 @@ func TestSelectLanesRejectsUnknownNames(t *testing.T) {
 // like a cluster fault.
 func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	lanes := Lanes("e2e")
-	// obj-encryption takes --region because it is COMPONENT-GATED: it reads
-	// spec.components.objProxy for that deployment and self-skips when the SSE-C
-	// gateway is not enabled, rather than redding every cluster that does not run it.
+	// obj-encryption takes --region because it derives this deployment's endpoint
+	// and bucket names from the spec, and self-skips loudly without one rather than
+	// failing on a missing argument.
 	//
 	// loki takes it because its write PROOF resolves this deployment's chunks bucket
 	// from the spec to confirm a flushed chunk landed. Reading $REGION inside the verb

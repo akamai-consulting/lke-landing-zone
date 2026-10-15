@@ -337,14 +337,13 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 // a filename-vs-metadata.name regression test does not care whether the manifest
 // is live, so it went on proving a property of assets nobody deployed.
 //
-// It now reads the two policies that actually ship. Both still have a filename
-// differing from their metadata.name, so the regression it exists to catch is
-// still catchable — and now on files a cluster receives.
+// It now reads the one policy that actually ships. Its filename still differs
+// from its metadata.name, so the regression it exists to catch is still
+// catchable — and on a file a cluster receives.
 const manifestDir = "../../../../../platform-apl/components"
 
 func TestPolicyName(t *testing.T) {
 	for manifest, want := range map[string]string{
-		manifestDir + "/objProxy/obj-proxy/kyverno-harbor-ca.yaml":              "harbor-obj-proxy-ca",
 		manifestDir + "/imageSignature/kyverno-verify-llz-image-signature.yaml": "verify-llz-image-signature",
 	} {
 		got := policyName(manifest)

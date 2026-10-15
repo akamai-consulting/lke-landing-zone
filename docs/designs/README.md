@@ -51,7 +51,6 @@ doing its job. Links are still checked.
 | [instance-slimming](instance-slimming.md) | Levers 1 and 1.5 landed; levers 2–3 are a staged, e2e-gated rollout. |
 | [forge-abstraction](forge-abstraction.md) | `internal/forge` and its code-level phases landed on `feat/forge`; the GHE/GitLab flavours are unbuilt. |
 | [shared-managed-postgres](shared-managed-postgres.md) | Terraform module, embedded root and `llz render` wiring landed; the OpenBao seed command and CI jobs are outstanding. |
-| [obj-sse-c-gateway](obj-sse-c-gateway.md) | Built, **not deployed** — `spec.components.objProxy` is default-disabled and the activating DNS rewrite is outside the kustomization on purpose. |
 | [apl-core-v6-migration](apl-core-v6-migration.md) | apl-core 5.x → 6.x. Pinned to GA `v6.0.0`; validate in lab before any non-lab environment. |
 | [apl-core-v61-upgrade](apl-core-v61-upgrade.md) | apl-core 6.0 → 6.1. Baseline moved, pinned to GA `v6.1.0`; same lab-first caveat. |
 | [apl-overlay-obj-native](apl-overlay-obj-native.md) | Adopting apl-core-native object storage; runtime behaviour still unconfirmed on a live cluster. |
@@ -69,6 +68,7 @@ doing its job. Links are still checked.
 | Design | Replaced by |
 |---|---|
 | [cross-org-reuse-pattern](cross-org-reuse-pattern.md) | [ADR 0003 — vendor actions and bodies into instances](../adr/0003-vendor-actions-and-bodies-into-instances.md), which goes further than this design proposed. |
+| [obj-sse-c-gateway](obj-sse-c-gateway.md) | Linode's default SSE-S3 on E2/E3 endpoints, proven per object by `llz ci assert-obj-encryption`. The gateway's code is removed. |
 
 ## Adding one
 

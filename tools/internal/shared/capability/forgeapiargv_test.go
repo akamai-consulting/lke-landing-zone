@@ -190,7 +190,7 @@ func TestACloudMutateHandleCannotWriteASecretThroughTheAPI(t *testing.T) {
 // AND THE MIRROR IMAGE, which the obvious fix opens. Grading a secret write as
 // custody rescues the cloud-mutate-without-custody bindings and hands the write to
 // the custody-WITHOUT-cloud-mutate ones — the db-admin seeder,
-// objenc's seed-ssec-key, two openbao lanes. Both directions are the same error:
+// the (since retired) SSE-C key seed, two openbao lanes. Both directions are the same error:
 // writing a secret through the raw API is a mutation and a placement, and
 // neither grant authorises it alone.
 func TestASecretWriteThroughTheAPINeedsBothGrants(t *testing.T) {

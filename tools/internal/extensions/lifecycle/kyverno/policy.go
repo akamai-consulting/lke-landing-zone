@@ -249,7 +249,6 @@ func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
 // name it declares:
 //
 //	kyverno-verify-llz-image-signature.yaml → verify-llz-image-signature
-//	kyverno-harbor-ca.yaml                  → harbor-obj-proxy-ca
 //
 // (The three PVC/StorageClass policies this list used to cite are gone — they had
 // not been applied since LLZ went managed-only, and their manifests were deleted

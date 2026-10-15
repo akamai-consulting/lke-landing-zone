@@ -56,7 +56,7 @@ on:
         type: boolean
         default: false
       drain_data_buckets:
-        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable.'
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true so every cluster starts on empty buckets rather than inheriting the objects a previous cluster wrote.'
         required: false
         type: boolean
         default: false
@@ -1057,12 +1057,12 @@ jobs:
           llz ci tf-destroy --var-file="${REGION}.tfvars"
 
       # ── EMPTY the data buckets, without deleting them (opt-in) ────────────────
-      # SSE-C keys are per-object and every cluster mints its own, so objects left
-      # behind by a destroyed cluster are permanently unreadable by the next one.
-      # Loki's index-gateway does not skip what it cannot decrypt — it fails the
-      # whole table and retries, degrading queries badly enough to time out clients
-      # (#397 follow-up). So a lane that recreates a cluster over the same buckets
-      # has to clear them.
+      # A lane that recreates a cluster over the same buckets has to clear them:
+      # objects a destroyed cluster left behind are not the next cluster's, and any
+      # still encrypted under the retired SSE-C gateway's per-cluster key are
+      # unreadable by anyone. Loki's index-gateway does not skip what it cannot read
+      # — it fails the whole table and retries, degrading queries badly enough to
+      # time out clients (#397 follow-up).
       #
       # EMPTY, NOT DELETE, and that distinction is load-bearing. Destroying the
       # buckets works, but Linode does not release the NAME immediately: a recreate

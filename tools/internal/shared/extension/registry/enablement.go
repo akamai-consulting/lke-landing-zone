@@ -57,7 +57,7 @@ import (
 type Enablement struct {
 	Extension extension.Extension
 	Enabled   bool
-	// Reason is a short phrase for `llz extension list`, e.g. "component objProxy
+	// Reason is a short phrase for `llz extension list`, e.g. "component harbor
 	// disabled" or "always".
 	Reason string
 }

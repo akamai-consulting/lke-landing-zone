@@ -1,29 +1,22 @@
 package objenc
 
-// harbor_blob.go — the check that proves the CA chain, by making
+// harbor_blob.go — the check that guarantees a FRESH object, by making
 // HARBOR write a blob rather than writing one ourselves.
 //
-// WHY THIS EXISTS SEPARATELY FROM THE OTHER THREE CHECKS. CheckRegistryPodsCarryCA
-// proves the Kyverno mutation LANDED — the env and the volume are on the pod. It
-// does not prove the CA in that volume actually validates the proxy's certificate.
-// A wrong CA, a cert with the wrong SAN, an expired bundle: every one of those
-// leaves the pod looking correctly mutated and every S3 call failing.
+// WHY THIS EXISTS SEPARATELY FROM THE OBJECT SAMPLE. The sample judges what
+// consumers happened to write within --since, and Loki does not flush its first
+// chunk until chunk_idle_period — so on a young cluster the sample can hold nothing
+// recent at all. A check that can CAUSE the data it judges never waits on a
+// background consumer.
 //
-// And checkObjectsAreEncrypted samples the LOKI bucket, which proves the proxy
-// encrypts — but Loki reaches the proxy without any CA work at all (its config
-// carries insecure_skip_verify: true). So a color.Green Loki check says nothing about
-// whether Harbor can complete the handshake.
-//
-// The only thing that proves it is Harbor's own registry successfully writing to
-// object storage through the proxy. That is what this does: the OCI distribution
+// And it is Harbor's own registry that writes, through its own S3 driver, so the
+// object is shaped exactly like the ones that matter: the OCI distribution
 // blob-upload dance, ending in a real PUT, after which the blob must be present in
-// the registry bucket AND encrypted.
+// the registry bucket AND report server-side encryption on HEAD.
 //
 // It is deliberately a REAL push and not an upload session that gets cancelled.
 // assert-harbor-roundtrip already opens and cancels one — that proves
-// authorization, which is a different question, and it moves no bytes to S3. A
-// cancelled session never reaches the storage driver, so it would prove nothing
-// here.
+// authorization, which is a different question, and it moves no bytes to S3.
 //
 // WHAT IT LEAVES BEHIND: one blob of a few bytes, in a probe repository, with no
 // tag. Harbor's garbage collector reclaims untagged blobs; the alternative — a
@@ -65,29 +58,9 @@ const (
 type harborPushError struct {
 	stage harborPushStage
 	err   error
-	body  string
 }
 
 func (e *harborPushError) Error() string { return e.err.Error() }
-
-// tlsFailureMarkers are what a Go storage driver says when it cannot validate the
-// proxy's certificate. Their PRESENCE upgrades the diagnosis from "the storage
-// backend refused" to "the CA chain is broken"; their absence does not rule it out,
-// so the fix text says so rather than guessing.
-var tlsFailureMarkers = []string{
-	"x509", "certificate signed by unknown authority", "tls:", "certificate is valid for",
-	"failed to verify certificate",
-}
-
-func looksLikeTLSFailure(s string) bool {
-	low := strings.ToLower(s)
-	for _, m := range tlsFailureMarkers {
-		if strings.Contains(low, m) {
-			return true
-		}
-	}
-	return false
-}
 
 // harborEncProbeRepo is the repository the probe blob is pushed to. Distinct from
 // harborProbeRepo so a cancelled-session probe and a real-push probe never
@@ -148,12 +121,9 @@ func pushProbeBlobThroughHarbor(d Deps, creds harborauth.RobotCreds, repo string
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		// The storage driver's stage: the registry accepted the session and then could
-		// not persist the bytes. That is where a broken CA surfaces — but so does a
-		// misconfigured bucket, so the CAUSE is attributed by the caller from the body
-		// rather than asserted here.
+		// not persist the bytes.
 		return "", &harborPushError{
 			stage: pushStageComplete,
-			body:  string(body),
 			err: fmt.Errorf("the registry REFUSED to complete a blob upload (HTTP %d): %s",
 				resp.StatusCode, harborauth.TruncateForError(body)),
 		}
@@ -207,13 +177,13 @@ func harborBlobStorageKey(digest string) string {
 	return fmt.Sprintf("docker/registry/v2/blobs/sha256/%s/%s/data", hexsum[:2], hexsum)
 }
 
-// checkHarborBlobIsEncrypted is the whole Check:   push through Harbor, then read
-// the resulting object back with a keyless HEAD.
+// checkHarborBlobIsEncrypted is the whole check: push through Harbor, then HEAD
+// the resulting object and read how it is stored.
 //
-// The two failures it separates are the reason it exists. If the push FAILS, the CA
-// chain is broken. If the push SUCCEEDS but the blob is plaintext, the CA is fine
-// and the traffic bypassed the proxy. Those need different fixes and every other
-// check in this gate conflates them.
+// The two failures it separates are the reason it exists. If the push FAILS,
+// Harbor cannot write and the question of encryption does not arise yet. If the
+// push SUCCEEDS but the blob is plaintext, the endpoint is not encrypting new
+// writes — the one finding this gate exists to produce.
 func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harborauth.RobotCreds, nonce []byte) []Finding {
 	digest, err := pushProbeBlobThroughHarbor(d, creds, harborEncProbeRepo, nonce)
 	if err != nil {
@@ -229,8 +199,7 @@ func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harboraut
 		return []Finding{{
 			Check:   "harbor-push",
 			Problem: "pushed a blob through Harbor but cannot verify it: " + cerr.Error(),
-			Fix: "the readback needs only HEAD on " + bucket + ", and NOT the SSE-C key. " +
-				"This is the same Secret the [object] check reads",
+			Fix:     "the readback needs only HEAD on " + bucket + ". This is the same Secret the [object] check reads",
 		}}
 	}
 
@@ -238,20 +207,18 @@ func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harboraut
 	// a separate LIST/HEAD, so poll briefly rather than racing it.
 	deadline := objEncNow().Add(30 * time.Second)
 	for {
-		verdict, detail := ObjectSSECProbe(ak, sk, endpoint, bucket, key)
+		verdict, detail := ObjectSSEProbe(ak, sk, endpoint, bucket, key)
 		switch verdict {
-		case ssecEncrypted:
-			fmt.Printf("  harbor-push: blob %s written BY HARBOR is encrypted — the CA chain and the proxy both work\n", digest[:19])
+		case sseEncrypted:
+			fmt.Printf("  harbor-push: blob %s written BY HARBOR is encrypted at rest (%s)\n", digest[:19], detail)
 			return nil
-		case ssecPlaintext:
+		case ssePlaintext:
 			return []Finding{{
 				Check:   "harbor-push",
-				Problem: fmt.Sprintf("Harbor wrote %s and it landed in PLAINTEXT (%s)", key, detail),
-				Fix: "the CA chain is FINE (the push succeeded) — the traffic bypassed obj-proxy. " +
-					"Check the CoreDNS rewrite resolves the endpoint to the proxy Service and that " +
-					"llz_objproxy_ssec_injected_total is climbing",
+				Problem: fmt.Sprintf("Harbor wrote %s just now and it landed in PLAINTEXT (%s)", key, detail),
+				Fix:     e1Fix,
 			}}
-		case ssecAbsent:
+		case sseAbsent:
 			if objEncNow().After(deadline) {
 				return []Finding{{
 					Check:   "harbor-push",
@@ -261,6 +228,8 @@ func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harboraut
 			}
 			objEncSleep(3 * time.Second)
 		default:
+			// sseCustomerKey lands here too: a blob written THIS SECOND cannot be an
+			// SSE-C leftover, so a 400 on it is not an answer this gate understands.
 			return []Finding{{
 				Check:   "harbor-push",
 				Problem: fmt.Sprintf("could not classify the pushed blob %s: %s", key, detail),
@@ -288,8 +257,7 @@ func checkHarborBlobIsEncrypted(d Deps, endpoint, bucket string, creds harboraut
 // The platform's own key is used rather than Harbor's because Harbor's registry
 // takes its S3 credentials from pod env, not from an AWS_*-shaped Secret anything
 // can read; the keys are account-scoped, so the consumer credential reaches both
-// buckets. Verified: a HEAD with it against the harbor bucket answers 400
-// (SSE-C required), not 403.
+// buckets.
 func objEncBucketReadCreds(d Deps) (string, string, error) {
 	if ak, sk, err := ObjEncConsumerCreds(d, LokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"); err == nil && ak != "" && sk != "" {
 		return ak, sk, nil
@@ -349,10 +317,9 @@ var (
 	objEncSleep     = time.Sleep
 )
 
-// harborPushFix attributes a push failure to its stage. Only the storage stage is
-// evidence about the CA at all — everything earlier failed before the registry ever
-// tried to write a byte, and blaming the CA there sends the reader to a component
-// that is working fine.
+// harborPushFix attributes a push failure to its stage. Everything before the
+// storage stage failed before the registry ever tried to write a byte, so it says
+// nothing about object storage at all.
 func harborPushFix(err error) string {
 	var pe *harborPushError
 	if !errors.As(err, &pe) {
@@ -367,18 +334,10 @@ func harborPushFix(err error) string {
 			"carries no push scope on this repository. assert-harbor-roundtrip is the gate for that — fix it there first"
 	case pushStageSession:
 		return "the registry refused to OPEN an upload session, so it never reached object storage. " +
-			"Most likely the robot lacks push on " + harborEncProbeRepo + ", or the project does not exist. " +
-			"This is not evidence about the CA"
+			"Most likely the robot lacks push on " + harborEncProbeRepo + ", or the project does not exist"
 	default:
-		if looksLikeTLSFailure(pe.body) {
-			return "CONFIRMED CA CHAIN: the registry's own error names a certificate failure, so it could not " +
-				"validate the obj-proxy certificate. Check the Kyverno harbor-obj-proxy-ca mutation is on the " +
-				"RUNNING pod (`kubectl -n harbor get pod -o yaml | grep SSL_CERT_DIR`) and that the certificate's " +
-				"dnsNames match the endpoint host clients dial"
-		}
 		return "the registry accepted the upload and then could not PERSIST it, so the failure is in the " +
-			"storage path. With the DNS rewrite live the likeliest cause is the CA chain — but the registry's " +
-			"error does not name a certificate, so check `kubectl -n harbor logs deploy/harbor-registry` " +
-			"before assuming it. A wrong bucket or endpoint fails identically here"
+			"storage path — check `kubectl -n harbor logs deploy/harbor-registry`. A wrong bucket, endpoint " +
+			"or key fails identically here; assert-obj-roundtrip covers the bucket itself"
 	}
 }

@@ -19,10 +19,9 @@
 // a configuration flag, and the headline promise of the declaration model was
 // undeliverable for reasons no declaration recorded.
 //
-// WHAT STAYED BEHIND is the part that is genuinely about encryption: the SSE-C
-// verdict (`is this object encrypted`), the re-signing proxy, and the Harbor blob
-// walk. Those ask a question ABOUT objects; this package only knows how to talk to
-// the store.
+// WHAT STAYED BEHIND is the part that is genuinely about encryption: the
+// at-rest verdict (`is this object encrypted`) and the Harbor blob walk. Those ask
+// a question ABOUT objects; this package only knows how to talk to the store.
 //
 // TWO QUESTIONS, NOT ONE, and the distinction came across with the code because
 // it is the reason both halves exist. S3SignedRequest signs a HEAD to answer "is
@@ -33,10 +32,9 @@
 // S3ObjectRoundTrip is the second question: PUT, read back, compare, delete. They
 // share the signing chain rather than re-deriving it.
 //
-// TWO SEAMS ARE EXPORTED THAT WERE NOT BEFORE -- S3SignedRequest and
-// S3EscapeQueryComponent. Both have real non-test callers left behind in objenc's
-// proxy re-signer, so this is a seam crossing a package line, not an export bought
-// to satisfy a test.
+// S3SignedRequest and S3EscapeQueryComponent are exported because callers outside
+// this package sign their own requests; S3HeadObject because the encryption gate
+// needs the RESPONSE HEADERS, which is where S3 reports how an object is stored.
 package objstore
 
 import (
@@ -88,6 +86,21 @@ func S3EscapePath(path string) string {
 }
 
 var S3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query string) (int, string, error) {
+	code, _, body, err := s3SignedDo(method, accessKey, secretKey, endpoint, path, query)
+	return code, body, err
+}
+
+// S3HeadObject HEADs one object and returns its status and response headers.
+//
+// The headers are the point. S3 reports how an object is stored at rest in
+// `x-amz-server-side-encryption` on HEAD, and nowhere else a reader can reach
+// without the object's bytes — so a probe that sees only the status code cannot
+// tell an encrypted object from a plaintext one. Package var so callers can stub it.
+var S3HeadObject = func(accessKey, secretKey, endpoint, bucket, key string) (int, http.Header, string, error) {
+	return s3SignedDo(http.MethodHead, accessKey, secretKey, endpoint, "/"+bucket+"/"+key, "")
+}
+
+func s3SignedDo(method, accessKey, secretKey, endpoint, path, query string) (int, http.Header, string, error) {
 	host := s3sig.Host(endpoint)
 	region := s3sig.Region(endpoint)
 
@@ -119,7 +132,7 @@ var S3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query s
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, "https://"+host, nil)
 	if err != nil {
-		return 0, "", err
+		return 0, nil, "", err
 	}
 	// Path carries the decoded form and RawPath the escaped one. net/url emits
 	// RawPath verbatim when it is a valid encoding of Path, so the bytes on the wire
@@ -134,15 +147,15 @@ var S3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query s
 
 	resp, err := (&http.Client{Timeout: 25 * time.Second}).Do(req)
 	if err != nil {
-		return 0, "", err
+		return 0, nil, "", err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	return resp.StatusCode, string(body), nil
+	return resp.StatusCode, resp.Header, string(body), nil
 }
 
 // One <Contents> entry: the key and when it was written. LastModified is what lets
-// the caller tell "written since the gateway went live" from "predates it", which is
+// the caller tell "written since encryption was enabled" from "predates it", which is
 // the difference between a breach and a bucket with history.
 var s3ListEntryRe = regexp.MustCompile(`(?s)<Key>([^<]+)</Key>.*?<LastModified>([^<]+)</LastModified>`)
 
@@ -221,7 +234,7 @@ var SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max i
 	}
 	// NEWEST FIRST, then take max. Plain LIST order is lexicographic, which for a
 	// bucket with history means the sample is drawn entirely from the oldest keys —
-	// the ones written before the gateway existed. Sampling those and calling them a
+	// the ones written before encryption was enabled. Sampling those and calling them a
 	// breach is how this check reported PLAINTEXT on a cluster where every write
 	// since the cutover was correctly encrypted.
 	sort.Slice(refs, func(i, j int) bool { return refs[i].LastModified.After(refs[j].LastModified) })

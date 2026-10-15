@@ -163,6 +163,10 @@ var componentless = map[string]bool{
 	// config is not delivered to an instance at all, so there is no component an
 	// adopter could turn off that should stop it running.
 	"dependabot-coverage": true,
+	// Its subject is the Loki and Harbor buckets every deployment writes, and no
+	// component turns Object Storage off. It used to follow objProxy, which made
+	// encryption at rest something an instance had to opt into being told about.
+	"obj-encryption":      true,
 	"k8s-minor-coherence": true,
 	"version-pins":        true,
 	"wave-health":         true,

@@ -1,7 +1,24 @@
 # Design: SSE-C gateway for Object Storage encryption at rest
 
-**Status:** Partial — built, not deployed. `spec.components.objProxy` is default-disabled and
-the DNS rewrite that activates it is deliberately outside the kustomization.
+**Status:** Superseded — retired, and the code removed. Linode now applies SSE-S3 (Akamai-managed
+keys, AES-256) by default on E2 and E3 endpoints, rolled out between 6 October and 16 November 2026
+([Akamai docs](https://techdocs.akamai.com/cloud-computing/docs/default-encryption-at-rest-sse-s3)).
+That is the provider-managed SSE this design said it was a bridge to: "the day Linode ships it this
+design should be retired rather than kept". `llz ci assert-obj-encryption` now proves it on real
+objects, by reading `x-amz-server-side-encryption` on HEAD.
+
+What did NOT carry over, and is worth knowing before trusting the new posture:
+
+- **E0/E1 endpoints are not covered.** A deployment on one stays unencrypted until its buckets move
+  to an E2/E3 endpoint; the gate fails there rather than passing.
+- **Objects written before enablement stay plaintext** until rewritten (copy-object in place). The
+  gate reports them as residue rather than failing on them.
+- **An instance that ran this gateway holds SSE-C objects** readable only with the key at
+  `secret/obj/ssec`. `llz render` refuses a spec that still names `objProxy`, and says so, rather
+  than letting the proxy disappear under them.
+
+The measurements and reasoning below are kept as written (2026-07-31) because they remain the record
+of why the gateway existed. The probe table in particular is no longer true of E2/E3.
 
 ## Problem
 
@@ -84,8 +101,8 @@ Three measured facts make this small enough to trust on the write path:
    `x-amz-trailer` CRC32), and Loki cannot be configured out of sending it. Those
    requests — and only those — are de-chunked and re-signed, because the framing
    headers are inside `SignedHeaders` and cannot be removed without it. The
-   property above still holds for every other request. See
-   `tools/internal/extensions/lifecycle/objenc/proxy_resign.go`; the capability is off unless `--creds-file`
+   property above still holds for every other request. The re-signer (since removed
+   with the gateway) was off unless `--creds-file`
    is given, applies only to that framing, and re-signs as the **same access key
    the client used**, refusing any other. It is the one place the proxy holds a
    credential, which is a real increase in what a compromised proxy could do and
@@ -180,14 +197,19 @@ Secrets from its own namespace, so it cannot live beside the proxy.
 
 | Path | What |
 |---|---|
-| `tools/internal/extensions/lifecycle/objenc/proxy_inject.go` | injection rules (pure, unit-tested) |
-| `tools/internal/extensions/lifecycle/objenc/proxy.go` | `llz obj-proxy` — TLS in, streamed proxy out |
-| `platform-apl/components/objProxy/` | DaemonSet, Service, Certificate, ExternalSecret, NetworkPolicy |
-| `.../obj-proxy/coredns-rewrite.yaml` | the on switch — **not** in the kustomization |
-| `.../obj-proxy/ca-trust.yaml` | CA bundle, issued into `harbor` |
-| `.../obj-proxy/kyverno-harbor-ca.yaml` | Pod mutation — in the COMPONENT, see below |
-| `tools/internal/extensions/lifecycle/objenc/seed_key.go` | `llz ci seed-ssec-key` — generate-once |
-| `tools/internal/extensions/lifecycle/objenc/assert.go` | `llz ci assert-obj-encryption` |
+All of these were removed when the gateway was retired; the table records what
+existed, and git history holds the code.
+
+| Piece | What |
+|---|---|
+| the objenc proxy-inject rules | injection rules (pure, unit-tested) |
+| `llz obj-proxy` | TLS in, streamed proxy out |
+| the objProxy component | DaemonSet, Service, Certificate, ExternalSecret, NetworkPolicy |
+| its `coredns-rewrite.yaml` | the on switch — **not** in the kustomization |
+| its `ca-trust.yaml` | CA bundle, issued into `harbor` |
+| its `kyverno-harbor-ca.yaml` | Pod mutation — in the COMPONENT, see below |
+| `llz ci seed-ssec-key` | generate-once key seed (now a hidden no-op) |
+| `llz ci assert-obj-encryption` | the gate — kept, and rewritten to prove SSE-S3 instead |
 
 The Kyverno policy lives in the **component**, not in `tools/internal/extensions/lifecycle/bootstrapcluster/manifests/`
 with its siblings. Those are applied by `llz ci apply-kyverno-policy`, and that

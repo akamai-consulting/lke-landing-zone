@@ -39,6 +39,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/reachability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
@@ -88,7 +89,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/healthsla"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/identityconfig"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/kyverno"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
@@ -217,7 +217,6 @@ var commands = []Command{
 	{"monitoringlabel", monitoringlabel.Cmd},
 	{"mtlsguard", mtlsguard.Cmd},
 	{"objenc", objenc.AssertObjEncryptionCmd},
-	{"objenc", objenc.ObjProxyCmd},
 	{"objenc", objenc.SeedSSECKeyCmd},
 	{"openbao", openbao.BaoBreakglassCmd},
 	{"openbao", openbao.BaoEnsureReadyCmd},

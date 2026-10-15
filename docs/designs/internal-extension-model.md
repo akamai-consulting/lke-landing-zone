@@ -56,7 +56,7 @@ structural rather than incidental.
 `posture-at-rest` (`tools/internal/extensions/lifecycle/atrest`), `assert-storage` (`tools/internal/extensions/assertions/volumes`) and
 `reconcile-actions` (`tools/internal/extensions/lifecycle/reconcilelanes`) `teardown` (`tools/internal/extensions/lifecycle/teardown`) and
 `template-sustain` (`tools/internal/extensions/assertions/sustain`) and `import-brownfield` (`tools/internal/extensions/lifecycle/brownfield`) and
-`obj-encryption` (`tools/internal/extensions/lifecycle/objenc`), `guard-charts`
+`obj-encryption` (`tools/internal/extensions/assertions/objenc`), `guard-charts`
 (`tools/internal/extensions/guards/chartguard`), `cluster-access` (`tools/internal/extensions/lifecycle/clusteraccess`), `health-sla`
 (`tools/internal/extensions/lifecycle/healthsla`) `token-inventory` (`tools/internal/extensions/assertions/tokeninv`) `converge`
 (`tools/internal/extensions/lifecycle/converge`) `assert-platform`
@@ -437,8 +437,8 @@ own grants. Measured against the live registry, per extension:
 | `cluster-read` | 23 |
 | `cloud-mutate` | 17 |
 | `cloud-read` | 17 |
-| `cluster-write` | 16 |
-| `secret-custody` | 12 |
+| `cluster-write` | 15 |
+| `secret-custody` | 11 |
 | `secret-read` | 9 |
 | `write-repo` | 6 |
 | `own-paths` | 1 |

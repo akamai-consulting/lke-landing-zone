@@ -148,9 +148,9 @@ not: `secret/alerts/webhooks` is seeded, age-tracked and rotated on schedule, bu
 the `kyverno-alertmanager-slack-webhook` policy that repointed apl-core's
 `alertmanager-credentials` ExternalSecret at OpenBao was deleted along with the
 rest of the shared Kyverno policy base when LLZ went managed-only (Kyverno itself
-is the managed App Platform's), and nothing replaced it. Only two Kyverno policies
-ship today
-(`verify-llz-image-signature`, `harbor-obj-proxy-ca`). So an operator who follows
+is the managed App Platform's), and nothing replaced it. Only one Kyverno policy
+ships today
+(`verify-llz-image-signature`). So an operator who follows
 the documented procedure seeds a secret into a path no cluster reads, and gets a
 green credential-age series for it.
 

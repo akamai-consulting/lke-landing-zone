@@ -308,7 +308,7 @@ func waitForRequiredImages(o PinImagesOpts, wantSha bool, buildWatermark string)
 		}
 		return fmt.Errorf("%s is not published, and the cluster is about to be rendered against it: %s.\n"+
 			"Kyverno's verify-llz-image-signature policy will refuse every workload that references it "+
-			"(llz-reconciler, obj-proxy, harbor-robot-provisioner, broad-pat-rotator), and convergence will "+
+			"(llz-reconciler, harbor-robot-provisioner, broad-pat-rotator), and convergence will "+
 			"then wait out its whole budget on the downstream symptom — a missing apl-overlay push — rather "+
 			"than on this", ref, hint)
 	}

@@ -15,25 +15,12 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 //
 //	assertion:verified   "telemetry"          [cluster-read]
 //	assertion:verified   "prom-rules"         [read-repo]
-//	transition:converged "harbor-ca-retrofit" [cluster-read, cluster-write]
 //
-// THE THIRD BINDING IS THE ONE WORTH READING. Buried in ci_readiness.go is a
-// Harbor CA retrofit that runs `kubectl rollout restart deploy/...` — pods that
-// predate the obj-proxy CA ClusterPolicy do not carry the mutation, so something
-// has to roll them. That is a CLUSTER WRITE inside a file called "readiness",
-// reached from lanes whose names all begin `assert-`.
-//
-// Nothing said so. An operator reading `llz ci wait-harbor` would not expect it to
-// restart a Deployment, and the twelve files around it are genuinely read-only.
-// This is the third time an extraction has found a mutation hiding inside an
-// observation (`converge` patches Argo Applications; `assert-storage` mutates
-// Volumes) and it is the least visible of the three.
-//
-// WHY `converged` AND NOT `verified`. A transition cannot attach to `verified` —
-// that is an observation state, as `assert-network` discovered when it tried. The
-// retrofit runs while the platform is settling and its purpose is to MAKE Harbor
-// trust the CA, which is a step toward convergence rather than an attestation
-// about it.
+// IT ONCE DECLARED A THIRD BINDING, `transition:converged "harbor-ca-retrofit"`
+// [cluster-read, cluster-write], for a Harbor CA retrofit buried in ci_readiness.go
+// that ran `kubectl rollout restart` so registry pods would trust the obj-proxy CA.
+// It went with the SSE-C gateway; the verb that triggered it is a no-op now, so
+// the extension no longer writes to the cluster and no longer says it does.
 //
 // WHY prom-rules IS SEPARATE. It lints PrometheusRule YAML with promtool against
 // files in the repo — no cluster, so `read-repo`. Folding it into the telemetry
@@ -69,21 +56,13 @@ func Extension() extension.Extension {
 				State:  extension.Verified,
 				Grants: []extension.Grant{extension.ReadRepo},
 			},
-			{
-				// The mutation hiding inside "readiness".
-				Kind:   extension.Transition,
-				Name:   "harbor-ca-retrofit",
-				State:  extension.Converged,
-				Grants: []extension.Grant{extension.ClusterRead, extension.ClusterWrite},
-			},
 		},
 	}
 }
 
 // promRulesBinding is the assertion the rules walk reads through. Looked up by
-// NAME rather than by kind: this extension declares three bindings and two of
-// them are not read-repo, so reconstructing it would hand back a wider set than
-// the declaration allows.
+// NAME rather than by kind: this extension declares two assertions and only one
+// is read-repo, so looking it up by kind could hand back the cluster-read one.
 func promRulesBinding() extension.Binding {
 	for _, b := range Extension().Bindings {
 		if b.Kind == extension.Assertion && b.Name == "prom-rules" {
