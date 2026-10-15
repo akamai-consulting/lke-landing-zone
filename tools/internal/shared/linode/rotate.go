@@ -167,6 +167,10 @@ var objOrdinalRe = regexp.MustCompile(`-[0-9]+$`)
 // Idempotent: a value that is already a region (us-ord) is returned unchanged.
 func objRegion(cluster string) string { return objOrdinalRe.ReplaceAllString(cluster, "") }
 
+// ObjRegion is objRegion for callers that must ask the API the SAME region
+// question a key mint asks — the OBJ-key rotation's dry-run bucket probe.
+func ObjRegion(cluster string) string { return objRegion(cluster) }
+
 // CreateObjectStorageKeyBuckets mints a key scoped to SEVERAL buckets in one
 // region (one bucket_access entry per bucket, same permissions). Needed for the
 // Loki key, which spans the chunks/ruler/admin buckets — the same shape the

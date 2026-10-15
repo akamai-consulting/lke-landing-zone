@@ -36,7 +36,7 @@ func TestCredentialsCommandWiring(t *testing.T) {
 	defer func() { credrotate.NewPATClient, credrotate.NewObjKeyClient = origPAT, origObj }()
 	fake := &fakeRotatorClient{createResp: map[string]any{
 		"id": json.Number("1"), "token": "t", "access_key": "a", "secret_key": "s",
-	}}
+	}, buckets: []map[string]any{{"label": "B", "region": "C"}, {"label": "envB", "region": "envC"}}}
 	var gotToken string
 	credrotate.NewPATClient = func(token string) credrotate.PATAPI { gotToken = token; return fake }
 	credrotate.NewObjKeyClient = func(token string) credrotate.ObjKeyAPI { gotToken = token; return fake }
@@ -98,6 +98,9 @@ type fakeRotatorClient struct {
 	listResp   []map[string]any
 	listErr    error
 	deleteErr  error
+	// buckets / bucketsErr answer the OBJ-key dry run's probe.
+	buckets    []map[string]any
+	bucketsErr error
 
 	createdLabel, createdScopes, createdExpiry        string
 	createdCluster, createdBucket, createdPermissions string
@@ -128,6 +131,10 @@ func (f *fakeRotatorClient) CreateObjectStorageKey(_ context.Context, label, clu
 
 func (f *fakeRotatorClient) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
 	return f.listResp, f.listErr
+}
+
+func (f *fakeRotatorClient) ListObjectStorageBuckets(context.Context) ([]map[string]any, error) {
+	return f.buckets, f.bucketsErr
 }
 
 func (f *fakeRotatorClient) DeleteObjectStorageKey(_ context.Context, id uint64) error {

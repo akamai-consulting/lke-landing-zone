@@ -68,22 +68,33 @@ type rotationPlan struct {
 }
 
 // InputsFromEnv reads the dispatch contract out of the environment.
-func InputsFromEnv() RotationInputs {
+func InputsFromEnv() RotationInputs { return InputsFromLookup(os.Getenv) }
+
+// InputsFromLookup is InputsFromEnv over any env lookup — the ONE place the
+// Setup step's env-var names map onto the router's fields.
+//
+// EXPORTED FOR THE RELEASE-E2E DRY-RUN FENCE. That coupling test reads the
+// delivered llz-secret-rotation.yml's route-step `env:`, evaluates it for the
+// profile's dispatch, and feeds it through HERE — so a renamed env var, or an
+// input wired to the wrong variable, changes what the test routes exactly as it
+// changes what production routes. A hand-copied input→field table in the test
+// would keep proving the dry run of a mapping nobody runs.
+func InputsFromLookup(getenv func(string) string) RotationInputs {
 	return RotationInputs{
-		Event:                os.Getenv("EVENT"),
-		Cron:                 os.Getenv("CRON"),
-		Scope:                os.Getenv("SCOPE"),
-		Region:               os.Getenv("REGION"),
-		Confirm:              os.Getenv("CONFIRM"),
-		Reason:               os.Getenv("REASON"),
-		Actor:                os.Getenv("ACTOR"),
-		PATApply:             os.Getenv("PAT_APPLY"),
-		RevokeApply:          os.Getenv("REVOKE_APPLY"),
-		TFStateApply:         os.Getenv("TF_STATE_APPLY"),
-		TFStateRevokeApply:   os.Getenv("TF_STATE_REVOKE_APPLY"),
-		DBAdminApply:         os.Getenv("DB_ADMIN_APPLY"),
-		StatePassphraseApply: os.Getenv("STATE_PASSPHRASE_APPLY"),
-		Deployments:          os.Getenv("DEPLOYMENTS"),
+		Event:                getenv("EVENT"),
+		Cron:                 getenv("CRON"),
+		Scope:                getenv("SCOPE"),
+		Region:               getenv("REGION"),
+		Confirm:              getenv("CONFIRM"),
+		Reason:               getenv("REASON"),
+		Actor:                getenv("ACTOR"),
+		PATApply:             getenv("PAT_APPLY"),
+		RevokeApply:          getenv("REVOKE_APPLY"),
+		TFStateApply:         getenv("TF_STATE_APPLY"),
+		TFStateRevokeApply:   getenv("TF_STATE_REVOKE_APPLY"),
+		DBAdminApply:         getenv("DB_ADMIN_APPLY"),
+		StatePassphraseApply: getenv("STATE_PASSPHRASE_APPLY"),
+		Deployments:          getenv("DEPLOYMENTS"),
 	}
 }
 
@@ -238,6 +249,25 @@ func (p rotationPlan) outputLines() []string {
 		"db-admin-apply=" + b(p.DBAdminApply),
 		"state-passphrase-apply=" + b(p.StatePassphraseApply),
 	}
+}
+
+// RouteOutputs is the routing decision as the `key=value` step outputs the
+// rotation jobs gate on — exactly what RunRotationPlan writes to GITHUB_OUTPUT,
+// without writing it.
+//
+// EXPORTED FOR ONE CALLER, a coupling test. The release-e2e lane dispatches
+// secret-rotation.yml as a DRY RUN (`llz ci assert-instance-workflow`), and the
+// property that makes that safe on a shared Linode account — nothing armed,
+// no lke-admin rotation — is decided HERE, not in the profile that names the
+// inputs. A test that restated the table would pass while this one routed the
+// e2e dispatch into a real mint; feeding the profile's real inputs through the
+// real router is the only version of that check that cannot drift.
+func RouteOutputs(in RotationInputs) ([]string, error) {
+	p, err := routeRotation(in)
+	if err != nil {
+		return nil, err
+	}
+	return p.outputLines(), nil
 }
 
 // RunRotationPlan maps the dispatch inputs onto the job-gating outputs the

@@ -450,11 +450,16 @@ jobs:
           # default `main` (where a branch-only module like llz-cluster-bootstrap does
           # not exist → `terraform init` fails). Replace it with a MINIMAL answers file
           # carrying only the fields llz render reads, in the standard token forms the
-          # render pass below resolves to the commit under test.
+          # render pass below resolves to the commit under test — plus copier's own
+          # provenance pair, which `llz drift` reads. Without _src_path/_commit drift
+          # fell back to the checkout's own remote and compared the instance with
+          # ITSELF, so the scheduled-checks template-drift job was green having
+          # compared nothing (release-e2e's day-2 lane now fails on that).
           printf '%s\n' \
             'llz_version: <@ llz_version @>' \
             'instance_repo: <@ instance_repo @>' \
             'upstream_org: <@ upstream_org @>' \
+            "_src_path: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "_commit: ${GITHUB_SHA}" \
             > .e2e-instance/.copier-answers.yml
           # NOTE: this manual hoist is a raw `cp`, so the copier `<@ token @>`
           # substitutions are still literal here. The next step renders them — see
@@ -556,8 +561,8 @@ jobs:
           git config user.name  "llz-release-e2e[bot]"
           git config user.email "llz-release-e2e@users.noreply.github.com"
           # No provenance stamp to write: the minimal .copier-answers.yml hoisted
-          # above already records which template commit this instance came from,
-          # and that is what `llz drift` reads.
+          # above records which template commit this instance came from
+          # (_src_path + _commit), and that is what `llz drift` reads.
           git add -A
           git commit -q -m "e2e: instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
           HEAD_SHA="$(git rev-parse HEAD)"

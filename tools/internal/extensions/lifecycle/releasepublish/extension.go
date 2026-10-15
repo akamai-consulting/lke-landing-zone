@@ -78,6 +78,18 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // diff, however briefly. The branch being throwaway and deleted on the way out
 // changes the DURATION of the write, not whether one happened, and a grant that
 // tracked duration would be a grant nobody could check.
+//
+//	transition:converged "assert-day2-workflows" [read-repo, cloud-mutate]
+//
+// ASSERT-INSTANCE-WORKFLOW IS THE EIGHTH FORCED SPELLING, for the same reason as
+// the seventh: the only way to observe that a cron-triggered caller stub works is
+// to CREATE the event that runs it. It dispatches scheduled-checks.yml and a DRY
+// RUN of secret-rotation.yml on the instance repo — a `gh workflow run`, which is
+// the shape grantStates' configured row was widened for (chart-publish's
+// --publish-if-missing dispatch), so it is spelled cloud-mutate the same way.
+// CONVERGED, not configured: the workflows it dispatches read the running
+// cluster, and a run against a platform that has not converged would report the
+// bring-up rather than the workflow.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "release-publish",
@@ -93,6 +105,11 @@ func Extension() extension.Extension {
 			Name:   "assert-pr-gates",
 			State:  extension.Configured,
 			Grants: []extension.Grant{extension.ReadRepo, extension.WriteRepo},
+		}, {
+			Kind:   extension.Transition,
+			Name:   "assert-day2-workflows",
+			State:  extension.Converged,
+			Grants: []extension.Grant{extension.ReadRepo, extension.CloudMutate},
 		}},
 		Incomplete: []string{
 			"publish-charts has NO BINDING, and not because it has not moved — it is here. " +

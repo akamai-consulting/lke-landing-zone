@@ -260,23 +260,35 @@ func TestNoPullRequestPathWritesTerraformState(t *testing.T) {
 // can execute these workflows; what it can do is refuse to let the set of
 // unexercised ones grow silently. Adding a delivered workflow now forces one of
 // two decisions, in writing: drive it from the release lane, or say here why not.
-// The template's release-e2e lane drives exactly ONE instance workflow —
-// terraform.yml — which is a fact worth having written down somewhere a reviewer
-// meets, because it was not obvious to anyone until a rotation workflow turned
-// out to have been dead for months.
+// For a long time the template's release-e2e lane drove exactly ONE instance
+// workflow — terraform.yml — which was worth having written down somewhere a
+// reviewer meets, because it was not obvious to anyone until a rotation workflow
+// turned out to have been dead for months. #421 added the day-2 cron workflows.
+//
+// A "DRIVEN" CLAIM IS CHECKED, not taken on trust: the test below requires the
+// lane to dispatch the file by name, or `llz ci assert-instance-workflow` to have
+// a profile for it — and releasepublish's TestEveryProfileIsInvokedByTheLane
+// requires the lane to run every profile. An entry that says DRIVEN about a
+// workflow nothing dispatches would otherwise be the ratchet's own vacuous pass.
 var exercisedEntryPoints = map[string]string{
 	"terraform.yml": "DRIVEN: release-e2e dispatches it (apply + destroy) and the PR-gate probe " +
 		"opens a pull request against it — the only delivered workflow the lane actually runs.",
 
+	"scheduled-checks.yml": "DRIVEN: release-e2e's day2-scheduled-checks job dispatches it against the converged " +
+		"cluster (`llz ci assert-instance-workflow --profile scheduled-checks`) and requires every named check in " +
+		"every job to have RUN and passed for the e2e deployment — a green run whose checks were skipped by " +
+		"cluster-access's allow-missing fails it. Was NOT DRIVEN until #421: the caller stub had never executed.",
+	"secret-rotation.yml": "DRIVEN UNARMED: release-e2e's day2-secret-rotation job dispatches the linode-pat, " +
+		"linode-pat-revoke, tf-state-key and tf-state-key-revoke scopes with every *-apply input false (the " +
+		"coupling test evaluates the delivered Setup env through the real router and fails if anything would be " +
+		"armed). That proves the stub starts — THIS IS THE ONE THAT WAS DEAD FOR MONTHS at startup_failure — plus " +
+		"input forwarding and scope routing, and each job is judged on the credential record it logged: the two " +
+		"TF-state scopes are real dry runs (create probes the state bucket), the two PAT scopes STAND DOWN because " +
+		"the e2e fixture gives the broad PAT to the in-cluster broadPatRotator. NOT driven: a mint, a secret " +
+		"write, a revoke, and the lke-admin, propagate, state-passphrase and db-admin jobs, which have no " +
+		"dry-run mode; a run that executes one fails the lane.",
+
 	// ── Knowingly unexercised, with the risk each one carries ───────────────
-	"scheduled-checks.yml": "NOT DRIVEN: cron-only drift/health reporting. Its body (llz-scheduled-checks.yml) " +
-		"is workflow_call and its verbs are unit-tested; what is unproven is the caller stub — the exact " +
-		"surface where the rotation workflow's startup_failure lived. reusable-workflow-caller-permissions " +
-		"gates that specific class statically.",
-	"secret-rotation.yml": "NOT DRIVEN: rotating real credentials on a throwaway instance would mint and revoke " +
-		"account-scoped Linode PATs on a shared account. THIS IS THE ONE THAT WAS DEAD FOR MONTHS " +
-		"(caller job missing id-token: write -> startup_failure, no jobs, no annotations, no notification). " +
-		"Now covered statically by reusable-workflow-caller-permissions.",
 	"cluster-health.yml": "NOT DRIVEN as a stub: the former e2e `validate` job that dispatched it was folded into " +
 		"the converge gate, so llz-cluster-health.yml's BODY runs every e2e via llz-bootstrap-openbao. " +
 		"Only the dispatch stub is unexercised.",
@@ -311,6 +323,9 @@ func workflowCallOnly(body string) bool {
 	}
 	return found["workflow_call"] && len(found) == 1
 }
+
+// releaseLaneWorkflow is the template's release-e2e lane, which does the driving.
+const releaseLaneWorkflow = "../../../.github/workflows/release-e2e-lane.yml"
 
 func TestEveryDeliveredEntryPointIsExercisedOrExcused(t *testing.T) {
 	dir := "../../../instance-template/.github/workflows"
@@ -364,10 +379,25 @@ func TestEveryDeliveredEntryPointIsExercisedOrExcused(t *testing.T) {
 		}
 	}
 
+	lane, err := os.ReadFile(releaseLaneWorkflow)
+	if err != nil {
+		t.Fatalf("read %s: %v", releaseLaneWorkflow, err)
+	}
+	profiled := map[string]bool{}
+	for _, p := range releasepublish.InstanceWorkflowProfiles() {
+		profiled[p.Workflow] = true
+	}
 	driven := 0
 	for _, name := range entryPoints {
-		if strings.HasPrefix(exercisedEntryPoints[name], "DRIVEN") {
-			driven++
+		if !strings.HasPrefix(exercisedEntryPoints[name], "DRIVEN") {
+			continue
+		}
+		driven++
+		if !strings.Contains(string(lane), "--workflow "+name) && !profiled[name] {
+			t.Errorf("exercisedEntryPoints calls %q DRIVEN, but %s never dispatches it (`--workflow %s`) and no "+
+				"`llz ci assert-instance-workflow` profile names it. Either wire it into the lane or move it back "+
+				"to an excuse — a DRIVEN entry nothing drives is the gap this ledger exists to show.",
+				name, releaseLaneWorkflow, name)
 		}
 	}
 	t.Logf("%d delivered entry point(s); %d driven by the release lane, %d excused",

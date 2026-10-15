@@ -242,6 +242,7 @@ var commands = []Command{
 	{"reconciler", reconciler.ReconcileVolumeTagsCmd},
 	{"reconciler", reconciler.Cmd},
 	{"releasepublish", releasepublish.AssertInstancePRGatesCmd},
+	{"releasepublish", releasepublish.AssertInstanceWorkflowCmd},
 	{"releasepublish", releasepublish.PinInstanceImagesCmd},
 	{"releasepublish", releasepublish.PublishChartsCmd},
 	{"render", render.EnvVPCCmd},

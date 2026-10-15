@@ -265,9 +265,9 @@ func reportBroadPATStandDown(event string, cause error) error {
 		"> Skipped `"+event+"`: the in-cluster broadPatRotator owns the broad PAT (ADR 0001)."); err != nil {
 		return err
 	}
-	return cli.PrintRecord(map[string]any{
+	return cli.PrintRecordAndLog(map[string]any{
 		"event":   event,
-		"skipped": "broad-pat-owned-in-cluster",
+		"skipped": cli.BroadPATStandDown,
 		"reason":  "spec.components.broadPatRotator is enabled and owns create+revoke of the account-wide broad PAT (ADR 0001)",
 	})
 }

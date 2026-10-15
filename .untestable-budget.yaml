@@ -130,7 +130,15 @@ categories:
     # hand-stamped copies of the same three tags and became a loop over both names.
     # Banked rather than left as slack: a line freed by deduplication is not a
     # licence for the next change to add one.
-    budget: 512
+    #
+    # Ratcheted 512 → 511 when release-e2e-lane.yml's gate gained two jobs to judge
+    # (the day-2 scheduled-checks and secret-rotation runs, #421). One `[[ ]]` per
+    # job would have cost two lines; the results became data in an env: expression
+    # and one loop judges them, which came out a line shorter than the hand-written
+    # checks it replaced. Every step that drives the day-2 workflows is a one-line
+    # `llz ci assert-instance-workflow` call — the dispatch, the run lookup, the
+    # wait and the verdict are unit-tested Go.
+    budget: 511
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"

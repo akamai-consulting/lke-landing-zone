@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
@@ -25,6 +26,9 @@ type fakeRotatorClient struct {
 	listResp   []map[string]any
 	listErr    error
 	deleteErr  error
+	// buckets / bucketsErr answer the OBJ-key dry run's probe.
+	buckets    []map[string]any
+	bucketsErr error
 
 	createdLabel, createdScopes, createdExpiry        string
 	createdCluster, createdBucket, createdPermissions string
@@ -55,6 +59,10 @@ func (f *fakeRotatorClient) CreateObjectStorageKey(_ context.Context, label, clu
 
 func (f *fakeRotatorClient) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
 	return f.listResp, f.listErr
+}
+
+func (f *fakeRotatorClient) ListObjectStorageBuckets(context.Context) ([]map[string]any, error) {
+	return f.buckets, f.bucketsErr
 }
 
 func (f *fakeRotatorClient) DeleteObjectStorageKey(_ context.Context, id uint64) error {
@@ -114,7 +122,7 @@ func TestCredentialsPATCreateValidation(t *testing.T) {
 }
 
 func TestCredentialsPATCreateDryRun(t *testing.T) {
-	client := &fakeRotatorClient{}
+	client := &fakeRotatorClient{listResp: []map[string]any{{"label": "lbl"}, {"label": "other"}}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
 		err = RunPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90, "", nil)
@@ -134,6 +142,21 @@ func TestCredentialsPATCreateDryRun(t *testing.T) {
 	}
 	if strings.Contains(stderr, "::add-mask::") {
 		t.Error("dry-run must not emit ::add-mask::")
+	}
+	if probe, _ := rec["probe"].(map[string]any); probe["ok"] != true || probe["same_label"] != float64(1) {
+		t.Errorf("a dry run must carry its authenticated probe, got %v", rec["probe"])
+	}
+}
+
+// A dry run with a token the API refuses is a failed dry run, not a green one.
+func TestCredentialsPATCreateDryRunProbeFailsClosed(t *testing.T) {
+	client := &fakeRotatorClient{listErr: fmt.Errorf("401 invalid token")}
+	var err error
+	captureFirewallOutput(t, func() {
+		err = RunPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90, "", nil)
+	})
+	if err == nil || !strings.Contains(err.Error(), "401 invalid token") {
+		t.Fatalf("want the probe's refusal, got %v", err)
 	}
 }
 
@@ -306,7 +329,7 @@ func TestCredentialsPATRevokeOldErrors(t *testing.T) {
 // ── obj-key create ────────────────────────────────────────────────────────────
 
 func TestCredentialsObjKeyCreateDryRun(t *testing.T) {
-	client := &fakeRotatorClient{}
+	client := &fakeRotatorClient{buckets: []map[string]any{{"label": "bkt", "region": "us-ord", "cluster": "us-ord-10"}}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
 		err = RunObjKeyCreate(context.Background(), client, false, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
@@ -318,11 +341,42 @@ func TestCredentialsObjKeyCreateDryRun(t *testing.T) {
 	if rec["event"] != "linode-obj-key-rotator.create" || rec["dry_run"] != true || rec["bucket_name"] != "bkt" {
 		t.Errorf("unexpected record: %v", rec)
 	}
+	if probe, _ := rec["probe"].(map[string]any); probe["ok"] != true || probe["region"] != "us-ord" {
+		t.Errorf("a dry run must carry its authenticated probe, got %v", rec["probe"])
+	}
+	if got := cli.ParseLogRecords(stderr); len(got) != 1 || got[0]["dry_run"] != true {
+		t.Errorf("the record's log copy (what release-e2e reads back) is missing: %q", stderr)
+	}
 	if client.createdLabel != "" {
 		t.Error("dry-run must not call CreateObjectStorageKey")
 	}
 	if strings.Contains(stderr, "::add-mask::") {
 		t.Error("dry-run must not emit ::add-mask::")
+	}
+}
+
+// THE DRY RUN USED TO CALL NOTHING, so it passed with a dead token and with a
+// bucket in the wrong region alike. Each is now a failed dry run, named.
+func TestCredentialsObjKeyCreateDryRunProbeFailsClosed(t *testing.T) {
+	cases := []struct {
+		name   string
+		client *fakeRotatorClient
+		bucket string
+		want   string
+	}{
+		{"token cannot list", &fakeRotatorClient{bucketsErr: fmt.Errorf("401 invalid token")}, "bkt", "401 invalid token"},
+		{"bucket absent", &fakeRotatorClient{buckets: []map[string]any{{"label": "other", "region": "us-ord"}}}, "bkt", "sees no bucket"},
+		{"bucket in another region", &fakeRotatorClient{buckets: []map[string]any{{"label": "bkt", "cluster": "us-sea-1"}}}, "bkt", "us-sea"},
+		{"no bucket named", &fakeRotatorClient{}, "", "no bucket name"},
+	}
+	for _, c := range cases {
+		var err error
+		captureFirewallOutput(t, func() {
+			err = RunObjKeyCreate(context.Background(), c.client, false, "lbl", "us-ord-10", c.bucket, "read_write", "", "", nil)
+		})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want a failed dry run naming %q, got %v", c.name, c.want, err)
+		}
 	}
 }
 

@@ -357,3 +357,39 @@ workflow for two reasons:
 
 CVE-auditing the tools module belongs in the template repo's own CI — see
 `docs/designs/cross-org-reuse-pattern.md`.
+
+---
+
+## How release-e2e exercises this workflow
+
+Until #421 nothing in the template repo ran this workflow; its verbs were
+unit-tested and its caller stub was not. The release lane's
+`day2-scheduled-checks` job now dispatches `scheduled-checks.yml` on the
+converged e2e instance, between converge and teardown:
+
+```
+llz ci assert-instance-workflow --profile scheduled-checks --instance <repo> --deployment e2e --timeout 2700
+```
+
+A dispatch runs **every** job (each cron selects a subset;
+`workflow_dispatch` selects them all). The verdict is per check, not per run.
+Every cluster-touching job gets its kubeconfig through `cluster-access` with
+`allow-missing`, so a run whose cluster access silently failed is green with
+every check skipped. The verb requires each check its profile names to have
+**run** and passed, for each `--deployment` the lane names. The checks are
+OpenBao/ESO, cert-manager, lke-admin age, app-scope converge, the credential
+single pane, both PrometheusRule checks, and the drift comparison.
+
+`template-drift` is also judged on its **log**. A green step can still have
+compared nothing: with no `_src_path`/`_commit` in `.copier-answers.yml`,
+`llz drift` falls back to the checkout's own remote and compares the instance
+with itself. So the verb requires drift's verdict line to name a template repo
+other than the instance. The e2e fixture's minimal answers file now carries both
+fields (`e2e-instantiate.yml`, held by
+`TestE2EFixtureAnswersCarryTemplateProvenance`), so the comparison is against
+the template repo at the commit under test.
+
+A step outside the profile that fails inside a job that still succeeds is
+reported as a **warning**, not a failure. That is what a `continue-on-error`
+step looks like. The two in this workflow are advisory by design: the
+support-plane alert read, and the Keycloak device-flow client self-heal.

@@ -84,6 +84,56 @@ func PinInstanceImagesCmd() *cobra.Command {
 	return c
 }
 
+// AssertInstanceWorkflowCmd is the e2e proof that a delivered DAY-2 workflow —
+// scheduled-checks.yml, secret-rotation.yml (dry run) — runs on the instance and
+// does its job. release-e2e-lane.yml runs it between converge and teardown.
+func AssertInstanceWorkflowCmd() *cobra.Command {
+	var o InstanceWorkflowOpts
+	var interval, timeout int
+	c := &cobra.Command{
+		Use:   "assert-instance-workflow",
+		Short: "dispatch a delivered day-2 workflow on the instance and prove its checks ran and passed",
+		Long: "Dispatches the caller stub named by --profile on the instance repo, waits for\n" +
+			"the run, and fails unless it started (not startup_failure), every job the\n" +
+			"profile names appeared and succeeded — once per --deployment for matrix jobs —\n" +
+			"and every check step the profile names actually RAN. A green run whose checks\n" +
+			"were skipped (cluster-access reporting no cluster) examined nothing and fails.\n" +
+			"Where a green step can still have done nothing, the job's LOG is read for the\n" +
+			"evidence: template-drift must have compared against a template, and each\n" +
+			"rotation job must have logged its credential record (dry_run=true with its\n" +
+			"probe, or the broad-PAT stand-down the e2e fixture expects). Rotation profiles\n" +
+			"are unarmed: every apply input is false, and a mutating job that executes on\n" +
+			"any deployment fails the verb. Profiles: " + strings.Join(profileNames(), ", ") + ".\n" +
+			"--timeout bounds the WHOLE verb, dispatch included; on expiry, or on SIGINT/\n" +
+			"SIGTERM, the dispatched run is cancelled. Reads GH_TOKEN from the environment\n" +
+			"(actions:read/write on the instance repo); GH_ENTERPRISE_TOKEN is set from it\n" +
+			"for a non-github.com --host.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			if interval < 1 {
+				return fmt.Errorf("--interval must be at least 1 second (got %d)", interval)
+			}
+			if timeout < 0 {
+				return fmt.Errorf("--timeout must not be negative (got %d)", timeout)
+			}
+			o.Token = os.Getenv("GH_TOKEN")
+			o.Interval = time.Duration(interval) * time.Second
+			o.Timeout = time.Duration(timeout) * time.Second
+			return RunAssertInstanceWorkflow(o)
+		},
+	}
+	c.Flags().StringVar(&o.Instance, "instance", "", "instance repo owner/name to dispatch on")
+	c.Flags().StringVar(&o.Host, "host", "github.com", "forge host for every gh call (the GHES appliance on that lane)")
+	c.Flags().StringVar(&o.Ref, "ref", "main", "instance branch to dispatch the workflow on")
+	c.Flags().StringVar(&o.Profile, "profile", "", "which delivered workflow to dispatch and judge ("+strings.Join(profileNames(), " | ")+")")
+	c.Flags().StringSliceVar(&o.Deployments, "deployment", nil, "a deployment that HAS a cluster; its matrix legs must run every check (repeatable, required)")
+	c.Flags().IntVar(&interval, "interval", 20, "seconds between run polls")
+	c.Flags().IntVar(&timeout, "timeout", 0, "max seconds for the whole verb, dispatch included (0 = the profile's own budget)")
+	c.Flags().Int64Var(&o.RunID, "run", 0, "judge this EXISTING run id instead of dispatching a new one (re-reading a red lane's run)")
+	return c
+}
+
 // AssertInstancePRGatesCmd is the e2e proof that the DELIVERED pull_request-gated CI
 // actually runs. It sits next to pin-instance-images because it is the same lane —
 // e2e-instantiate.yml drives the same throwaway instance repo, and this step runs
