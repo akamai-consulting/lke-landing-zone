@@ -147,7 +147,8 @@ managed  apl-values/README.md
 # The token count is now much lower than it was: retiring the `template-ref:` input
 # (and the renovate depName annotated on it) took every stub from 2-9 copier
 # substitutions down to ONE — `instance_repo` — and to ZERO for cluster-health.yml,
-# scheduled-checks.yml, wedge-gameday.yml and template-upgrade.yml. Those FOUR are
+# scheduled-checks.yml, wedge-gameday.yml, template-upgrade.yml and
+# restore-openbao.yml. Those FIVE are
 # token-free template logic held in `merge` purely for the trigger-surface
 # affordance, so a hand-edit there survives upgrades silently (they are `merge`,
 # and the `managed-fresh` digest gate covers only digest-locked classes). If that

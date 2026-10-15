@@ -1,0 +1,88 @@
+name: Restore OpenBao from a backup
+
+# Thin caller for the LOCAL reusable llz-restore-openbao.yml — the body (request
+# check, cluster access, the restore, the post-restore steps, the root revoke) and
+# the composite actions it calls are copier-delivered into THIS repo (vendored,
+# ADR 0003); the llz CLI is baked into vars.TF_IMAGE.
+# ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
+# `llz upgrade` re-renders the vendored body with each template release.
+#
+# WHAT THIS IS FOR: putting a deployment's OpenBao back from one of the Raft
+# snapshots the openbaoBackup CronJob takes, when you do not hold the recovery
+# shares yourself. The root token a restore needs is minted INSIDE the job from the
+# infra-<deployment> recovery quorum, used, and revoked before the job ends; it is
+# never printed and never written to GitHub. Runbook:
+# docs/runbooks/openbao-backup-restore.md.
+#
+#   mode=list     list the snapshots (newest first, with each one's OpenBao cluster id)
+#   mode=plan     DRY RUN: fetch + verify the snapshot, check the cluster, change nothing
+#   mode=restore  restore it — needs confirm=restore:<deployment>
+#
+# A restore REPLACES the whole store. Run list, then plan, then restore.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        # Named `region` for parity with bootstrap-openbao.yml and the
+        # infra-<deployment> Environment names; the value is a DEPLOYMENT.
+        description: 'Deployment name — NOT a Linode region. e.g. primary | secondary | staging | lab | e2e (must have an infra-<deployment> Environment)'
+        required: true
+        type: string
+      mode:
+        description: 'list = show the snapshots. plan = dry run (changes nothing). restore = REPLACE the store (needs confirm).'
+        required: true
+        type: choice
+        options:
+          - list
+          - plan
+          - restore
+        default: plan
+      snapshot:
+        description: 'plan/restore: the snapshot key to restore, as mode=list prints it (openbao-raft/<time>_<cluster id>.snap). Give this OR latest.'
+        required: false
+        type: string
+        default: ''
+      latest:
+        description: 'plan/restore: use the newest snapshot instead of naming one. After an incident the newest may already hold the damage.'
+        required: false
+        type: boolean
+        default: false
+      from_cluster:
+        description: 'With latest: only snapshots taken by this OpenBao cluster id. Required when the bucket holds several (after a rebuild).'
+        required: false
+        type: string
+        default: ''
+      force:
+        description: 'Restore a snapshot taken by a DIFFERENT OpenBao cluster — only after a rebuild of THIS deployment. Never to get past an HA-pair mismatch.'
+        required: false
+        type: boolean
+        default: false
+      confirm:
+        description: 'mode=restore only: type restore:<deployment> exactly (e.g. restore:primary).'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# NO workflow-level `concurrency` here, on purpose — same rule as
+# bootstrap-openbao.yml and breakglass-openbao.yml. The reusable owns
+# `openbao-bootstrap-<region>`, which it SHARES with bootstrap and break-glass so a
+# restore never races either (all three drive the generate-root quorum). Repeating
+# the group on this caller would DEADLOCK: the parent would hold the group its own
+# `call` job then needs.
+
+jobs:
+  call:
+    uses: ./.github/workflows/llz-restore-openbao.yml
+    with:
+      region:       ${{ inputs.region }}
+      mode:         ${{ inputs.mode }}
+      snapshot:     ${{ inputs.snapshot }}
+      latest:       ${{ inputs.latest }}
+      from_cluster: ${{ inputs.from_cluster }}
+      force:        ${{ inputs.force }}
+      confirm:      ${{ inputs.confirm }}
+    secrets: inherit

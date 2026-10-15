@@ -24,7 +24,9 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #      terraform.yml's own chain (apply-cluster → bootstrap-cluster →
 #      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
-#      so a green provision means "converged AND Loki is S3-backed".
+#      so a green provision means "converged AND Loki is S3-backed". Then a
+#      no-op plan, and `restore-openbao.yml` in list mode (the delivered restore
+#      workflow starts and reads the backups the drill produced).
 #   3. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
 #      runs once provisioning started, so a paid cluster is never leaked.
 #   4. gate       — pass only if provision + teardown all succeeded.
@@ -336,6 +338,24 @@ jobs:
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action=plan --field module=cluster --field region="${E2E_ENV}" \
             --field assert_no_changes=true
+
+      # ── The restore workflow, list mode ───────────────────────────────────────
+      # Proves the delivered restore-openbao.yml stub -> llz-restore-openbao.yml
+      # body actually starts (caller permissions, environment, secrets wiring — the
+      # startup_failure class no static check fully sees) and that its list reads
+      # this deployment's bucket through a temporary key and finds the snapshots
+      # the drill just produced (the verb fails on an empty bucket).
+      #
+      # LIST, NOT PLAN: the e2e bucket outlives every e2e cluster, so it holds
+      # snapshots from several OpenBao cluster ids and `latest` rightly refuses to
+      # guess, while the lane cannot know this cluster's id to pass from_cluster.
+      # The restore path itself is the drill's (same baosnap functions). SKIPPED
+      # ON DRY_RUN: nothing was provisioned, so there is nothing to list.
+      - name: Restore workflow (list) reaches the backups
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: .github/scripts/dispatch-and-watch.sh --repo "${INSTANCE_REPO}" --workflow restore-openbao.yml --field mode=list --field region="${E2E_ENV}"
 
   # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
   # The former `validate` job dispatched the instance's cluster-health.yml in gate
