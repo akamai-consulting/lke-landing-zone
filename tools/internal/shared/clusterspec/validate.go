@@ -1,6 +1,7 @@
 package clusterspec
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -776,7 +777,7 @@ func retiredObjProxyError(env string, t ComponentToggle) error {
 		"because Linode applies SSE-S3 by default on E2/E3 endpoints (`llz ci assert-obj-encryption` "+
 		"proves it on real objects). Delete this key", env, retiredObjProxyComponent)
 	if t.Enabled == nil || !*t.Enabled {
-		return fmt.Errorf("%s.", base)
+		return errors.New(base)
 	}
 	return fmt.Errorf("%s — but it is ENABLED here, so read this first: objects written through the "+
 		"gateway are SSE-C encrypted and readable only with the key at secret/obj/ssec. Once the proxy "+
