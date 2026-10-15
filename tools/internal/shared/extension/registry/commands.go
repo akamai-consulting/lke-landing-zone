@@ -239,6 +239,8 @@ var commands = []Command{
 	{"openbao", openbao.RegenRootCmd},
 	{"openbao", openbao.BackupsCmd},
 	{"openbao", openbao.RestoreCmd},
+	{"openbao", openbao.OpenBaoRestoreCICmd},
+	{"openbao", openbao.BaoRevokeRootCmd},
 	{"openbao", openbao.SeedBroadPATCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
 	{"summarysecret", summarysecret.Cmd},
