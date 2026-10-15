@@ -82,14 +82,7 @@ const E2ELaneBase = "e2e"
 // DrillAllowed reports whether region is one of the e2e lane's throwaway
 // deployments — the only place an in-place restore is acceptable. Derived from
 // forge.LaneName, the function that names the lanes, rather than a restated list.
-func DrillAllowed(region string) bool {
-	for _, f := range []forge.Flavor{forge.GitHub, forge.GHEC, forge.GHES, forge.GitLab} {
-		if region == forge.LaneName(f, E2ELaneBase) {
-			return true
-		}
-	}
-	return false
-}
+func DrillAllowed(region string) bool { return forge.IsLaneDeployment(E2ELaneBase, region) }
 
 const (
 	// DrillJob is the exercise Job's name. NOT an ephemeral-e2e name on purpose:

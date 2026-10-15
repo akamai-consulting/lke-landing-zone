@@ -90,9 +90,9 @@ var defaultScrapeRuleGroups = []string{
 // Harbor mistake above, for rules. Each names where its own load IS gated, so the
 // exemption is a pointer rather than a hole.
 var componentGatedRuleGroups = map[string]string{
-	"llz-velero": "spec.components.velero (default off); the e2e drill step runs " +
-		"`assert-scrape-targets --monitors llz-velero/velero --rule-groups llz-velero` " +
-		"on the e2e deployment, which enables it",
+	"llz-velero": "spec.components.velero (default off); `assert-velero-restore` re-runs " +
+		"`assert-scrape-targets --monitors llz-velero/velero --rule-groups llz-velero` on every " +
+		"deployment that enables it, from bootstrap-openbao, and e2e enables it",
 }
 
 // activeTarget is the subset of a /api/v1/targets active target the gate reads.

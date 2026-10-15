@@ -117,7 +117,12 @@ var unbackedGrants = map[string]bool{
 	// restore endpoint needs `update` on sys/storage/raft/snapshot, which no
 	// Custodian operation expresses. (Its cloud grant IS backed — CloudFor on the
 	// drill binding, in deps.go.)
-	"openbaobackup/SecretCustody":   true,
+	"openbaobackup/SecretCustody": true,
+	// The Velero drill's custody is the canary Secret it writes (through the
+	// Writer, as a manifest — no Custodian operation places a Kubernetes Secret)
+	// and the temporary bucket key it holds (minted through CloudFor on the drill
+	// binding, in deps.go, which backs its cloud-mutate).
+	"velero/SecretCustody":          true,
 	"openbao/SecretCustody":         true,
 	"reconcilelanes/CloudMutate":    true,
 	"reconcilelanes/SecretCustody":  true,

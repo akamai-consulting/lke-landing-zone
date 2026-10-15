@@ -158,6 +158,9 @@ func TestComponentLinksArePinned(t *testing.T) {
 		// exercises that CronJob — with the component off there is nothing to
 		// back up with and nothing to drill
 		"openbao-backup": "openbaoBackup",
+		// the gate drives the Velero the component deploys: with it off there is
+		// no Schedule to back up from and nothing to restore
+		"velero": "velero",
 	}
 	got := ComponentLinks()
 	for name, comp := range want {

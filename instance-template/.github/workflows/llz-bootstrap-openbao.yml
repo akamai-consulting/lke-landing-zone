@@ -47,7 +47,7 @@ on:
         type: boolean
         default: false
       restore_drill:
-        description: 'RELEASE-E2E ONLY. Run the OpenBao backup -> restore drill (`llz ci assert-openbao-restore`), which ROLLS BACK THE LIVE OPENBAO of this deployment to a seconds-old snapshot. Default false. The verb itself refuses any deployment that is not an e2e lane (e2e, e2e-<forge>), so setting this on a real deployment fails the bootstrap rather than restoring it. Every deployment instead takes and verifies a first backup (`--backup-only`) after converge.'
+        description: 'RELEASE-E2E ONLY. Run the OpenBao backup -> restore drill (`llz ci assert-openbao-restore`), which ROLLS BACK THE LIVE OPENBAO of this deployment to a seconds-old snapshot, and the Velero backup -> restore drill of a canary namespace (`llz ci assert-velero-restore --drill`, when spec.components.velero is on). Default false. Both verbs refuse any deployment that is not an e2e lane (e2e, e2e-<forge>), so setting this on a real deployment fails the bootstrap rather than restoring it. Every deployment instead takes and verifies a first backup of each after converge.'
         required: false
         type: boolean
         default: false
@@ -854,6 +854,31 @@ jobs:
         env:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci assert-openbao-restore --region "$REGION" --backup-only
+
+      # ── Velero: a first backup on every deployment, and (e2e) the round trip ──
+      # Self-skips unless spec.components.velero is enabled. On every deployment
+      # that enables it: the LIVE Schedule still excludes llz-openbao, the
+      # BackupStorageLocation is Available, a backup from the Schedule's own
+      # template Completes with items, its tarball is in the velero bucket and
+      # refuses a read without the SSE-C key, and Prometheus scrapes Velero and has
+      # its alert rules loaded. Fails the job on purpose — a deployment whose
+      # backups cannot work should not report a green bootstrap.
+      #
+      # restore_drill (release-e2e only) adds the backup → delete → restore round
+      # trip of a canary namespace (llz-velero-drill: a ConfigMap and a Secret). It
+      # touches nothing else and never restores over live data; the verb also
+      # refuses --drill on any deployment that is not an e2e lane's.
+      #
+      # AFTER converge (the Velero Application must be synced) and after the
+      # bootstrap mints Velero's key and seed-ssec-key its SSE-C key. Needs no root.
+      # 25m: up to 10m for the Schedule to appear, 5m for the BSL, 10m per backup.
+      - name: Velero backup check (and the e2e restore drill)
+        if: ${{ steps.ensure.outputs.available == 'true' }}
+        timeout-minutes: 25
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+          RESTORE_DRILL: ${{ inputs.restore_drill }}
+        run: llz ci assert-velero-restore --region "$REGION" --drill="${RESTORE_DRILL:-false}"
 
       # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
       # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
