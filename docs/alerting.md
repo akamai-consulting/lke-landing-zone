@@ -31,94 +31,176 @@ Both Prometheus mechanisms notify through Alertmanager, which pages whatever
 
 ## Wiring a notification receiver (PagerDuty, Slack)
 
-`spec.alerting` renders into an **`AlertmanagerConfig`** that apl-core's
-Alertmanager picks up. Two receiver types are supported, separately or together:
+`spec.alerting` wires two receiver types, separately or together. Each rides the
+channel apl-core actually offers for it:
 
-| Receiver | Pages on | Secret (OpenBao, `secret/` mount) |
-|---|---|---|
-| `pagerduty` | `severity` ∈ `pagerduty.severities` (default `[critical]`) | `alerts/pagerduty`, property `routing_key` — the Events API v2 **integration key** of a PagerDuty service |
-| `slack` | `critical` → `slack.channelCrit` (default `mon-apl-crit`); everything else → `slack.channel` (default `mon-apl`) | `alerts/webhooks`, property `slack_url` — an incoming-webhook URL |
+| Receiver | Notifies on | How it reaches Alertmanager | Secret (OpenBao, `secret/` mount) |
+|---|---|---|---|
+| `slack` | `severity` ∈ `slack.severities` (default `[warning, critical]`; must include `critical`) | **apl-core's own Slack receiver**: an `AplAlertSet` settings CR (`env/settings/alerts.yaml`) via the apl-overlay, plus an LLZ route for the non-critical severities | `alerts/webhooks`, property `slack_url` — an incoming-webhook URL |
+| `pagerduty` | `severity` ∈ `pagerduty.severities` (default `[critical]`) | an `AlertmanagerConfig` (apl-core has no PagerDuty receiver) | `alerts/pagerduty`, property `routing_key` — the Events API v2 **integration key** of a PagerDuty service |
 
-`Watchdog` and `InfoInhibitor` are excluded from every receiver: both are firing
-by design, and paging on them pages forever.
+`Watchdog` and `InfoInhibitor` are excluded from every LLZ route: both are firing
+by design. `info` and `none` cannot be listed in either `severities`: apl-core
+disables kube-prometheus-stack's `InfoInhibitor`, so nothing would keep info
+alerts quiet and a route that matched them would post every one. PagerDuty events
+carry the alert's own severity (`critical`/`error`/`warning`/`info`; anything else
+→ `critical`), not Alertmanager's default `error` for everything.
 
 ### How it reaches Alertmanager, and why this way
 
-apl-core builds Alertmanager's *base* config from a top-level `alerts:` values
-block that no LLZ channel can reach ([upstream-asks.md](upstream-asks.md) §4 —
-still open). But the `Alertmanager` CR apl-core deploys (kube-prometheus-stack,
-prometheus-operator v0.93 on apl-core 6.3) leaves `alertmanagerConfigSelector` and
-`alertmanagerConfigNamespaceSelector` at the chart default `{}` — it selects
-**every** `AlertmanagerConfig` in every namespace and merges each one into the
-base config as a sub-route at the **top** of the root route, with
-`continue: true`. So LLZ ships its routing as a CR instead of as values:
+**Slack — apl-core's receiver.** apl-core maps a settings CR, `kind: AplAlertSet`
+at `env/settings/alerts.yaml`, onto its `alerts:` values (`src/common/repo.ts`) —
+the same mechanism LLZ already uses for object storage (`AplObjectStorage` at
+`env/settings/obj.yaml`). From `alerts.receivers: [slack]` apl-core builds a
+`default` and a `critical` receiver whose webhook URL is the file it mounts from
+its `alertmanager-credentials` Secret, which its own ExternalSecret fills from
+`alerts-secrets` (property `slack_url`) in `apl-secrets`. So:
 
-1. `llz render` writes `apl-values/<env>/apps/observability/alerting.yaml` — an
-   `ExternalSecret` and an `AlertmanagerConfig`, both named `llz-alerting` in
-   `monitoring` — and lists it in that app's `kustomization.yaml`. It rides the
-   `llz-observability` Argo CD app, so a bad CR degrades only that app. (Render
-   **fails** if `spec.alerting` names a receiver and an env does not deploy the
-   observability component — a pager that silently renders nowhere is the failure
-   this replaces.)
-2. The `ExternalSecret` materialises the key from OpenBao through the `openbao`
-   ClusterSecretStore, like every other platform credential. No key, no Secret —
-   and prometheus-operator **rejects** an `AlertmanagerConfig` whose Secret it
-   cannot resolve.
-3. The apl-overlay sets `apps.alertmanager._rawValues.alertmanagerSpec
-   .alertmanagerConfigMatcherStrategy.type: OnNamespaceExceptForAlertmanagerNamespace`
-   (`apl-values/_shared/apl-overlay/appvalues.yaml`). **This is load-bearing.**
-   Under the operator's default (`OnNamespace`) every `AlertmanagerConfig` route
-   gets a `namespace="<the CR's namespace>"` matcher, so a CR in `monitoring`
-   would page only for alerts from `monitoring` — not `OpenBaoSealed`
-   (`llz-openbao`), not node alerts (no namespace) — while its receiver showed up
-   in Alertmanager's config and nothing reported an error. The exemption applies
-   only to CRs in Alertmanager's own namespace; CRs anywhere else stay scoped.
+1. `llz render` writes `apl-values/<env>/apl-overlay/alerts.yaml` (the
+   `AplAlertSet`), and the apl-overlay reconciler merges it **key-level** onto
+   the `apl-<env>` branch — it owns `spec.receivers` and
+   `spec.slack.channel`/`channelCrit` only, because the App Platform Console's
+   alert settings write the same file (`groupInterval`, `repeatInterval`, the
+   msteams block survive). An absent file is created from the source.
+   `llz_apl_overlay_alerts_target_unusable=1` says the file exists and is not an
+   `AplAlertSet`.
+2. `apl-values/<env>/apps/observability/alerting.yaml` carries an
+   `ExternalSecret` that writes `apl-secrets/alerts-secrets` from OpenBao —
+   exactly as `obj-secrets` does. The `AplAlertSet`'s `slack.url` (an apl-core
+   x-secret) is left unset, so apl-core seals nothing and the webhook never
+   enters git.
+3. apl-core routes only `severity=critical` (to `critical`) and
+   `CPUThrottlingHigh` (to `default`) — everything else goes to its `null`
+   receiver. The other Slack severities (`warning` by default) need a route
+   apl-core does not have, so `alerting.yaml` adds an `AlertmanagerConfig`,
+   `llz-alerting-slack`, with one Slack receiver reading the **same**
+   `alertmanager-credentials` Secret. It never matches `critical` or
+   `CPUThrottlingHigh` — apl-core already posts those — so every alert has
+   **exactly one** Slack path.
+
+**One webhook, one channel.** apl-core sends both of its Slack receivers through
+a single webhook URL, and a Slack-app incoming webhook posts only to the channel
+it was created for — the payload's `channel` is ignored. So `slack.channel` names
+that one channel (both of apl-core's fields get it), and `slack.channelCrit` must
+be unset or equal to it. Page urgent alerts somewhere else with `pagerduty`.
+
+**PagerDuty — an `AlertmanagerConfig`.** apl-core's `Alertmanager` CR
+(kube-prometheus-stack, prometheus-operator v0.93 on apl-core 6.3) leaves
+`alertmanagerConfigSelector` and `alertmanagerConfigNamespaceSelector` at `{}` —
+it merges **every** `AlertmanagerConfig` into its config as a sub-route at the
+**top** of the root route, forced to `continue: true`. `alerting.yaml` carries an
+`ExternalSecret` + `AlertmanagerConfig`, both `llz-alerting` in `monitoring`; no
+key, no Secret, and the operator **rejects** the CR. It is a separate CR from the
+Slack one on purpose: a rejected CR drops every route in it, so a Slack secret
+problem must not be able to take the pager down. The forced `continue` is why a
+paged critical alert also reaches apl-core's critical Slack route — a different
+target, by design (the pager wakes someone, the channel keeps the record).
+
+**The matcher strategy is load-bearing.** The apl-overlay sets
+`apps.alertmanager._rawValues.alertmanagerSpec.alertmanagerConfigMatcherStrategy.type:
+OnNamespaceExceptForAlertmanagerNamespace` (`apl-values/_shared/apl-overlay/appvalues.yaml`).
+Under the operator's default (`OnNamespace`) every `AlertmanagerConfig` route
+gets a `namespace="<the CR's namespace>"` matcher, so LLZ's CRs in `monitoring`
+would notify only for alerts from `monitoring` — not `OpenBaoSealed`
+(`llz-openbao`), not node alerts (no namespace) — while their receivers showed up
+in Alertmanager's config and nothing reported an error.
+
+**Team Alertmanagers are a known second path.** A team with
+`managedMonitoring.alertmanager: true` (a Console setting — LLZ's own team CRs
+set it `false`) gets its own Alertmanager in `team-<id>`, with the same `{}`
+selectors, and apl-core's platform Prometheus sends it **every** alert. It merges
+LLZ's CRs too — under its default `OnNamespace` strategy, so it pages PagerDuty a
+second time for every `namespace=monitoring` alert. LLZ has no channel into a
+team Alertmanager's selectors, so the gate reads every non-platform
+Alertmanager's running config and **fails** if it carries LLZ's receivers; the
+remedy is turning that team's managed Alertmanager off until apl-core scopes them
+([upstream-asks.md](upstream-asks.md) §4).
 
 **Rejected alternative — an LLZ-owned Alertmanager.** A second Alertmanager would
 need Prometheus to send to it (`alertingEndpoints` on apl-core's Prometheus CR —
-another apl-core value LLZ cannot set), and would split silences and inhibitions
-across two instances. Not needed while the managed one selects CRs.
+an apl-core value LLZ cannot set), and would split silences and inhibitions
+across two instances.
+
+**Not surfaced:** `msteams` — apl-core supports it, but its critical webhook
+targets `prometheus-msteams` on port **800** while the Service listens on 2000
+(`helmfile.d/snippets/alertmanager.gotmpl`), so every critical Teams notification
+would fail to connect; `email` — apl-core's values schema does not accept it as
+an alerts receiver; `opsgenie` — not in apl-core's schema either.
+
+### Per-environment overrides
+
+`spec.alerting` in `landingzone.yaml` is inherited by every env that deploys the
+observability component. An env overrides it field by field in
+`environments/<env>.yaml` — the same "set wins, unset inherits" rule as
+`spec.defaults`:
+
+```yaml
+# environments/dev.yaml
+spec:
+  alerting:
+    receivers: [none]          # dev pages nobody
+---
+# environments/staging.yaml
+spec:
+  alerting:
+    receivers: [slack]         # channel only, no pager
+    slack: { channel: staging-alerts }
+```
+
+An env **without observability** (disabled, or `loki` not declared in
+`cluster.bootstrap.managedApps`) runs no Alertmanager, so an inherited
+`spec.alerting` is **skipped** for it — nothing renders, and the gate reports it
+not applicable. An env that names a receiver **itself** without observability is
+a validation error.
 
 ### Steps
 
-1. **Spec** — in `landingzone.yaml`, then `llz render` and commit:
+1. **Spec** — in `landingzone.yaml` (and any per-env overrides), then
+   `llz render` and commit:
 
    ```yaml
    spec:
      alerting:
-       receivers: [pagerduty]          # and/or slack
+       receivers: [pagerduty, slack]
        pagerduty:                      # optional
          severities: [critical]        # default [critical]
          # url: https://events.eu.pagerduty.com/v2/enqueue   # EU-region accounts
-       # slack:                        # optional; defaults mon-apl / mon-apl-crit
-       #   channel: platform-alerts
-       #   channelCrit: platform-alerts-crit
+       slack:                          # optional
+         channel: platform-alerts      # the channel the webhook is bound to (default mon-apl)
+         # severities: [warning, critical]   # default; must include critical
    ```
 
 2. **Secret** — in PagerDuty, add an *Events API v2* integration to the service
-   that should be paged and copy its integration key. Seed it into each env's
-   OpenBao (dual-write on HA pairs):
+   that should be paged and copy its integration key; in Slack, create an
+   incoming webhook **for the channel above**. Seed them into each env's OpenBao
+   (dual-write on HA pairs):
 
    ```bash
    llz openbao set alerts/pagerduty routing_key=<integration key>
-   llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/services/…   # if slack
+   llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/services/…
    ```
 
    Both paths are age-tracked by the reconciler's credential gauges
    (`class="static"`). ESO re-reads them every minute, so a rotated key reaches
-   Alertmanager without a restart.
+   Alertmanager without a restart. **Do not also set the Slack webhook in the
+   App Platform Console**: apl-core would seal it into the same
+   `apl-secrets/alerts-secrets` Secret LLZ writes, and the two would fight.
 
-3. **Verify — gate, then a real page.** `llz ci assert-alert-routing` reads the
-   config Alertmanager is *running*, requires each receiver with its key set, and
-   posts **silenced** probe alerts — from a non-`monitoring` namespace, with no
-   namespace, and one that must *not* page — and reads back which receiver
-   Alertmanager chose. It never notifies anyone. `llz-scheduled-checks` runs it
-   weekly; the release e2e runs it as the `alert-routing` lane.
+3. **Verify — gate, then a real notification.** `llz ci assert-alert-routing`
+   reads the config Alertmanager is *running* and requires each receiver with its
+   key set (for Slack, also a non-empty `slackUrl` in `alertmanager-credentials`
+   — the status API shows the file's path, not its contents). It then posts
+   **silenced** probe alerts — one per severity, from a non-`monitoring`
+   namespace, one with no namespace, and an `info` one that must notify nobody —
+   and for each **counts** the PagerDuty and Slack paths Alertmanager chose,
+   requiring exactly the spec's number (a duplicate fails). It then reads every
+   team Alertmanager (above), and reports — without failing —
+   `alertmanager_notifications_failed_total` per integration. It never notifies
+   anyone. `llz-scheduled-checks` runs it weekly per env; the release e2e runs it
+   as the `alert-routing` lane.
 
-   The gate stops at Alertmanager's decision. It cannot see whether PagerDuty
-   accepted the event (a wrong-but-non-empty key, or egress from the Alertmanager
-   pod blocked), so after seeding **fire one real alert once** and confirm the
-   page arrives:
+   The gate stops at Alertmanager's decision, so after seeding **fire one real
+   alert once** and confirm it arrives:
 
    ```bash
    kubectl -n monitoring port-forward svc/alertmanager-operated 9093 &
@@ -126,17 +208,23 @@ across two instances. Not needed while the managed one selects CRs.
      severity=critical namespace=llz-paging-test --annotation=summary="paging test — resolve me"
    ```
 
-   Afterwards, `alertmanager_notifications_failed_total{integration="pagerduty"}`
-   is where delivery failures show.
+### When a notification does not arrive
 
-**Turning it off.** Remove `spec.alerting` (or set `receivers: [none]`) and
-`llz render`: the kustomization stops listing `alerting.yaml`, so Argo prunes
-the CR. The stale file stays on disk until you delete it — render only adds
-files — but nothing references it.
+`LLZAlertNotificationsFailing` (warning, `support-plane-alerts`) fires when the
+platform Alertmanager fails any PagerDuty or Slack attempt in 30 minutes, and
+`llz ci assert-alert-routing` prints the same counters. Check, in order: the key
+or webhook in OpenBao (`alerts/pagerduty`, `alerts/webhooks`) is the live one;
+the PagerDuty `url` matches the account's region; the Alertmanager pod's egress
+reaches `events.pagerduty.com` / `hooks.slack.com`. A Slack webhook that posts to
+the wrong channel is bound to that channel — create one for the right channel.
 
-`msteams` and `opsgenie` are not surfaced. msteams would need its webhook URLs in
-committed values; opsgenie could ride the same `AlertmanagerConfig` mechanism and
-is a straightforward follow-up if someone needs it.
+**Turning it off.** Set `receivers: [none]` (instance-wide or per env) and
+`llz render`: the observability kustomization stops listing `alerting.yaml`, so
+Argo prunes the CRs and ExternalSecrets, and the `AplAlertSet` asserts `[none]`
+on apl-core. Removing `spec.alerting` entirely instead leaves the last rendered
+`alerts.yaml` overlay asserting what it last said — render only adds files —
+so delete `apl-values/<env>/apl-overlay/alerts.yaml` too (same caveat as
+`otomi.yaml`).
 
 > **Scheduled CI checks are belt-and-suspenders, not the primary signal.** The
 > in-cluster llz-reconciler samples OpenBao seal, ESO-store + cert-manager
@@ -246,11 +334,12 @@ once the last opt-in-reconciler `DEAD?` alerts are resolved.
 Four further gates run in the same converge:
 
 - **`llz ci assert-alert-routing`** — the hop after `assert-alert-delivery`:
-  Alertmanager → the receiver `spec.alerting` names. Reads the config Alertmanager
-  is running and posts silenced probe alerts to see which receiver it picks (see
-  **Wiring a notification receiver** above). The release e2e declares a PagerDuty +
-  Slack fixture whose endpoints are all `.invalid`, so the lane runs on every
-  release; `llz-scheduled-checks` runs it weekly on every instance.
+  Alertmanager → the receivers `spec.alerting` names, exactly once each. Reads the
+  config Alertmanager is running, posts silenced probe alerts and counts the
+  PagerDuty and Slack paths it picks, and checks no team Alertmanager carries
+  LLZ's receivers (see **Wiring a notification receiver** above). The release e2e
+  declares a PagerDuty + Slack fixture whose endpoints are all `.invalid`, so the
+  lane runs on every release; `llz-scheduled-checks` runs it weekly per env.
 
 - **`llz ci assert-openbao-audit`** — the same argument applied to the *log* path,
   which `assert-scrape-targets` does not cover and `assert-loki` (Loki is

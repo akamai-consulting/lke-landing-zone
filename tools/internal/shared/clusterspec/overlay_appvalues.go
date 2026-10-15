@@ -161,7 +161,8 @@ func aplAppRawValues() map[string]map[string]any {
 }
 
 // alertmanagerSpecValues sets the matcher strategy that lets spec.alerting's
-// AlertmanagerConfig route alerts from EVERY namespace.
+// AlertmanagerConfigs (PagerDuty, and the Slack severities apl-core does not
+// route) match alerts from EVERY namespace.
 //
 // THE FAILURE IT PREVENTS. prometheus-operator's default strategy, OnNamespace,
 // adds `namespace="<CR namespace>"` to every AlertmanagerConfig route. LLZ's CR

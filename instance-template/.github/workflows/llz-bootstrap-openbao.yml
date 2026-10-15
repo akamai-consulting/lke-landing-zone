@@ -686,8 +686,9 @@ jobs:
       # ── (e2e) spec.alerting fixture keys ─────────────────────────────────────
       # The release-e2e spec declares PagerDuty + Slack receivers
       # (.github/e2e/spec-alerting.yaml in the template repo). Without a key in
-      # OpenBao the ExternalSecret never produces its Secret, prometheus-operator
-      # rejects the AlertmanagerConfig, and the alert-routing lane fails — which
+      # OpenBao the ExternalSecrets never produce their Secrets — prometheus-operator
+      # rejects the AlertmanagerConfigs, apl-core's alertmanager-credentials stays
+      # empty — and the alert-routing lane fails, which
       # is the correct verdict for a real instance and the wrong one for a
       # fixture. So the fixture's PLACEHOLDER keys are seeded here, before the
       # root token is revoked. They point at nothing: the fixture overrides both

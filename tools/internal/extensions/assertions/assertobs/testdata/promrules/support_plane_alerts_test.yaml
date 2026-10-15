@@ -187,3 +187,41 @@ tests:
               summary: "Loki loki-ingester has fewer ready replicas than desired"
               runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
               description: "monitoring/loki-ingester has had a replica not-Ready for 15m (1 ready). Ingestion is degraded and the PodDisruptionBudget will block node drains. On an INGESTER the usual cause is an OOMKill during WAL replay, which does not self-heal — `kubectl -n monitoring logs <pod> --previous | tail` and check the memory limit against the WAL-replay floor (`llz ci assert-loki` reports it)."
+
+  # ── LLZAlertNotificationsFailing ──────────────────────────────────────────
+  # A revoked PagerDuty key: Alertmanager's failed counter climbs on the
+  # platform Alertmanager. One failure is enough — the point of this rule over
+  # kube-prometheus-stack's rate-based one.
+  - interval: 1m
+    name: a failing PagerDuty integration on the platform Alertmanager fires
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",integration="pagerduty",reason="clientError",pod="alertmanager-po-alertmanager-0"}'
+        values: "0 0 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLZAlertNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: alertmanager
+              integration: pagerduty
+            exp_annotations:
+              summary: "Alertmanager is failing to deliver pagerduty notifications"
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/alerting.md#when-a-notification-does-not-arrive"
+              description: "The platform Alertmanager failed 1 pagerduty notification attempt(s) in the last 30m — alerts routed there are not reaching anyone. Check the key / webhook in OpenBao (alerts/pagerduty, alerts/webhooks), the endpoint, and egress from the Alertmanager pod; `llz ci assert-alert-routing` reports the counters."
+
+  # A team Alertmanager's failures, and an integration spec.alerting does not
+  # wire, are not this rule's: neither is LLZ's receiver.
+  - interval: 1m
+    name: team Alertmanagers and other integrations do not fire it
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{namespace="team-demo",integration="pagerduty"}'
+        values: "0 1 2 3 4 5 6 7 8 9 10 11"
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",integration="webhook"}'
+        values: "0 1 2 3 4 5 6 7 8 9 10 11"
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring",integration="slack"}'
+        values: "0x11"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLZAlertNotificationsFailing
+        exp_alerts: []

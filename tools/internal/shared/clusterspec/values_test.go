@@ -125,11 +125,39 @@ func TestValidateAlerting(t *testing.T) {
 	}{
 		{"unset is valid", Alerting{}, ""},
 		{"none is valid", Alerting{Receivers: []string{"none"}}, ""},
-		{"slack with channels is valid", Alerting{
+		{"slack with a channel is valid", Alerting{
+			Receivers: []string{"slack"},
+			Slack:     AlertingSlack{Channel: "a", ChannelCrit: "#a"},
+		}, ""},
+		// ONE WEBHOOK, ONE CHANNEL: apl-core sends both receivers through one URL,
+		// and an app webhook ignores the payload's channel.
+		{"a different critical channel rejected", Alerting{
 			Receivers: []string{"slack"},
 			Slack:     AlertingSlack{Channel: "a", ChannelCrit: "b"},
+		}, "ONE webhook URL"},
+		{"slack severities without critical rejected", Alerting{
+			Receivers: []string{"slack"},
+			Slack:     AlertingSlack{Severities: []string{"warning"}},
+		}, "must include critical"},
+		{"slack critical-only is valid", Alerting{
+			Receivers: []string{"slack"},
+			Slack:     AlertingSlack{Severities: []string{"critical"}},
 		}, ""},
-		{"msteams rejected", Alerting{Receivers: []string{"msteams"}}, "not supported"},
+		// No InfoInhibitor on apl-core, so an info route would post every info alert.
+		{"info severity rejected", Alerting{
+			Receivers: []string{"slack"},
+			Slack:     AlertingSlack{Severities: []string{"critical", "info"}},
+		}, "cannot be routed"},
+		{"none severity rejected for pagerduty", Alerting{
+			Receivers: []string{"pagerduty"},
+			PagerDuty: AlertingPagerDuty{Severities: []string{"none"}},
+		}, "cannot be routed"},
+		{"slack severities without the receiver rejected", Alerting{
+			Slack: AlertingSlack{Severities: []string{"critical"}},
+		}, "does not include slack"},
+		{"msteams rejected with apl-core's reason", Alerting{Receivers: []string{"msteams"}}, "port 800"},
+		{"email rejected", Alerting{Receivers: []string{"email"}}, "values schema"},
+		{"an unknown receiver rejected", Alerting{Receivers: []string{"opsgenie"}}, "not supported"},
 		{"none plus slack rejected", Alerting{Receivers: []string{"none", "slack"}}, "cannot be combined"},
 		{"channels without slack receiver rejected", Alerting{
 			Slack: AlertingSlack{Channel: "a"},
@@ -161,7 +189,7 @@ func TestValidateAlerting(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := validateAlerting(tc.a)
+			errs := validateAlerting("alerting", tc.a, tc.a.HasReceiver)
 			if tc.wantErr == "" {
 				if len(errs) != 0 {
 					t.Fatalf("want valid, got %v", errs)

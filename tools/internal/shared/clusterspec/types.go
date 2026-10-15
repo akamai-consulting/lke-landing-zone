@@ -58,11 +58,13 @@ type Spec struct {
 	// overlay (the cert-manager DNS-01 issuer). Optional — unset leaves the
 	// overlay's REPLACE_PER_ENV placeholder for the operator to fill by hand.
 	DNS DNS `json:"dns,omitempty"`
-	// Alerting holds the instance-wide Alertmanager receiver config, rendered
-	// into every env as an AlertmanagerConfig + ExternalSecret (alerting.go).
-	// Optional — unset keeps apl-core's default: Alertmanager runs with a null
-	// route and notifies nobody, and the scheduled CI checks remain the only
-	// alerting that reaches a human.
+	// Alerting holds the instance-wide Alertmanager receiver config, inherited
+	// by every env that deploys observability and overridable per env
+	// (Environment.Alerting). Rendered as an AplAlertSet (slack) and an
+	// AlertmanagerConfig (pagerduty) — see alerting.go. Optional — unset keeps
+	// apl-core's default: Alertmanager runs with a null route and notifies
+	// nobody, and the scheduled CI checks remain the only alerting that reaches
+	// a human.
 	Alerting Alerting `json:"alerting,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
 	// apl-values/<env> dir == infra-<env> GitHub Environment). It is the ASSEMBLED
@@ -138,27 +140,34 @@ type DNS struct {
 	AcmeEmail string `json:"acmeEmail,omitempty"`
 }
 
-// Alerting is the instance-wide alert-notification config. `llz render` turns it
-// into an AlertmanagerConfig CR (plus the ExternalSecret that feeds it) in the
-// observability carved app — see alerting.go for why that reaches apl-core's
-// Alertmanager when apl-core's own `alerts:` values block cannot be reached.
+// Alerting is the alert-notification config: instance-wide in landingzone.yaml's
+// spec.alerting, overridable per deployment in environments/<env>.yaml's
+// spec.alerting (merged field-by-field like spec.defaults — see
+// LandingZone.AlertingFor). Two delivery paths, one per receiver kind, because
+// that is what apl-core supports (alerting.go has the full why):
+//
+//   - slack rides apl-core's OWN receiver. `llz render` writes an AplAlertSet
+//     settings CR into the apl-overlay (env/settings/alerts.yaml, key-level
+//     merged by the reconciler) and an ExternalSecret that materialises
+//     apl-core's `alerts-secrets` in `apl-secrets` from OpenBao — the same
+//     mechanism AplObjectStorage + obj-secrets use.
+//   - pagerduty, which apl-core has no receiver for, rides an AlertmanagerConfig
+//     CR in the observability carved app.
 //
 // Receivers supports "pagerduty", "slack" and "none" (the default). Secret
-// material is deliberately NOT spec material: the PagerDuty routing key
+// material is never spec material: the PagerDuty routing key
 // (secret/alerts/pagerduty, property routing_key) and the Slack webhook URL
 // (secret/alerts/webhooks, property slack_url) are seeded into OpenBao with
-// `llz openbao set` and reach Alertmanager through ESO — no GitHub secret, no
-// values churn. "msteams" is not surfaced: apl-core renders its webhook URLs
-// inline from values (x-secret), which would put secret material in committed
-// values.
+// `llz openbao set` and reach Alertmanager through ESO. "msteams" and "email" are
+// not surfaced — see validateAlerting for why each one is refused.
 type Alerting struct {
 	// Receivers selects notification channels: "pagerduty", "slack", "none".
-	// Unset → [none].
+	// Unset → inherit (per env) or [none] (instance). An env sets [none] to opt
+	// out of an instance-wide receiver.
 	Receivers []string `json:"receivers,omitempty"`
 	// PagerDuty is the non-secret half of the PagerDuty receiver.
 	PagerDuty AlertingPagerDuty `json:"pagerduty,omitempty"`
-	// Slack channel overrides; both fall back to mon-apl / mon-apl-crit when
-	// unset.
+	// Slack is the non-secret half of the Slack receiver.
 	Slack AlertingSlack `json:"slack,omitempty"`
 }
 
@@ -174,9 +183,28 @@ type AlertingPagerDuty struct {
 }
 
 // AlertingSlack is the non-secret half of the Slack receiver config.
+//
+// ONE WEBHOOK, ONE CHANNEL. apl-core reads a single Slack webhook URL
+// (alerts-secrets.slack_url → global slack_api_url_file) for both its receivers,
+// and a Slack-app incoming webhook is bound to the channel it was created for —
+// the `channel` field in the payload is ignored. So "critical to one channel,
+// the rest to another" is not something this receiver can do; Channel names the
+// one channel the webhook posts to, and ChannelCrit survives only so existing
+// specs keep loading (it must be unset or equal Channel). Route urgent alerts
+// somewhere else with pagerduty.
 type AlertingSlack struct {
-	Channel     string `json:"channel,omitempty"`     // non-critical notifications
-	ChannelCrit string `json:"channelCrit,omitempty"` // critical notifications
+	// Channel is the channel the webhook is bound to (default mon-apl). Rendered
+	// as both of apl-core's channel fields; a legacy webhook honours it, an app
+	// webhook ignores it.
+	Channel string `json:"channel,omitempty"`
+	// ChannelCrit is accepted for compatibility and must be unset or equal
+	// Channel — see the type comment.
+	ChannelCrit string `json:"channelCrit,omitempty"`
+	// Severities are the `severity` label values that post. Default
+	// [warning, critical]. MUST include critical: apl-core's own critical route
+	// posts every critical alert to Slack and LLZ cannot turn it off without
+	// turning Slack off.
+	Severities []string `json:"severities,omitempty"`
 }
 
 // Defaults is the shared baseline merged into every environment before the
@@ -250,6 +278,13 @@ type Environment struct {
 	// fixed struct of named bools) keeps adding a component data-only and is the
 	// CRD-friendly `additionalProperties` shape; Validate rejects unknown keys.
 	Components map[string]ComponentToggle `json:"components,omitempty"`
+	// Alerting overrides landingzone.yaml's spec.alerting for this deployment,
+	// field by field (LandingZone.AlertingFor). Unset inherits it whole;
+	// `receivers: [none]` opts this env out (a dev cluster that should not page).
+	// A pointer so "not stated" is distinguishable from "stated empty" — an env
+	// that EXPLICITLY asks for a receiver it cannot carry (no observability) is a
+	// validation error, while one that merely inherits it is skipped.
+	Alerting *Alerting `json:"alerting,omitempty"`
 }
 
 // ComponentToggle is a component's per-env entry in spec.components: whether it's

@@ -169,10 +169,12 @@ func Lanes(region string) []Lane {
 		},
 		{
 			Name: "alert-routing", Gating: true,
-			Steps: []Step{step("assert-observability", "assert-alert-routing")},
-			Why: "Does a firing alert reach the pager spec.alerting names? assert-alert-delivery stops at Alertmanager; this reads the config Alertmanager RUNS and posts " +
-				"silenced probe alerts to see which receiver it picks. Its own lane because it WRITES to Alertmanager's API (a silence, short-lived probes). " +
-				"Without it, an unseeded routing key (CR rejected), a dropped ExternalSecret, or a namespace-scoped route all leave every manifest valid, every App Synced and nobody paged.",
+			// --region: the expectation is this env's EFFECTIVE spec.alerting
+			// (landingzone.yaml merged with environments/<env>.yaml).
+			Steps: []Step{regionStep("assert-observability", "assert-alert-routing")},
+			Why: "Does a firing alert reach the pager/channel spec.alerting names, exactly once? assert-alert-delivery stops at Alertmanager; this reads the config Alertmanager RUNS and posts " +
+				"silenced probe alerts to count the PagerDuty and Slack paths it picks, then checks no team Alertmanager carries LLZ's receivers. Its own lane because it WRITES to Alertmanager's API (a silence, short-lived probes). " +
+				"Without it, an unseeded routing key (CR rejected), an AplAlertSet that never reached apl-core, a namespace-scoped route, or a second Slack path all leave every manifest valid, every App Synced and the wrong number of people notified.",
 		},
 		{
 			Name: "net-enforcement", Gating: true,

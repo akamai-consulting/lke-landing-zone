@@ -192,14 +192,17 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-openbao-extensions | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # spec.alerting: does a firing alert reach the PagerDuty/Slack receiver the
-      # spec names? Reads the config Alertmanager is RUNNING and posts silenced
-      # probe alerts to see which receiver it picks (they never notify). HERE for
-      # the same reason as the two steps above: the assert-suite lane that also
-      # runs it is release-e2e only, so without this an instance's own pager
-      # route — an unseeded or rotated-away key, a rejected AlertmanagerConfig, a
-      # route scoped to one namespace — was verified by nothing. Reports and
-      # passes when the spec declares no receiver.
+      # spec.alerting: does a firing alert reach the PagerDuty/Slack receivers
+      # this env's spec names, exactly once each? Reads the config Alertmanager is
+      # RUNNING, posts silenced probe alerts and counts the paths it picks (they
+      # never notify), and fails if a team Alertmanager carries LLZ's receivers.
+      # HERE for the same reason as the two steps above: the assert-suite lane
+      # that also runs it is release-e2e only, so without this an instance's own
+      # pager route — an unseeded or rotated-away key, a rejected
+      # AlertmanagerConfig, an AplAlertSet that never reached apl-core, a route
+      # scoped to one namespace, a second Slack path — was verified by nothing.
+      # The env is $REGION (job env). Reports and passes when the env declares no
+      # receiver or deploys no observability.
       - name: Assert spec.alerting routes alerts to its receivers
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-alert-routing | tee -a "$GITHUB_STEP_SUMMARY"
@@ -511,10 +514,13 @@ jobs:
       # every rule that reads armed while selecting zero series, which is exactly
       # the signature this step exists to surface. `continue-on-error` keeps a
       # diagnostic from failing the credential job it rides along with.
+      # LLZAlertNotifications… is spec.alerting's delivery signal (Alertmanager
+      # failing to hand a page or post to PagerDuty/Slack) — report-only here for
+      # the same reason, and because a failing pager cannot page about itself.
       - name: Read support-plane alert status
         if: steps.kubeconfig.outputs.available == 'true'
         continue-on-error: true
-        run: llz ci alert-eval --match '^(Loki|Harbor|Grafana|OTel|SupportPlane)' --summary "Support-plane alerts (${REGION})"
+        run: llz ci alert-eval --match '^(Loki|Harbor|Grafana|OTel|SupportPlane|LLZAlertNotifications)' --summary "Support-plane alerts (${REGION})"
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

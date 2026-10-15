@@ -165,8 +165,12 @@ func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	// instead would turn a missing value into a silent skip — the proof would report
 	// "unmeasured" and pass, which is the exact failure mode the proof was added to
 	// remove.
+	//
+	// alert-routing takes it because its expectation is the env's EFFECTIVE
+	// spec.alerting — the instance's merged with environments/<env>.yaml, where an
+	// env may opt out — and on a multi-env instance it refuses to guess.
 	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true,
-		"obj-encryption": true, "loki": true}
+		"obj-encryption": true, "loki": true, "alert-routing": true}
 	for _, l := range lanes {
 		hasRegion := false
 		for _, s := range l.Steps {

@@ -1,4 +1,4 @@
-# `apl-overlay/` — apl-core-native object storage, app toggles + app values
+# `apl-overlay/` — apl-core-native object storage, app toggles, app values + alert receivers
 
 **These files are `llz render` output — do not hand-edit.** They are regenerated
 from the spec (and the render functions in
@@ -32,7 +32,7 @@ the landing zone drives into apl-core's *native* values:
   `resource.customizations.health` overrides (without which a fresh bootstrap can
   wedge before OpenBao), Loki's ingester WAL-replay resources + WAL PVC, Harbor's
   metrics, and Alertmanager's `alertmanagerConfigMatcherStrategy` (without which
-  spec.alerting's AlertmanagerConfig would page only for `monitoring`-namespace
+  spec.alerting's AlertmanagerConfigs would notify only for `monitoring`-namespace
   alerts; its gate is `llz ci assert-alert-routing`).
 
   **A key that names nothing in the chart is silently ignored** — that is the
@@ -60,6 +60,18 @@ the landing zone drives into apl-core's *native* values:
   which is exactly why no e2e lane catches it. A mapped field of that kind sets
   `CreateOnly` and names the brownfield migration that lands it on a cluster the
   object predates.
+
+Per env only (no `_shared` copy), and only when `spec.alerting` is declared for
+that env:
+
+- `<env>/apl-overlay/alerts.yaml` — apl-core's `AplAlertSet` settings CR
+  (`env/settings/alerts.yaml`, apl-core's `alerts:` values). Carries
+  `spec.receivers` (`[slack]` or `[none]` — PagerDuty is an AlertmanagerConfig,
+  not an apl-core receiver) and the one Slack channel. Merged **key-level**: the
+  App Platform Console co-writes this file, so every key LLZ does not own
+  survives. No webhook URL — LLZ writes `apl-secrets/alerts-secrets` from OpenBao
+  (`apps/observability/alerting.yaml`), as it does `obj-secrets`. Its gate is
+  `llz ci assert-alert-routing`.
 
 The in-cluster **apl-overlay reconciler** (`llz reconcile
 --reconcile-apl-overlay`) reads these from the primary repo (`main`), fills the

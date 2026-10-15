@@ -75,6 +75,8 @@ var defaultScrapeRuleGroups = []string{
 	"credential-certs",
 	"credential-tokens",
 	"support-plane-alerts",
+	// LLZAlertNotificationsFailing — the delivery half of spec.alerting.
+	"alert-delivery",
 	"openbao-alerts",
 	"llz-reconciler",
 }

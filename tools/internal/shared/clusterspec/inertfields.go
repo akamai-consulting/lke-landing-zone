@@ -11,8 +11,9 @@ package clusterspec
 //
 // So an operator set `spec.alerting.receivers: [slack]`, seeded the webhook, read
 // the docs describing the flow, and was paged by nothing — for the whole life of
-// the managed platform, until spec.alerting was wired as an AlertmanagerConfig
-// (alerting.go) and its row here was deleted. The gap is not that the capability
+// the managed platform, until spec.alerting was wired — Slack as apl-core's own
+// AplAlertSet, PagerDuty as an AlertmanagerConfig (alerting.go) — and its row
+// here was deleted. The gap is not that the capability
 // is missing — it is that the spec keeps claiming to have it. This list is what
 // turns that silence into a `llz doctor` finding, and it is deliberately small and
 // hand-maintained: every row is a promise the spec is currently breaking.

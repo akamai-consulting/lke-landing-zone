@@ -20,18 +20,18 @@ package assertobs
 // SCOPE, stated honestly. This asserts Prometheus → Alertmanager. It does NOT
 // assert that Alertmanager forwards to a human destination — that is the next
 // hop, and its own gate: `llz ci assert-alert-routing` (alertrouting.go) reads
-// the config Alertmanager runs and probes which receiver spec.alerting's
-// AlertmanagerConfig sends an alert to. Kept separate because the two fail for
+// the config Alertmanager runs and probes which receivers spec.alerting's
+// wiring sends an alert to. Kept separate because the two fail for
 // unrelated reasons, and because this one must pass on a cluster that has
 // deliberately configured no receiver, while that one has nothing to check there.
 //
 // HISTORY WORTH KEEPING. For the whole life of the managed platform this note
 // said "this repo ships no receiver configuration", and that was stronger than it
 // sounded: `spec.alerting` validated and rendered nowhere, because apl-core builds
-// its receivers from a top-level `alerts:` values block LLZ cannot reach. It now
-// renders as an AlertmanagerConfig that the apl-core Alertmanager selects (see
-// clusterspec/alerting.go); docs/upstream-asks.md §4 stays open for a supported
-// upstream path.
+// its receivers from a top-level `alerts:` values block LLZ had no writer for. It
+// now renders as apl-core's own AplAlertSet settings CR (Slack) plus an
+// AlertmanagerConfig (PagerDuty, which apl-core has no receiver for) — see
+// clusterspec/alerting.go and docs/upstream-asks.md §4.
 //
 // Two assertions:
 //

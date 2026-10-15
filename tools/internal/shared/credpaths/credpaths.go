@@ -120,8 +120,8 @@ var CredPaths = []CredPath{
 	// otomi.git and the argocd repo Secrets.
 	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", CredClassStatic, false},
 	{"secret/alerts/webhooks", "alerts-webhooks", CredClassStatic, false},
-	// The PagerDuty Events API v2 routing key spec.alerting's AlertmanagerConfig
-	// pages through. Operator-seeded, and only when receivers includes pagerduty;
+	// The PagerDuty Events API v2 routing key spec.alerting's PagerDuty
+	// AlertmanagerConfig pages through. Operator-seeded, and only when receivers includes pagerduty;
 	// unseeded instances 404 and publish nothing, like the webhook above.
 	{"secret/alerts/pagerduty", "alerts-pagerduty", CredClassStatic, false},
 	// OPT-IN least-privilege firewall token (docs/consume-lke-landing-zone-internal.md).

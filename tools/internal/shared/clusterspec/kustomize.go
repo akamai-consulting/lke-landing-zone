@@ -497,7 +497,7 @@ var carvedLLZImageComponents = map[string]bool{
 
 // localResources are files rendered BESIDE the kustomization in the carved app's
 // source root and listed under resources: — instance-specific manifests a shared,
-// token-free component cannot carry (spec.alerting's AlertmanagerConfig is the
+// token-free component cannot carry (spec.alerting's alerting.yaml is the
 // one today). Variadic so the common case, none, renders byte-identically to
 // before: an instance that sets no such field sees no drift on upgrade.
 func RenderCarvedAppKustomization(c Component, ref, imageTag string, localResources ...string) string {

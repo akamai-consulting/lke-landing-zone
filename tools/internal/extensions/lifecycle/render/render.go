@@ -262,7 +262,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		if tfvarsOnly {
 			continue
 		}
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.Spec.Alerting)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.AlertingFor(name))
 		if err != nil {
 			return nil, fmt.Errorf("render %s manifests: %w", name, err)
 		}
@@ -481,7 +481,6 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// This instance's repo slug (harbor GH_REPO) is the other per-instance value a
 	// remote token-free component can't bake — the env patch sets it locally.
 	ghRepo := repoOwnerName(id.RepoURL)
-	alertingRendered := false
 	for _, c := range clusterspec.Components {
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
 			continue
@@ -495,13 +494,16 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
 		// spec.alerting rides the observability carved app: it is the app that
 		// owns apl-core's monitoring glue, and a bad AlertmanagerConfig then
-		// degrades only llz-observability, never platform-bootstrap.
+		// degrades only llz-observability, never platform-bootstrap. An env
+		// WITHOUT observability never reaches here, so it is skipped rather than
+		// failed — an instance-wide spec.alerting must not make a cluster that runs
+		// no Alertmanager unrenderable (an env that asks for a receiver itself
+		// fails validation instead; see clusterspec.validateEnvAlerting).
 		var local []string
 		if c.Name == "observability" {
 			if body := clusterspec.RenderAlertingManifest(alerting); body != "" {
 				targets[filepath.Join(appsDir, clusterspec.AlertingFile)] = body
 				local = append(local, clusterspec.AlertingFile)
-				alertingRendered = true
 			}
 		}
 		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag, local...)
@@ -520,16 +522,6 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 			}
 			targets[path] = content
 		}
-	}
-	// A paging receiver the spec asks for and this env cannot carry is an error,
-	// not a skip. Skipping is the exact failure spec.alerting spent the managed
-	// platform's whole life in: configured, validated, rendered nowhere, paging
-	// nobody, and nothing saying so.
-	if alerting.Active() && !alertingRendered {
-		return nil, fmt.Errorf("env %s: spec.alerting.receivers %v needs the observability component, which this env "+
-			"does not deploy (disabled, or `loki` not declared in cluster.bootstrap.managedApps) — its AlertmanagerConfig "+
-			"rides that component's Argo CD app. Enable observability for %s, or remove spec.alerting",
-			env, alerting.Receivers, env)
 	}
 	// apl-core values.yaml is NOT rendered: LLZ runs exclusively on Linode's MANAGED
 	// App Platform, where apl-core owns its own values (apl-api + in-cluster gitea).
@@ -574,6 +566,19 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// the note that stops the next reader assuming it is handled.
 	if otomi := clusterspec.RenderOtomiOverlayEnv(e.Cluster.Bootstrap); otomi != "" {
 		targets[filepath.Join(overlay, clusterspec.OverlayOtomiFile)] = otomi
+	}
+	// spec.alerting's Slack half — apl-core's own AplAlertSet, key-level merged by
+	// the reconciler. Same gate as alerting.yaml above (the same predicate the
+	// carved-app loop applies), so the two halves can never disagree about whether
+	// this env alerts: an AplAlertSet asking apl-core for Slack with no
+	// alerts-secrets ExternalSecret beside it would leave apl-core's
+	// alertmanager-credentials unresolvable. The same "render never prunes" caveat
+	// as otomi.yaml applies when spec.alerting is removed entirely — see
+	// docs/alerting.md; an env that opts OUT keeps the file, asserting [none].
+	if clusterspec.AlertingApplies(e) {
+		if as := clusterspec.RenderAlertSetOverlay(alerting); as != "" {
+			targets[filepath.Join(overlay, clusterspec.OverlayAlertsFile)] = as
+		}
 	}
 
 	// Team declarations (spec.teams) — restore managed team provisioning that
@@ -650,7 +655,7 @@ func CheckManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.Spec.Alerting)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams, lz.AlertingFor(name))
 		if err != nil {
 			return err
 		}
