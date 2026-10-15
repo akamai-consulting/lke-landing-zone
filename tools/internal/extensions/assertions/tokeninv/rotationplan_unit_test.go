@@ -5,6 +5,7 @@ package tokeninv
 // subject.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -33,5 +34,26 @@ func TestRouteOutputsIsTheRoutedPlan(t *testing.T) {
 	}
 	if _, err := RouteOutputs(RotationInputs{Event: "workflow_dispatch", Scope: "linode-pat", Confirm: "wrong", Reason: "r"}); err == nil {
 		t.Fatal("a refused route must surface its error, not an empty plan")
+	}
+}
+
+// InputsFromLookup is the env→struct reader the release-e2e dry-run fence runs
+// the delivered Setup env through. Every field must come from SOME variable — a
+// field left unread is one the fence silently feeds as "".
+func TestInputsFromLookupReadsEveryField(t *testing.T) {
+	seen := map[string]bool{}
+	in := InputsFromLookup(func(k string) string { seen[k] = true; return "v-" + k })
+	v := reflect.ValueOf(in)
+	for i := 0; i < v.NumField(); i++ {
+		if got := v.Field(i).String(); !strings.HasPrefix(got, "v-") {
+			t.Errorf("RotationInputs.%s is not read from the environment (got %q)", v.Type().Field(i).Name, got)
+		}
+	}
+	if len(seen) != v.NumField() {
+		t.Errorf("%d fields but %d distinct env vars read: %v", v.NumField(), len(seen), seen)
+	}
+	t.Setenv("PAT_APPLY", "true")
+	if InputsFromEnv().PATApply != "true" {
+		t.Error("InputsFromEnv must be InputsFromLookup over the process environment")
 	}
 }

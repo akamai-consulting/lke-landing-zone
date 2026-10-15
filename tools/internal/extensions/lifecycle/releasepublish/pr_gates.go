@@ -130,10 +130,7 @@ var (
 	// a future caller). The flag now means what it says.
 	gatesGH = func(token, host string, args ...string) ([]byte, error) {
 		cmd := exec.Command("gh", args...)
-		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
-		if host != "" {
-			cmd.Env = append(cmd.Env, "GH_HOST="+host)
-		}
+		cmd.Env = ghEnv(os.Environ(), token, host)
 		out, err := cmd.Output()
 		return out, ghError(args, err)
 	}
@@ -166,6 +163,27 @@ var (
 // ghError names the failed `gh` call and folds its STDERR into the message.
 // Pure, so the folding is tested without a forge — see TestGHErrorCarriesStderr.
 // nil in, nil out: a successful call must not be turned into an error.
+// ghEnv is the environment a `gh` call against host runs with.
+//
+// THE TOKEN VARIABLE DEPENDS ON THE HOST. gh reads GH_TOKEN for github.com (and
+// *.ghe.com) only; for any other host — a GHES appliance, which the release lane
+// targets — it reads GH_ENTERPRISE_TOKEN, and otherwise falls back to whatever
+// that host's stored login is, or nothing. Setting GH_TOKEN alone therefore made
+// --host point gh at the appliance with no credential, on exactly the forge the
+// flag exists for. Both are set for a non-github.com host; duplicates in env
+// resolve to the last value, so these override anything ambient.
+func ghEnv(base []string, token, host string) []string {
+	env := append(append([]string{}, base...), "GH_TOKEN="+token)
+	if host == "" {
+		return env
+	}
+	env = append(env, "GH_HOST="+host)
+	if h := strings.ToLower(host); h != "github.com" && !strings.HasSuffix(h, ".ghe.com") {
+		env = append(env, "GH_ENTERPRISE_TOKEN="+token)
+	}
+	return env
+}
+
 func ghError(args []string, err error) error {
 	if err == nil {
 		return nil

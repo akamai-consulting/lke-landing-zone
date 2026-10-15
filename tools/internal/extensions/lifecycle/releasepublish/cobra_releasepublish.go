@@ -98,9 +98,16 @@ func AssertInstanceWorkflowCmd() *cobra.Command {
 			"profile names appeared and succeeded — once per --deployment for matrix jobs —\n" +
 			"and every check step the profile names actually RAN. A green run whose checks\n" +
 			"were skipped (cluster-access reporting no cluster) examined nothing and fails.\n" +
-			"Rotation profiles are dry runs: every apply input is false, and a mutating job\n" +
-			"that executes anyway fails the verb. Profiles: " + strings.Join(profileNames(), ", ") + ".\n" +
-			"Reads GH_TOKEN from the environment (actions:read/write on the instance repo).",
+			"Where a green step can still have done nothing, the job's LOG is read for the\n" +
+			"evidence: template-drift must have compared against a template, and each\n" +
+			"rotation job must have logged its credential record (dry_run=true with its\n" +
+			"probe, or the broad-PAT stand-down the e2e fixture expects). Rotation profiles\n" +
+			"are unarmed: every apply input is false, and a mutating job that executes on\n" +
+			"any deployment fails the verb. Profiles: " + strings.Join(profileNames(), ", ") + ".\n" +
+			"--timeout bounds the WHOLE verb, dispatch included; on expiry, or on SIGINT/\n" +
+			"SIGTERM, the dispatched run is cancelled. Reads GH_TOKEN from the environment\n" +
+			"(actions:read/write on the instance repo); GH_ENTERPRISE_TOKEN is set from it\n" +
+			"for a non-github.com --host.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
@@ -122,7 +129,7 @@ func AssertInstanceWorkflowCmd() *cobra.Command {
 	c.Flags().StringVar(&o.Profile, "profile", "", "which delivered workflow to dispatch and judge ("+strings.Join(profileNames(), " | ")+")")
 	c.Flags().StringSliceVar(&o.Deployments, "deployment", nil, "a deployment that HAS a cluster; its matrix legs must run every check (repeatable, required)")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between run polls")
-	c.Flags().IntVar(&timeout, "timeout", 0, "max seconds to wait for the run to complete (0 = the profile's own budget)")
+	c.Flags().IntVar(&timeout, "timeout", 0, "max seconds for the whole verb, dispatch included (0 = the profile's own budget)")
 	c.Flags().Int64Var(&o.RunID, "run", 0, "judge this EXISTING run id instead of dispatching a new one (re-reading a red lane's run)")
 	return c
 }

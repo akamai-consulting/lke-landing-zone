@@ -135,6 +135,8 @@ type ObjKeyAPI interface {
 	CreateObjectStorageKey(ctx context.Context, label, cluster, bucket, permissions string) (map[string]any, error)
 	ListObjectStorageKeys(ctx context.Context) ([]map[string]any, error)
 	DeleteObjectStorageKey(ctx context.Context, id uint64) error
+	// ListObjectStorageBuckets is the dry run's read-only probe (objkey.go).
+	ListObjectStorageBuckets(ctx context.Context) ([]map[string]any, error)
 }
 
 // maskGHA asks GitHub Actions to redact a value from the log. Pure, localised —

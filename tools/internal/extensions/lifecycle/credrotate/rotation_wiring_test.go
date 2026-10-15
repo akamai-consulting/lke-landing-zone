@@ -139,6 +139,9 @@ func (r *recordedObjKey) ListObjectStorageKeys(context.Context) ([]map[string]an
 	return nil, nil
 }
 func (r *recordedObjKey) DeleteObjectStorageKey(context.Context, uint64) error { return nil }
+func (r *recordedObjKey) ListObjectStorageBuckets(context.Context) ([]map[string]any, error) {
+	return []map[string]any{{"label": "acme-tfstate", "region": "us-sea"}}, nil
+}
 
 // inInstanceRepo runs fn with the process rooted in a throwaway instance repo
 // carrying a spec, which is where the derivation reads its prefix from.

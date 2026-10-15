@@ -31,8 +31,18 @@ func RunPATCreate(ctx context.Context, client PATAPI, apply bool, label, scopes 
 	slog.Info("creating PAT", "label", label, "scopes", scopes, "validity_days", validityDays, "expiry", expiryTS)
 
 	if !apply {
+		// A DRY RUN STILL ASKS THE API ONE READ-ONLY QUESTION. It used to return
+		// here having called nothing, so a dry run with a revoked, under-scoped or
+		// empty token reported the same green as one with a working token — and a
+		// dry run is the only rehearsal an operator gets before arming this. GET
+		// /v4/profile/tokens is the listing the drain runs, under the same token,
+		// so it fails exactly when the armed path's profile calls would.
+		probe, err := probePATAccess(ctx, client, label)
+		if err != nil {
+			return err
+		}
 		slog.Warn("DRY-RUN: would POST /v4/profile/tokens")
-		return cli.PrintRecord(map[string]any{
+		return cli.PrintRecordAndLog(map[string]any{
 			"event":          "linode-pat-rotator.create",
 			"timestamp_unix": time.Now().Unix(),
 			"dry_run":        true,
@@ -40,6 +50,7 @@ func RunPATCreate(ctx context.Context, client PATAPI, apply bool, label, scopes 
 			"scopes":         scopes,
 			"validity_days":  validityDays,
 			"expiry_planned": expiryTS,
+			"probe":          probe,
 		})
 	}
 
@@ -71,7 +82,7 @@ func RunPATCreate(ctx context.Context, client PATAPI, apply bool, label, scopes 
 	}
 
 	slog.Info("created new PAT", "new_pat_id", newID)
-	return cli.PrintRecord(map[string]any{
+	return cli.PrintRecordAndLog(map[string]any{
 		"event":          "linode-pat-rotator.create",
 		"timestamp_unix": time.Now().Unix(),
 		"dry_run":        false,
@@ -123,7 +134,7 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 
 	if len(candidates) == 0 {
 		slog.Warn("no PATs match label — nothing to revoke", "label", label)
-		return cli.PrintRecord(map[string]any{
+		return cli.PrintRecordAndLog(map[string]any{
 			"event":                "linode-pat-rotator.revoke-old",
 			"timestamp_unix":       now,
 			"dry_run":              !apply,
@@ -159,7 +170,7 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		revoked = append(revoked, d.ID)
 	}
 
-	return cli.PrintRecord(map[string]any{
+	return cli.PrintRecordAndLog(map[string]any{
 		"event":                "linode-pat-rotator.revoke-old",
 		"timestamp_unix":       now,
 		"dry_run":              !apply,
@@ -169,4 +180,22 @@ func RunPATRevokeOld(ctx context.Context, client PATAPI, apply bool, label strin
 		"revoked_ids":          revoked,
 		"skipped_in_grace_ids": skipped,
 	})
+}
+
+// probePATAccess is the dry run's authenticated read: it lists the profile's
+// PATs with the token the armed create would use. The record carries how many
+// already sit under the label, which is what a reader of the dry run wants to
+// know next (is the reaper keeping up?).
+func probePATAccess(ctx context.Context, client PATAPI, label string) (map[string]any, error) {
+	tokens, err := client.ListProfileTokens(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dry-run probe: GET /v4/profile/tokens failed with this token, so an armed create would fail too: %w", err)
+	}
+	same := 0
+	for _, t := range tokens {
+		if s, _ := t["label"].(string); s == label {
+			same++
+		}
+	}
+	return map[string]any{"call": "GET /v4/profile/tokens", "ok": true, "same_label": same}, nil
 }

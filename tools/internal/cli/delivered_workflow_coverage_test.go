@@ -278,12 +278,15 @@ var exercisedEntryPoints = map[string]string{
 		"cluster (`llz ci assert-instance-workflow --profile scheduled-checks`) and requires every named check in " +
 		"every job to have RUN and passed for the e2e deployment — a green run whose checks were skipped by " +
 		"cluster-access's allow-missing fails it. Was NOT DRIVEN until #421: the caller stub had never executed.",
-	"secret-rotation.yml": "DRIVEN as a DRY RUN: release-e2e's day2-secret-rotation job dispatches the linode-pat, " +
+	"secret-rotation.yml": "DRIVEN UNARMED: release-e2e's day2-secret-rotation job dispatches the linode-pat, " +
 		"linode-pat-revoke, tf-state-key and tf-state-key-revoke scopes with every *-apply input false (the " +
-		"coupling test routes those inputs through the real router and fails if anything would be armed). That " +
-		"proves the stub starts — THIS IS THE ONE THAT WAS DEAD FOR MONTHS at startup_failure — plus input " +
-		"forwarding, scope routing and the linode-credentials composite. NOT driven: the lke-admin, propagate, " +
-		"state-passphrase and db-admin jobs, which have no dry-run mode; a run that executes one fails the lane.",
+		"coupling test evaluates the delivered Setup env through the real router and fails if anything would be " +
+		"armed). That proves the stub starts — THIS IS THE ONE THAT WAS DEAD FOR MONTHS at startup_failure — plus " +
+		"input forwarding and scope routing, and each job is judged on the credential record it logged: the two " +
+		"TF-state scopes are real dry runs (create probes the state bucket), the two PAT scopes STAND DOWN because " +
+		"the e2e fixture gives the broad PAT to the in-cluster broadPatRotator. NOT driven: a mint, a secret " +
+		"write, a revoke, and the lke-admin, propagate, state-passphrase and db-admin jobs, which have no " +
+		"dry-run mode; a run that executes one fails the lane.",
 
 	// ── Knowingly unexercised, with the risk each one carries ───────────────
 	"cluster-health.yml": "NOT DRIVEN as a stub: the former e2e `validate` job that dispatched it was folded into " +

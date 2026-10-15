@@ -26,8 +26,9 @@ name: Release E2E lane — provision, validate, destroy a real cluster (one forg
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
 #      so a green provision means "converged AND Loki is S3-backed".
 #   2b. day-2     — dispatch the delivered cron workflows against the converged
-#      cluster: scheduled-checks.yml, and secret-rotation.yml as a dry run
-#      (`llz ci assert-instance-workflow`), requiring every named check to RUN.
+#      cluster: scheduled-checks.yml, and secret-rotation.yml unarmed
+#      (`llz ci assert-instance-workflow`), requiring every named check to RUN
+#      and, where a green step can have done nothing, the evidence in its log.
 #   3. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
 #      runs once provisioning started, so a paid cluster is never leaked.
 #   4. gate       — pass only if provision + teardown all succeeded.
@@ -362,11 +363,24 @@ jobs:
   # holding the control-plane ACL. They do not gate teardown: it still runs
   # whatever they conclude.
   #
+  # THE WAIT THAT ADDS TO TEARDOWN IS BOUNDED, in three nested layers, each inside
+  # the next: the verb's own --timeout covers dispatch, wait and verdict, and on
+  # expiry it CANCELS the run it dispatched; the step's timeout-minutes sits just
+  # outside that; the job's sits outside the sum of its steps. And if the runner
+  # stops a step anyway, the verb cancels its run on the way out (SIGINT/SIGTERM),
+  # so no dispatched run outlives its job into the teardown.
+  #
   # THE VERDICT IS PER CHECK, NOT PER RUN. Every cluster-touching job takes its
   # kubeconfig with `allow-missing`, so a run whose cluster access silently failed
   # is GREEN with every check skipped. `llz ci assert-instance-workflow` requires
   # each named check to have RUN, for each deployment named here, and the expected
-  # set is in the verb's profile table — never read back from the run.
+  # set is in the verb's profile table — never read back from the run. Where a
+  # green step can still have done nothing (template-drift comparing the instance
+  # with itself; a credential verb that called nothing), it also reads the job's
+  # LOG for the evidence.
+  #
+  # GH_TOKEN IS STEP-SCOPED, here and below: only the dispatching step needs the
+  # instance-repo token, not checkout or the llz build.
   #
   # Skipped on dry_run (no cluster) and when provision did not succeed (nothing to
   # check against, and provision's own red already says why).
@@ -375,8 +389,8 @@ jobs:
     needs: provision
     if: ${{ !inputs.dry_run && needs.provision.result == 'success' }}
     runs-on: ubuntu-latest
-    # The verb's own budget for this profile is 45 minutes; the rest is checkout,
-    # the llz build and dispatch latency.
+    # 45 for the verb (its --timeout, dispatch included), 50 for the step, and
+    # the rest is checkout + the llz build.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -384,20 +398,30 @@ jobs:
         with:
           install-path: ${{ github.workspace }}/bin/llz
       - name: Dispatch scheduled-checks.yml and require every check to have run and passed
+        timeout-minutes: 50
         env:
           GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
-        run: bin/llz ci assert-instance-workflow --profile scheduled-checks --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+        run: bin/llz ci assert-instance-workflow --profile scheduled-checks --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}" --timeout 2700
 
-  # secret-rotation.yml as a DRY RUN, one dispatch per credential lifecycle. A
-  # real rotation here would mint and revoke ACCOUNT-scoped Linode PATs and
+  # secret-rotation.yml, one dispatch per credential lifecycle, none of them armed.
+  # A real rotation here would mint and revoke ACCOUNT-scoped Linode PATs and
   # TF-state OBJ keys on an account shared with other lanes, so every *-apply
-  # input is an explicit false; the verb's coupling test feeds those inputs through
-  # the real rotation router and fails if anything would be armed, and at runtime a
-  # mutating job (lke-admin, in-cluster PAT propagate, state passphrase, db-admin)
-  # that executes anyway fails the step. What a dry run still proves: the caller
-  # stub starts (the startup_failure class), the permissions contract, input
-  # forwarding, scope routing, the discover matrix, the linode-credentials
-  # composite, and that `llz credentials` authenticates and reads the account.
+  # input is an explicit false; the verb's coupling test evaluates the delivered
+  # Setup env for those inputs through the real router and fails if anything would
+  # be armed, and at runtime a mutating job (lke-admin, in-cluster PAT propagate,
+  # state passphrase, db-admin, or any credential job but the profile's own) that
+  # executes on ANY deployment fails the step.
+  #
+  # A GREEN JOB IS NOT THE EVIDENCE, the credential verb's record is: the verb
+  # reads it back out of the job log.
+  #   - tf-state-key / tf-state-key-revoke are real DRY RUNS: the record must say
+  #     dry_run=true, and create must carry a successful read-only probe (the
+  #     state bucket, looked up in the region a minted key would be scoped to).
+  #   - linode-pat / linode-pat-revoke are NOT dry runs on this fixture.
+  #     e2e-instantiate enables the in-cluster broadPatRotator, which owns the
+  #     broad PAT, so both CI verbs STAND DOWN before any API call; the record must
+  #     say exactly that. The broad-PAT rotation that happens in e2e is the
+  #     in-cluster one, forced and asserted by converge's `broad-pat` lane.
   #
   # lke-admin is deliberately NOT exercised: it has no dry-run mode, and a
   # half-finished kubeconfig rotation is the one failure that could strand the
@@ -408,32 +432,42 @@ jobs:
   # same workflow would make that ambiguous. `!cancelled()` so one red scope does
   # not hide the verdict on the other three.
   day2-secret-rotation:
-    name: Day-2 — secret-rotation.yml dry runs start, route and authenticate
+    name: Day-2 — secret-rotation.yml dry runs and stand-downs start, route and report
     needs: provision
     if: ${{ !inputs.dry_run && needs.provision.result == 'success' }}
     runs-on: ubuntu-latest
-    # Four dispatches at up to 20 minutes each is the theoretical ceiling; each
-    # measured dry-run job is a few minutes. Bounded well short of 4x20 because a
-    # rotation dispatch that needs anywhere near its budget is itself the finding.
+    # Four steps at 12 minutes (each verb's --timeout 660 is 11, dispatch
+    # included) is 48, leaving 12 for checkout + the llz build. The budgets were
+    # 4x20 inside a 60-minute job, which only fit by hoping.
     timeout-minutes: 60
-    env:
-      GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-llz
         with:
           install-path: ${{ github.workspace }}/bin/llz
-      - name: Linode PAT create (dry run)
-        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
-      - name: Linode PAT revoke-old (dry run)
+      - name: Linode PAT create (stands down — the in-cluster broadPatRotator owns the broad PAT)
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}" --timeout 660
+      - name: Linode PAT revoke-old (stands down — the in-cluster broadPatRotator owns the broad PAT)
         if: ${{ !cancelled() }}
-        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
-      - name: TF-state OBJ key create (dry run)
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-linode-pat-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}" --timeout 660
+      - name: TF-state OBJ key create (dry run + bucket probe)
         if: ${{ !cancelled() }}
-        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}" --timeout 660
       - name: TF-state OBJ key revoke-old (dry run)
         if: ${{ !cancelled() }}
-        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}"
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci assert-instance-workflow --profile rotation-tf-state-key-revoke --instance "${INSTANCE_REPO}" --host "${GH_HOST}" --deployment "${E2E_ENV}" --timeout 660
 
   # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
   teardown:
@@ -441,7 +475,8 @@ jobs:
     needs: [instantiate, provision, day2-scheduled-checks, day2-secret-rotation]
     # Run whenever provisioning actually started; skip only for a dry run (plan
     # only — nothing was created). The day-2 jobs are in needs: only so this
-    # WAITS for them — always() means their result never stops it.
+    # WAITS for them — always() means their result never stops it, and their job
+    # timeouts (60 minutes, run in parallel) bound how long it waits.
     if: ${{ always() && needs.provision.result != 'skipped' && (!inputs.dry_run) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120

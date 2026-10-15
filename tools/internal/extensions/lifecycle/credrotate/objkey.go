@@ -27,14 +27,26 @@ import (
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 )
 
 func RunObjKeyCreate(ctx context.Context, client ObjKeyAPI, apply bool, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName string, ghaDeployments []string) error {
 	slog.Info("creating OBJ key", "label", label, "cluster", cluster, "bucket", bucket, "permissions", permissions)
 
 	if !apply {
+		// A DRY RUN STILL ASKS THE API ONE READ-ONLY QUESTION — and the one worth
+		// asking. It used to return here having called nothing, so it reported
+		// green with a token that could not reach Object Storage, and green for a
+		// bucket the key would be scoped to in the WRONG region: the class
+		// rotation_identity.go documents, where the armed path mints a key that
+		// cannot read the state it exists to unlock. The probe looks the bucket up
+		// in the region the create would put in bucket_access.
+		probe, err := probeStateBucket(ctx, client, cluster, bucket)
+		if err != nil {
+			return err
+		}
 		slog.Warn("DRY-RUN: would POST /v4/object-storage/keys")
-		return cli.PrintRecord(map[string]any{
+		return cli.PrintRecordAndLog(map[string]any{
 			"event":              "linode-obj-key-rotator.create",
 			"timestamp_unix":     time.Now().Unix(),
 			"dry_run":            true,
@@ -42,6 +54,7 @@ func RunObjKeyCreate(ctx context.Context, client ObjKeyAPI, apply bool, label, c
 			"bucket_cluster":     cluster,
 			"bucket_name":        bucket,
 			"bucket_permissions": permissions,
+			"probe":              probe,
 		})
 	}
 
@@ -85,7 +98,7 @@ func RunObjKeyCreate(ctx context.Context, client ObjKeyAPI, apply bool, label, c
 	}
 
 	slog.Info("created new OBJ key", "new_obj_key_id", newID)
-	return cli.PrintRecord(map[string]any{
+	return cli.PrintRecordAndLog(map[string]any{
 		"event":              "linode-obj-key-rotator.create",
 		"timestamp_unix":     time.Now().Unix(),
 		"dry_run":            false,
@@ -137,7 +150,7 @@ func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label
 	now := time.Now().Unix()
 	if len(ids) == 0 {
 		slog.Warn("no OBJ keys match label — nothing to revoke", "label", label)
-		return cli.PrintRecord(map[string]any{
+		return cli.PrintRecordAndLog(map[string]any{
 			"event":          "linode-obj-key-rotator.revoke-old",
 			"timestamp_unix": now,
 			"dry_run":        !apply,
@@ -166,7 +179,7 @@ func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label
 		revoked = append(revoked, id)
 	}
 
-	return cli.PrintRecord(map[string]any{
+	return cli.PrintRecordAndLog(map[string]any{
 		"event":          "linode-obj-key-rotator.revoke-old",
 		"timestamp_unix": now,
 		"dry_run":        !apply,
@@ -175,4 +188,37 @@ func RunObjKeyRevokeOld(ctx context.Context, client ObjKeyAPI, apply bool, label
 		"kept_ids":       keptIDs,
 		"revoked_ids":    revoked,
 	})
+}
+
+// probeStateBucket is the OBJ-key dry run's authenticated read: the bucket the
+// key would be scoped to must be visible to this token in the region the create
+// sends (linode.ObjRegion — the same derivation CreateObjectStorageKeyBuckets
+// uses, so the probe cannot ask a different question from the one the mint asks).
+func probeStateBucket(ctx context.Context, client ObjKeyAPI, cluster, bucket string) (map[string]any, error) {
+	if bucket == "" {
+		return nil, fmt.Errorf("dry-run probe: no bucket name (--bucket-name / OBJ_BUCKET_NAME) — an armed create would send an empty bucket_access entry")
+	}
+	region := linode.ObjRegion(cluster)
+	buckets, err := client.ListObjectStorageBuckets(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dry-run probe: GET /v4/object-storage/buckets failed with this token, so an armed create would fail too: %w", err)
+	}
+	var elsewhere []string
+	for _, b := range buckets {
+		if cli.AsString(b["label"]) != bucket {
+			continue
+		}
+		r := cli.AsString(b["region"])
+		if r == "" {
+			r = linode.ObjRegion(cli.AsString(b["cluster"]))
+		}
+		if r == region {
+			return map[string]any{"call": "GET /v4/object-storage/buckets", "ok": true, "bucket": bucket, "region": region}, nil
+		}
+		elsewhere = append(elsewhere, r)
+	}
+	if len(elsewhere) > 0 {
+		return nil, fmt.Errorf("dry-run probe: bucket %q exists in region(s) %v, not %q (from cluster %q) — an armed create would mint a key that cannot read it", bucket, elsewhere, region, cluster)
+	}
+	return nil, fmt.Errorf("dry-run probe: this token sees no bucket %q on the account (looked in region %q, from cluster %q) — an armed create would mint a key for a bucket that is not there", bucket, region, cluster)
 }

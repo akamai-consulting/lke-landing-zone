@@ -278,6 +278,13 @@ destroy failures we keep chasing:
 The rotator plumbs this string straight to `/v4/profile/tokens` with no
 allowlist, so anything listed there is granted verbatim.
 
+Unarmed (`pat-apply: false`), the verb still makes one read-only call,
+`GET /v4/profile/tokens`, with the token an armed run would use. It **fails** if
+the API refuses that token. It used to return having called nothing, so a dry
+run with a revoked token passed. When `spec.components.broadPatRotator` is
+enabled, this job stands down before any call. Its record says
+`skipped: broad-pat-owned-in-cluster`.
+
 ## Job: `propagate-linode-pat`
 
 Replaces the old broad-PAT propagation. Each region's job mints its **own**
@@ -390,6 +397,13 @@ rotated `TF_STATE_*` pair into *every* deployment's environment via
 `gha-secret-deployments` writes the rotated pair into `TF_STATE_*` for every
 deployment's environment.
 
+Unarmed (`tf-state-apply: false`), the verb still makes one read-only call: it
+looks the state bucket up in the region a minted key would be scoped to, and
+**fails** if the token cannot list buckets, or if the bucket is not in that
+region. That is the wrong-cluster class: an armed run would mint a key that
+cannot read the state. The dry run used to call nothing, so it passed in both
+cases.
+
 ## Job: `revoke-tf-state-key`
 
 Keeps the 2 most recent same-labeled OBJ keys by `id` (Linode IDs are
@@ -416,25 +430,53 @@ Until #421 nothing in the template repo ran this workflow — the static
 `reusable-workflow-caller-permissions` gate was the only thing standing between
 the caller stub and another months-long `startup_failure`. The release lane's
 `day2-secret-rotation` job now dispatches `secret-rotation.yml` on the e2e
-instance once per credential lifecycle, as a **dry run**:
+instance once per credential lifecycle, **unarmed**:
 
 ```
-llz ci assert-instance-workflow --profile rotation-linode-pat --instance <repo> --deployment e2e
+llz ci assert-instance-workflow --profile rotation-tf-state-key --instance <repo> --deployment e2e --timeout 660
 ```
 
-(and `rotation-linode-pat-revoke`, `rotation-tf-state-key`,
-`rotation-tf-state-key-revoke`). Every `*-apply` input is passed as an explicit
-`false`. The verb's coupling test feeds those inputs through the real
-`llz ci rotation-plan` router and fails if any mutation would be armed, and at
-runtime a run that executes `rotate`, `propagate-linode-pat`,
-`rotate-state-passphrase` or `rotate-db-admin` fails the lane.
+(and `rotation-tf-state-key-revoke`, `rotation-linode-pat`,
+`rotation-linode-pat-revoke`). Every `*-apply` input is passed as an explicit
+`false`. The verb's coupling test evaluates the delivered `Setup` step's `env:`
+for those inputs, feeds it through the real env reader and `llz ci
+rotation-plan` router, and fails if any mutation would be armed. At runtime, a
+run that executes `rotate`, `propagate-linode-pat`, `rotate-state-passphrase`,
+`rotate-db-admin`, or any credential job other than the profile's own, fails the
+lane, on any deployment the matrix produced.
 
-What a dry run proves: the stub starts (the `startup_failure` class), its
-permissions and input forwarding match the body, the router accepts the
-confirmation phrases, `discover` emits the deployment, and the
-`linode-credentials` composite runs `llz credentials` against the account with
-the instance's real token. What it does not prove: a mint, a GitHub secret
-write, a revoke, or the `lke-admin` rotation — which has no dry-run mode, and
-whose half-finished failure is the one that could strand the lane's teardown.
-If you rename a job or step the profile names, `TestInstanceWorkflowProfilesMatchTheDeliveredWorkflows`
-fails at PR time.
+**A green job is not the verdict; the credential record is.** Each
+`llz credentials` verb also writes its JSON record to the job log, prefixed
+`llz-record:` and with secrets redacted, and the verb reads it back:
+
+| Scope | What the e2e run proves | What its record must say |
+|---|---|---|
+| `tf-state-key` | a real dry run. It probes `GET /v4/object-storage/buckets` for the state bucket, in the region a minted key would be scoped to | `dry_run: true`, `probe.ok: true` |
+| `tf-state-key-revoke` | a real dry run. It lists the account's keys and reports what it would drain | `dry_run: true`, `kept_ids`, `revoked_ids` |
+| `linode-pat` | **a stand-down, not a dry run** (see below) | `skipped: broad-pat-owned-in-cluster` |
+| `linode-pat-revoke` | **a stand-down, not a dry run** | `skipped: broad-pat-owned-in-cluster` |
+
+The e2e fixture enables `spec.components.broadPatRotator`, which owns the broad
+PAT (ADR 0001). So on that fixture both CI PAT verbs stand down before any API
+call. The PAT profiles prove the stub starts, the scope routes, and the
+stand-down is what happens, which was once a hard failure of the monthly run.
+The broad-PAT rotation that does happen in e2e is the in-cluster one: converge's
+`broad-pat` lane (`assert-broad-pat-rotation`) forces a cycle and requires
+`action=rotated`. `TestBroadPATProfilesMatchTheFixture` keeps the fixture, the
+profiles and that lane in agreement.
+
+What this does not prove: a mint, a GitHub secret write, a revoke, the CI PAT
+dry run (unit-tested only, because the fixture stands it down), or the
+`lke-admin` rotation. `lke-admin` has no dry-run mode, and a half-finished
+`lke-admin` rotation is the one failure that could strand the lane's teardown.
+If you rename a job or step the profile names,
+`TestInstanceWorkflowProfilesMatchTheDeliveredWorkflows` fails at PR time. If a
+credential verb stops logging its record, drops its probe or stops standing
+down, `TestCredentialRecordsTheVerbsEmitPassTheirProfile` fails, because it runs
+the real verbs into the real check.
+
+A rotation job that comes back `cancelled` with nobody cancelling it is
+usually its concurrency group. The groups are `cancel-in-progress: false`, so
+GitHub cancels a **pending** job when a newer run queues in the same group. The
+fixture's own scheduled `secret-rotation.yml` (03:30 UTC daily, 04:00 UTC on the
+1st) contends for the same groups. The verb names this cause when it sees it.
