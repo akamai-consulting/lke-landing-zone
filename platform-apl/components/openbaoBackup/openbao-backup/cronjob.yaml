@@ -1,0 +1,115 @@
+# OpenBao backup CronJob — `llz ci openbao-backup`: a Raft snapshot of the store,
+# verified, uploaded to this deployment's openbao-backup bucket, read back, and
+# pruned to the newest KEEP. See docs/runbooks/openbao-backup-restore.md.
+#
+# It authenticates exactly like the broad-PAT rotator: an llz-client-ca client
+# certificate at the transport (the listener requires one), then the pod's
+# ServiceAccount token at the `kubernetes` auth mount for the `openbao-backup`
+# role. That role's policy is READ on sys/storage/raft/snapshot plus a data read
+# on secret/obj/openbao-backup — it cannot restore, and it cannot read a single
+# secret's plaintext. The bucket key is read from OpenBao on every run (the
+# reconciler rotates it), never mounted from a Kubernetes Secret.
+#
+# Each instance's backups are its own: the bucket is per deployment, and in an HA
+# pair each cluster backs up itself — the two stores are independent and so are
+# their snapshots.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openbao-backup
+  namespace: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  # Every six hours, at :23 — off the hour so it does not stack on the 02:00/03:00
+  # sweeps. With KEEP=28 that is seven days of restore points; a store this size
+  # (kilobytes to low megabytes) makes the cadence cheap, and six hours bounds the
+  # worst-case loss to writes made since the last tick.
+  #
+  # THE DEFAULT, NOT THE SETTING. `llz render` always patches this and KEEP below
+  # from spec.components.openbaoBackup.backupIntervalHours / backupKeep
+  # (openbao-backup-schedule-patch.yaml in the carved app); these literals are what
+  # an unset knob renders, and a test holds them equal.
+  schedule: "23 */6 * * *"
+  startingDeadlineSeconds: 600
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Generous: a snapshot is streamed, verified, uploaded and read back, and
+      # an object-storage endpoint having a slow minute must not turn into a
+      # failed backup.
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          # Batch pod — keep it out of the Istio mesh (a never-exiting sidecar
+          # would stop the Job completing).
+          annotations:
+            sidecar.istio.io/inject: "false"
+          labels:
+            app.kubernetes.io/name: openbao-backup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: openbao-backup
+          containers:
+            - name: backup
+              # Literal :latest, retagged to the commit/release under test by the
+              # carved app's kustomize images: transformer (openbaoBackup is in
+              # carvedLLZImageComponents) — same as the reconciler and the rotator.
+              image: ghcr.io/akamai-consulting/llz:latest
+              args: ["ci", "openbao-backup"]
+              env:
+                # The chart's leader-only Service: a snapshot is the active node's
+                # to serve, and the plain Service would hand two runs in three to a
+                # standby.
+                - name: OPENBAO_ADDR
+                  value: "https://platform-openbao-active.llz-openbao.svc.cluster.local:8200"
+                # The -active Service's name is not on OpenBao's serving cert; the
+                # plain Service's is. Verify against that identity rather than skip.
+                - name: OPENBAO_TLS_SERVER_NAME
+                  value: "platform-openbao.llz-openbao.svc.cluster.local"
+                - name: OPENBAO_CA_FILE
+                  value: /etc/openbao-ca/ca.crt
+                - name: OPENBAO_KUBERNETES_ROLE
+                  value: "openbao-backup"
+                # Snapshots retained PER OpenBao cluster id, including this run's:
+                # 7 days at 6-hourly. Patched from the spec's backupKeep.
+                - name: KEEP
+                  value: "28"
+              resources:
+                # Sized against baosnap.MaxSnapshotBytes (128Mi): the snapshot is
+                # held once in memory to hash it for SigV4. Raise both together.
+                limits: { cpu: 500m, memory: 384Mi }
+                requests: { cpu: 50m, memory: 128Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+                # SERVER half — verifies OpenBao's serving cert.
+                - { name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true }
+                # CLIENT half — this workload's identity (ADR 0010).
+                - { name: openbao-client-tls, mountPath: /etc/openbao-client-tls, readOnly: true }
+          volumes:
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }
+            # NOT optional: with mTLS required there is no unverified path to fall
+            # back to, so a missing CA must park the pod rather than let it start
+            # and fail every OpenBao call.
+            - name: openbao-ca
+              secret:
+                secretName: openbao-ca-bundle
+            # 0444: Secret volumes are root-owned and this pod runs as uid 65532
+            # with no fsGroup, so 0400 would be unreadable to it. The key's
+            # protection is RBAC on the Secret + etcd encryption.
+            - name: openbao-client-tls
+              secret:
+                secretName: openbao-backup-client-tls
+                defaultMode: 0444

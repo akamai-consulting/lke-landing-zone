@@ -1,7 +1,7 @@
 # `object-storage`
 
-Linode Object Storage buckets for a platform's container registry and log
-storage. **Buckets only** — the scoped access keys are NOT Terraform-managed.
+Linode Object Storage buckets for a platform's container registry, log
+storage, and OpenBao Raft snapshots. **Buckets only** — the scoped access keys are NOT Terraform-managed.
 
 > **MAJOR interface change (SemVer):** earlier releases minted the Loki/Harbor
 > scoped keys here with a 120-day `time_rotating` clock and exported them as
@@ -33,7 +33,17 @@ setting values instead of copying YAML. The operational scars travel with the mo
 
 | Resource | Count | Notes |
 |---|---|---|
-| `linode_object_storage_bucket` | 4 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>` |
+| `linode_object_storage_bucket` | 5 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>` |
+
+The `openbao-backup` bucket holds OpenBao Raft snapshots (barrier-encrypted
+ciphertext). It is its own bucket so the llz-minted backup key can be scoped to
+it alone — see [`docs/runbooks/openbao-backup-restore.md`](../../docs/runbooks/openbao-backup-restore.md).
+It is **versioned**, with a lifecycle rule expiring noncurrent versions after
+`openbao_backup_noncurrent_days` (default 30), so a pruned or overwritten
+snapshot stays recoverable for that window. Versioning and lifecycle rules are
+S3 calls: the calling root's provider needs `obj_use_temp_keys = true` (or
+`obj_access_key`/`obj_secret_key`) — the embedded `object-storage` root sets the
+former.
 
 ## Inputs
 
@@ -42,15 +52,19 @@ setting values instead of copying YAML. The operational scars travel with the mo
 | `region_suffix` | string | — | deployment/env name (e.g. `primary`, `e2e`) — appended to all labels |
 | `obj_cluster` | string | — | Linode OBJ cluster id (e.g. `us-ord-1`) |
 | `label_prefix` | string | `"platform"` | Bucket label prefix. **Override per sibling deployment** so labels don't collide. Key labels (minted by llz) mirror it. |
+| `openbao_backup_noncurrent_days` | number | `30` | Days a deleted/overwritten OpenBao snapshot stays recoverable as a noncurrent version in the versioned `openbao-backup` bucket. |
 
 ## Outputs
 
-`bucket_names`, `harbor_registry_bucket`, `s3_endpoint`.
+`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `s3_endpoint`.
 
 ## Provider
 
 Inherits the `linode` provider from the calling root (configure
-`provider "linode" { token = … }` there).
+`provider "linode" { token = … }` there). The root's provider must also be able to
+make S3 calls for the `openbao-backup` bucket's versioning and lifecycle rule:
+set `obj_use_temp_keys = true` (as the embedded root does) or supply
+`obj_access_key`/`obj_secret_key`.
 
 ## Requirements
 
@@ -63,7 +77,8 @@ Inherits the `linode` provider from the calling root (configure
 
 ```hcl
 provider "linode" {
-  token = var.linode_token
+  token             = var.linode_token
+  obj_use_temp_keys = true # versioning + lifecycle on the openbao-backup bucket
 }
 
 module "object_storage" {

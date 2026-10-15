@@ -148,6 +148,24 @@ Covered by `openbao-alerts` (under
 > never-firing rather than loudly broken. Verify with
 > `llz ci prom-metrics --match '^vault_'`; a non-empty set means the grant is live.
 
+#### OpenBao backups
+
+Covered by `llz-openbao-backup` (in
+[platform-apl/components/openbaoBackup/](../platform-apl/components/openbaoBackup/), shipped
+with the `openbaoBackup` component). All three read kube-state-metrics, so a backup that
+stops is visible without any exporter — and they measure **the latest attempt and
+freshness**, because the bucket keeps days of history after the producer dies and
+"objects exist" stays true the whole time. None assumes a six-hour interval: the schedule
+is a spec knob, and Stale derives the interval from the CronJob's own last/next schedule
+times. Response: [runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md).
+
+| Condition | Alert | Severity | Status |
+|-----------|-------|----------|--------|
+| The newest backup Job failed and nothing has succeeded since (incl. the first run) | `LLZOpenBaoBackupFailing` | warning | ✅ covered |
+| Last successful backup older than two intervals + 1h (13h at the default 6h) | `LLZOpenBaoBackupStale` | critical | ✅ covered |
+| The first tick is over an hour past and the CronJob has neither succeeded nor failed (never scheduled) | `LLZOpenBaoBackupNeverSucceeded` | warning | ✅ covered |
+| A snapshot restores | — | — | e2e gate, not an alert: `llz ci assert-openbao-restore` |
+
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under

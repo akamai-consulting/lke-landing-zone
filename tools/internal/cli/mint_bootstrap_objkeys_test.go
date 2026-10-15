@@ -105,19 +105,22 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	if err := credrotate.RunMintBootstrapObjkeys("primary", false); err != nil {
 		t.Fatal(err)
 	}
-	if stub.objCreates != 1 {
-		t.Fatalf("objkey mints = %d, want 1 (platform-obj only; never the DNS PAT, never the "+
+	// TWO: platform-obj and the OpenBao backup key, which is scoped to the backup
+	// bucket alone and carries where it points (BUCKET/ENDPOINT) for the CronJob.
+	if stub.objCreates != 2 {
+		t.Fatalf("objkey mints = %d, want 2 (platform-obj + openbao-backup; never the DNS PAT, never the "+
 			"retired per-app loki/harbor keys)", stub.objCreates)
 	}
 	if stub.patCreates != 0 {
 		t.Errorf("PAT mints = %d, want 0", stub.patCreates)
 	}
-	if len(*puts) != 1 {
-		t.Fatalf("want one kv put, got %d: %v", len(*puts), *puts)
+	if len(*puts) != 2 {
+		t.Fatalf("want two kv puts, got %d: %v", len(*puts), *puts)
 	}
 	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
 	wantPuts := []string{
 		"kv put secret/obj/platform AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
+		"kv put secret/obj/openbao-backup AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK BUCKET=acme-openbao-backup-primary ENDPOINT=us-ord-1.linodeobjects.com rotated_at=" + rotatedAt,
 	}
 	for i, want := range wantPuts {
 		if got := strings.Join((*puts)[i], " "); got != want {
@@ -203,11 +206,13 @@ func TestReseedReplacesAKeyThatCannotWriteTheBuckets(t *testing.T) {
 	if err := credrotate.RunMintBootstrapObjkeys("primary", true); err != nil {
 		t.Fatalf("--reseed must repair the path, got %v", err)
 	}
-	if stub.objCreates != 1 {
-		t.Errorf("objkey mints = %d, want 1", stub.objCreates)
+	// Both table entries are seeded with that same mis-scoped key here, so both
+	// are replaced: platform-obj and the OpenBao backup key.
+	if stub.objCreates != 2 {
+		t.Errorf("objkey mints = %d, want 2", stub.objCreates)
 	}
-	if len(*puts) != 1 {
-		t.Errorf("want the OpenBao path overwritten, got %d put(s)", len(*puts))
+	if len(*puts) != 2 {
+		t.Errorf("want both OpenBao paths overwritten, got %d put(s)", len(*puts))
 	}
 }
 

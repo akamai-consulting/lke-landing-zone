@@ -7,6 +7,7 @@ This document is the runbook for the platform's secret backend. It covers:
 - Rotating secrets via the dual-write script
 - How CI reads secrets at deploy time
 - Regional failover behavior
+- Backing OpenBao up and restoring it
 
 The secret store itself runs as an Argo CD-managed Helm release of the published
 `llz-openbao-platform` chart; its Argo CD Application + manifests live ONCE in the
@@ -32,6 +33,7 @@ client of OpenBao.)
 - [In-cluster TLS to OpenBao](#in-cluster-tls-to-openbao)
 - [Audit logging](#audit-logging)
 - [Unseal automation](#unseal-automation)
+- [Backup and restore](#backup-and-restore)
 - [Cross-references](#cross-references)
 
 <!-- /toc -->
@@ -156,7 +158,8 @@ useful context for emergency recovery and understanding the secret layout.
    - the read-only `platform-ci` policy, bound to the `eso` Kubernetes-auth role, which every in-cluster consumer reads through;
    - the write-scoped `eso-pusher` policy, bound to the `eso-pusher` Kubernetes-auth role (same ESO controller SA as `eso`), for the in-cluster-sourced PushSecret paths (`grafana/admin`, `otel/ingress`, `harbor/admin`);
    - the `linode-rotator` policy, bound to the `linode-rotator` Kubernetes-auth role, for the in-cluster credential rotator's paths (`obj/platform`, `linode/api-token`, `linode/broad-pat`);
-   - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci rotate-incluster-pat`.
+   - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci rotate-incluster-pat`;
+   - the `openbao-backup` policy, bound to the `openbao-backup` Kubernetes-auth role (the backup CronJob's SA in `llz-openbao-backup`): `read` on `sys/storage/raft/snapshot` plus a read of `secret/obj/openbao-backup` — it can take a snapshot, not restore one. See [Backup and restore](#backup-and-restore).
 
    Enables the file audit device.
 
@@ -323,7 +326,8 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain. Age-tracked (`class="automated"`) — on the 90-day SLA, so a stalled rotation workflow alerts |
 | `secret/linode/broad-pat` | **Broad account `read_write` PAT** — the provisioning credential the `broadPatRotator` CronJob owns; the highest-privilege Linode credential the platform holds | **Automated** in-cluster — `broadPatRotator` (weekly check, `ROTATE_AFTER_DAYS`), mint→verify→write→drain. Age-tracked (`class="automated"`) on the 90d SLA; its *expiry* is separately visible via the token-inventory's Linode enumeration |
 | `secret/linode/cloud-firewall` | **Opt-in** least-privilege firewall token (`linodes:ro` + `vpcs:ro` + `firewall:rw`) for the cidr-firewall controller + discover CronJob. Most instances never seed it and read `linode/api-token` instead | **On-demand** — operator-seeded and re-seeded by hand (`llz openbao set`), documented ≤90-day policy. Age-tracked (`class="on-demand"`) when seeded; an unseeded instance 404s and publishes nothing |
-| `secret/obj/platform` | Platform Object Storage key (all buckets) | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
+| `secret/obj/platform` | Platform Object Storage key (Loki + Harbor buckets) | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
+| `secret/obj/openbao-backup` | OpenBao backup Object Storage key — `read_write` on the `openbao-backup` bucket only, plus `BUCKET`/`ENDPOINT`; read by the backup CronJob under its own role, never projected into a Kubernetes Secret | **Automated** in-cluster — same rotator and threshold as `obj/platform`; minted at bootstrap by `mint-bootstrap-objkeys`. Age-tracked (`class="automated"`) |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
 | `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
 | `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role. Age-tracked (`class="tracks-source"`); see below |
@@ -372,7 +376,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 
 | Token / key | Lifetime | Rotation method |
 |-------------|----------|-----------------|
-| Kubernetes-auth tokens (`eso`, `eso-pusher`, `linode-rotator`) | 15m TTL | **Ephemeral** — minted per pod auth, auto-expires |
+| Kubernetes-auth tokens (`eso`, `eso-pusher`, `reconciler`, `harbor-provisioner`, `broad-pat-rotator`, `openbao-backup`) | 15m TTL | **Ephemeral** — minted per pod auth, auto-expires |
 | GitHub-OIDC tokens (`platform-ci`, `secret-propagator`) | 15m TTL / 30m max | **Ephemeral** — minted per workflow run, auto-expires |
 | `OPENBAO_ROOT_TOKEN` | Per bootstrap run | **Ephemeral** — revoked unconditionally at end of bootstrap; regenerated via recovery-key quorum |
 | `OPENBAO_SEAL_KEY` | Permanent | **Static by design** — a changed key bricks auto-unseal; escrow offline |
@@ -795,12 +799,57 @@ action — the pod re-reads the seal key and unseals itself. A persistently seal
 pod means the `openbao-unseal-key` Secret is missing/unreadable, the key is wrong,
 or Raft storage is unhealthy.
 
+## Backup and restore
+
+OpenBao is the one piece of platform state nothing can re-derive, so the
+`openbaoBackup` component (on by default) snapshots it: the `openbao-backup` CronJob takes
+a Raft snapshot from the active node every six hours, verifies it, uploads it to the
+deployment's versioned `<prefix>-openbao-backup-<deployment>` bucket, reads it back, and
+keeps the newest 28 **per OpenBao cluster id** (seven days; both are spec knobs,
+`components.openbaoBackup.backupIntervalHours` / `backupKeep`). Per cluster id so that a
+rebuilt, empty OpenBao backing up into the same bucket can never push the lost cluster's
+snapshots out. Each deployment of an HA pair backs up its own, independent store.
+
+```bash
+llz openbao backups --region <deployment>                       # list, newest first
+llz openbao restore --region <deployment> --snapshot <key>      # dry run: what would be overwritten
+llz openbao restore --region <deployment> --snapshot <key> --yes --confirm restore:<deployment>
+```
+
+**Confidentiality.** Linode Object Storage has no managed keys, and none are needed: every
+stored value in a snapshot is already ciphertext under OpenBao's barrier, which only this
+deployment's `OPENBAO_SEAL_KEY` unwraps. The bucket does expose storage **key names**
+(secret paths, policy and role names), Raft membership and timing — never a value. Bucket
+read plus the seal key is the whole store, so keep the seal key away from anyone who can
+read the bucket. Today the `infra-<deployment>` environment holds both the seal key and
+`LINODE_API_TOKEN` (which can mint a read key on the bucket), so the effective boundary is
+**who can run workflows in that environment** — escrow the seal key offline and protect the
+environment; the seal/recovery-key custody ADR proposed in
+[#568](https://github.com/akamai-consulting/lke-landing-zone/pull/568) is the planned fix. For the same reason **no other backup may include the `llz-openbao`
+namespace**: its `openbao-unseal-key` Secret is the seal key, so a Velero schedule over
+every namespace would put key and data in one bucket. The backup key is scoped to that one
+bucket and is deliberately not the platform key apl-core hands to Loki and Harbor.
+
+**Restore** replaces the whole store, needs a root token on the target cluster and the
+same seal key the snapshot's cluster used, refuses a kube-context that is not `--region`'s
+own LKE cluster (whatever `--force` says), refuses a snapshot from a different OpenBao
+cluster (the HA peer, or a rebuild) without `--force`, refuses `--latest` across several
+cluster ids without `--from-cluster`, and leaves follow-up work — rotated keys the
+snapshot predates, writes made since. The procedure, per scenario, is
+[runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md).
+
+**The gate.** `llz ci assert-openbao-restore` runs in release-e2e (`restore_drill`) before
+the root token is revoked: canary write → the real backup Job → fetch its exact snapshot →
+overwrite the canary → restore through the operator command's own code → the canary must
+read back. Every deployment's bootstrap runs its non-destructive half (`--backup-only`).
+
 ## Cross-references
 
 - `llz openbao set` — dual-write implementation
 - `llz openbao get` — CI read helper
 - [docs/architecture/convergence-contract.md](architecture/convergence-contract.md) — cluster convergence contract
 - [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md) — OpenBao bring-up procedure
+- [docs/runbooks/openbao-backup-restore.md](runbooks/openbao-backup-restore.md) — OpenBao backup, restore, and what the bucket exposes
 - [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) — lke-admin credential rotation
 - [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) — Linode token rotation
 - [docs/runbooks/apl-values-propagation.md](runbooks/apl-values-propagation.md) — apl-values propagation

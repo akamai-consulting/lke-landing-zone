@@ -261,6 +261,21 @@ func TestNestedCheckoutIsSkipped(t *testing.T) {
 	}
 }
 
+// TestTFValidateScratchIsSkipped. `make tf-validate-roots` materialises the
+// embedded Terraform roots under the gitignored .tf-instance/, complete with
+// versions.tf, and `make lint` runs it before this gate — so without the skip
+// every lint of a Terraform change failed here on its own scratch copy.
+func TestTFValidateScratchIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, configPath, gomodConfig)
+	write(t, root, "tools/go.mod", "module x\n")
+	write(t, root, ".tf-instance/terraform-iac-bootstrap/vpc/versions.tf",
+		"terraform {\n  required_providers {\n    linode = {\n      source = \"linode/linode\"\n    }\n  }\n}\n")
+	if _, errOut, err := run(t, root); err != nil {
+		t.Fatalf("the tf-validate-roots scratch tree must not be scanned, got: %v\n%s", err, errOut)
+	}
+}
+
 // TestTerraformNeedsADeclaredProvider. Terraform that merely USES a provider has
 // no version to bump; reporting every root would bury the ones that pin something.
 func TestTerraformNeedsADeclaredProvider(t *testing.T) {

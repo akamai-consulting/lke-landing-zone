@@ -595,6 +595,11 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		// (Validate guarantees both are set when it's enabled).
 		tog := e.Components[c.Name]
 		content["broad-pat-rotator-env-patch.yaml"] = clusterspec.RenderBroadPATEnvPatch(tog.BroadPATLabel, tog.BroadPATDeployments, ghRepo)
+	case "openbaoBackup":
+		// Cadence + retention from the toggle (Validate bounds both); unset knobs
+		// render the defaults, so the file is always there to read.
+		tog := e.Components[c.Name]
+		content["openbao-backup-schedule-patch.yaml"] = clusterspec.RenderOpenBaoBackupPatch(tog.BackupIntervalHours, tog.BackupKeep)
 	case "objProxy":
 		// The endpoint the SSE-C gateway proxies to, and the dnsNames its serving
 		// cert must carry — both from the one object-storage cluster id, so the

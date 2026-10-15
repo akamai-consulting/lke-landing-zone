@@ -90,6 +90,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/kyverno"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbao"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbaobackup"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/releasepublish"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
@@ -219,6 +220,8 @@ var commands = []Command{
 	{"objenc", objenc.AssertObjEncryptionCmd},
 	{"objenc", objenc.ObjProxyCmd},
 	{"objenc", objenc.SeedSSECKeyCmd},
+	{"openbaobackup", openbaobackup.BackupCmd},
+	{"openbaobackup", openbaobackup.DrillCmd},
 	{"openbao", openbao.BaoBreakglassCmd},
 	{"openbao", openbao.BaoEnsureReadyCmd},
 	{"openbao", openbao.BaoInitCmd},
@@ -232,6 +235,8 @@ var commands = []Command{
 	{"openbao", openbao.OpenbaoLoginCmd},
 	{"openbao", openbao.ProvisionPeerCACmd},
 	{"openbao", openbao.RegenRootCmd},
+	{"openbao", openbao.BackupsCmd},
+	{"openbao", openbao.RestoreCmd},
 	{"openbao", openbao.SeedBroadPATCmd},
 	{"plaintext", plaintext.PlaintextGuardCmd},
 	{"summarysecret", summarysecret.Cmd},
@@ -250,6 +255,7 @@ var commands = []Command{
 	{"seedspecial", seedspecial.ResolveHarborURLCmd},
 	{"statepassphrase", statepassphrase.RotateStatePassphraseCmd},
 	{"teardown", teardown.DrainObjBucketsCmd},
+	{"teardown", teardown.OpenBaoBackupDestroyGuardCmd},
 	{"teardown", teardown.ReapCmd},
 	{"teardown", teardown.ReapNodeBalancersCmd},
 	{"teardown", teardown.ReapObjKeysCmd},

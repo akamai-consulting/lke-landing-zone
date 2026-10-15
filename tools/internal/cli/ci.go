@@ -84,6 +84,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbaobackup"
 )
 
 func ciCmd() *cobra.Command {
@@ -127,7 +128,7 @@ func ciCmd() *cobra.Command {
 		// team-login-smoke it IS workflow-driven: llz-scheduled-checks runs it weekly.
 		assertidentity.AssertOpenBaoExtensionsCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
+	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), teardown.OpenBaoBackupDestroyGuardCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
 	// THE FIRST REGISTRY-DRIVEN VERB. `llz ci gates` runs every gate binding the
 	// registry declares AND can drive, rather than a list typed here — issue #399's
 	// Phase 2 acceptance criterion. The driver lives in the registry, not in this
@@ -252,7 +253,7 @@ func ciCmd() *cobra.Command {
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
 	c.AddCommand(openbaoext.SeedBroadPATCmd())
 	c.AddCommand(objenc.SeedSSECKeyCmd())
-	c.AddCommand(objenc.AssertObjEncryptionCmd())
+	c.AddCommand(objenc.AssertObjEncryptionCmd(), openbaobackup.BackupCmd(), openbaobackup.DrillCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
 	c.AddCommand(assertsecrets.BroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed

@@ -89,6 +89,10 @@ var CredPaths = []CredPath{
 	// `secret/obj/platform` below is the one that replaced them: one broad key,
 	// one consumer, one series.
 	{"secret/obj/platform", "obj-platform", CredClassAutomated, false},
+	// The OpenBao backup key (openbao-backup bucket only). Minted at bootstrap and
+	// rotated by the same in-cluster rotator as obj-platform, so `automated`: a
+	// breach means the rotator is broken, and with it the next backup's upload.
+	{"secret/obj/openbao-backup", "obj-openbao-backup", CredClassAutomated, false},
 	// The narrow in-cluster PAT. Re-minted monthly per region by
 	// secret-rotation.yml → `rotate-incluster-pat`, so it is genuinely
 	// `automated` and belongs on the 90d SLA: a stalled rotation workflow is

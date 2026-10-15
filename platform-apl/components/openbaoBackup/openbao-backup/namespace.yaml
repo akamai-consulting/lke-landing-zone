@@ -1,0 +1,16 @@
+# Dedicated namespace for the OpenBao backup CronJob. The workload's OpenBao role
+# can read a COMPLETE copy of the store (as barrier ciphertext) and its bucket key
+# can delete every backup, so it shares a namespace — and therefore a blast radius
+# and a NetworkPolicy scope — with nothing else. Same reasoning as llz-pat-rotator.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-openbao-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    kubernetes.io/metadata.name: llz-openbao-backup
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    app.kubernetes.io/part-of: platform

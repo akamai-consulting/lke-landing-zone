@@ -1,0 +1,13 @@
+# spec.components.openbaoBackup → the OpenBao backup CronJob in its own namespace.
+# Template-managed. See docs/runbooks/openbao-backup-restore.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - network-policy.yaml
+  # mTLS identity + serving-CA anchor for the OpenBao hop (wave -14 / 0).
+  - client-tls-certificate.yaml
+  - openbao-ca-bundle.yaml
+  - cronjob.yaml
+  - prometheusrule.yaml

@@ -56,6 +56,13 @@ var invariantExempt = map[string]string{
 	// being in the data path, and the daemon has nothing to reconcile toward it.
 	"obj-encryption/obj-proxy": "held by the objProxy DaemonSet being in the path, not by a reconcile loop",
 
+	// Held by a CronJob, like the SSE-C gateway is held by a DaemonSet: a Raft
+	// snapshot every six hours is a schedule, not a reconcile toward a desired
+	// state, and its freshness is watched by LLZOpenBaoBackupStale rather than by
+	// a loop. Putting it in the daemon would also hand the reconciler's role a
+	// full copy of the store.
+	"openbao-backup/backup": "held by the openbaoBackup CronJob on a schedule; staleness alerts via LLZOpenBaoBackupStale",
+
 	// A static posture gate over Terraform declarations. It holds continuously in
 	// the sense that every root must always declare encryption, and it is checked
 	// at PR time by `llz ci at-rest-guard` — there is no cluster state to drive.

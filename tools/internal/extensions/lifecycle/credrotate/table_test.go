@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baosnap"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
@@ -81,8 +82,8 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := BuildRotationTable("acme", "primary", "us-ord-1")
-	if len(table) != 1 {
-		t.Fatalf("table has %d entries, want 1 (obj-platform; the two per-app keys were retired)", len(table))
+	if len(table) != 2 {
+		t.Fatalf("table has %d entries, want 2 (obj-platform + openbao-backup; the two per-app keys were retired)", len(table))
 	}
 	byName := map[string]CredEntry{}
 	for _, e := range table {
@@ -115,6 +116,30 @@ func TestBuildRotationTable(t *testing.T) {
 	}
 	if of := obj.Fields("AK", "SK"); of["AWS_ACCESS_KEY_ID"] != "AK" || of["AWS_SECRET_ACCESS_KEY"] != "SK" {
 		t.Errorf("obj-platform fields = %v", of)
+	}
+	// The broad key must NOT reach the backup bucket: it is handed to apl-core's
+	// Loki and Harbor, and a grant there lets any of them delete every snapshot.
+	for _, b := range obj.Buckets {
+		if b == "acme-openbao-backup-primary" {
+			t.Errorf("obj-platform is scoped to the OpenBao backup bucket — that is the key apl-core hands to Loki/Harbor")
+		}
+	}
+
+	// The backup key: the one bucket, read_write (retention deletes), and a field
+	// set that tells the in-cluster job where to write without a manifest patch.
+	bk := byName["openbao-backup"]
+	if bk.Kind != CredKindObjKey || bk.BaoPath != baosnap.KeyPath ||
+		strings.Join(bk.Buckets, ",") != "acme-openbao-backup-primary" || bk.Permissions != "read_write" ||
+		bk.Label != "acme-openbao-backup-primary" {
+		t.Errorf("openbao-backup entry = %+v", bk)
+	}
+	bf := bk.Fields("AK", "SK")
+	want := map[string]string{"AWS_ACCESS_KEY_ID": "AK", "AWS_SECRET_ACCESS_KEY": "SK",
+		"BUCKET": "acme-openbao-backup-primary", "ENDPOINT": "us-ord-1.linodeobjects.com"}
+	for k, v := range want {
+		if bf[k] != v {
+			t.Errorf("openbao-backup field %s = %q, want %q", k, bf[k], v)
+		}
 	}
 }
 
@@ -226,6 +251,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 			"secret/loki/object-store":  {"rotated_at": recent},
 			"secret/harbor/registry-s3": {"rotated_at": recent},
 			"secret/obj/platform":       {"rotated_at": recent},
+			"secret/obj/openbao-backup": {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
@@ -277,6 +303,9 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 		lc := &stubLinode{objkeys: stale}
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+			// Fresh and not under test: the backup key must not add its own mint
+			// to the count this subtest is about.
+			baosnap.KeyPath: {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
@@ -305,6 +334,9 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 		}}}
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+			// Fresh and not under test: the backup key must not add its own mint
+			// to the count this subtest is about.
+			baosnap.KeyPath: {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
@@ -323,6 +355,9 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 		lc := &stubLinode{listErr: errors.New("connection reset")}
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+			// Fresh and not under test: the backup key must not add its own mint
+			// to the count this subtest is about.
+			baosnap.KeyPath: {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), true); err != nil {
@@ -339,6 +374,9 @@ func TestRotatorReplacesAKeyThatCannotWriteEvenWhenNotDueByAge(t *testing.T) {
 		lc := &stubLinode{objkeys: stale}
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/obj/platform": {"rotated_at": recent, "AWS_ACCESS_KEY_ID": "OLD"},
+			// Fresh and not under test: the backup key must not add its own mint
+			// to the count this subtest is about.
+			baosnap.KeyPath: {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := RunRotateLinodeCreds(context.Background(), false); err != nil {

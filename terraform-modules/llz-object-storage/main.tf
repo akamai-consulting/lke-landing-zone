@@ -76,6 +76,64 @@ resource "linode_object_storage_bucket" "loki_admin" {
   label       = "${var.label_prefix}-loki-admin-${var.region_suffix}"
 }
 
+# ── OpenBao Raft snapshot bucket ──────────────────────────────────────────────
+# Holds the scheduled `bao operator raft snapshot` archives the openbaoBackup
+# CronJob writes (`llz ci openbao-backup`), and is what `llz openbao restore`
+# reads back. A SEPARATE bucket, not a prefix inside a Loki/Harbor one, because
+# Linode Object Storage scopes keys per BUCKET: only a dedicated bucket lets the
+# backup key (`<prefix>-openbao-backup-<suffix>`, minted by llz, never by
+# Terraform) reach the snapshots and nothing else, and keeps the broad platform
+# key — which apl-core hands to Loki and Harbor — from being able to delete them.
+#
+# Confidentiality does NOT rest on this bucket being private (it is, like every
+# bucket here): a snapshot is ciphertext under OpenBao's barrier keyring, which
+# only the deployment's static seal key (OPENBAO_SEAL_KEY) can unwrap. Linode OBJ
+# offers no managed keys, and none are needed for that. What the bucket DOES leak
+# to someone holding it is storage METADATA — see docs/runbooks/openbao-backup-restore.md.
+#
+# Label infix `openbao-backup` (16 chars with its hyphens) is deliberately no
+# longer than `-harbor-registry-` (17), the infix clusterspec's label-length
+# validation budgets for — a longer one would silently reject instance/deployment
+# name pairs that validate today.
+#
+# VERSIONED, WITH NONCURRENT VERSIONS EXPIRED. Retention (the CronJob's prune)
+# deletes snapshots on purpose, and the restore path reads only current objects —
+# so a retention bug, a mistaken hand delete, or an overwrite would otherwise be
+# final. With versioning a deleted snapshot is a noncurrent version for
+# var.openbao_backup_noncurrent_days and can be copied back. It does NOT protect
+# against a holder of the backup key or LINODE_API_TOKEN deliberately deleting
+# versions; the runbook says so.
+#
+# Both arguments need S3 credentials at plan/apply time (they are S3 calls, not
+# Linode API calls). The calling root sets `obj_use_temp_keys = true` on its
+# provider, which mints a short-lived key per operation from the Linode token the
+# apply already holds; a root that does not will fail the apply asking for
+# access_key/secret_key, which is the loud failure we want.
+#
+# Its contents also survive the deployment: destroying object-storage drains this
+# bucket only when the caller opts in (drain_data_buckets), and otherwise refuses
+# before anything is deleted. See llz-terraform.yml's destroy-object-storage job.
+resource "linode_object_storage_bucket" "openbao_backup" {
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-openbao-backup-${var.region_suffix}"
+
+  versioning = true
+
+  lifecycle_rule {
+    id      = "expire-noncurrent-snapshots"
+    enabled = true
+    # No prefix: everything in this bucket is a snapshot (or an operator's note,
+    # which is no worse off kept for the window too).
+    noncurrent_version_expiration {
+      days = var.openbao_backup_noncurrent_days
+    }
+    # The producer uploads with a single PUT, so there are no multipart uploads to
+    # abandon — but a hand-run `aws s3 cp` of a large snapshot would be one.
+    abort_incomplete_multipart_upload_days = 1
+  }
+}
+
 # NOTE — the gitea_backup bucket + key + outputs were removed in the
 # apl-core anti-pattern cleanup. The off-cluster gitea backup integration
 # was blocked by apl-core's list-REPLACE behaviour on _rawValues.

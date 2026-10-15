@@ -745,15 +745,29 @@ func WarnRootToken() {
 // port-forward dance in the composition root.
 func PortForward() (string, func(), error) { return portForward() }
 
+// PortForwardPod is PortForward to a NAMED pod rather than pod-0. A Raft snapshot
+// restore must reach the ACTIVE node, which is whichever pod carries
+// ActivePodLabel at that moment — pod-0 only by coincidence. The caller resolves
+// the pod (it holds the cluster-read handle to do so); this only opens the tunnel.
+func PortForwardPod(pod string) (string, func(), error) { return portForwardTo(pod) }
+
+// ActivePodLabel is the label OpenBao's `service_registration "kubernetes"`
+// stamps on the pod that currently holds HA leadership (`openbao-active=true`;
+// followers carry `false`). The chart's `-active` Service selects on it, so it is
+// the same signal the platform already routes on.
+const ActivePodLabel = "openbao-active=true"
+
 // portForward runs `kubectl port-forward` to OpenBao pod-0 on a
 // kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
 // warm up, and returns the https base URL and a kill/reap teardown.
-func portForward() (string, func(), error) {
+func portForward() (string, func(), error) { return portForwardTo(baoread.RootPod) }
+
+func portForwardTo(pod string) (string, func(), error) {
 	// Forward to the LOOPBACK listener (8210), not the mTLS network listener
 	// (8200). port-forward is established inside the pod's network namespace, so
 	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
 	// `llz openbao get/set` from a laptop that holds no client certificate.
-	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+baoread.RootPod, ":"+baoread.LoopbackPort)
+	cmd := exec.Command("kubectl", "port-forward", "-n", baoread.Namespace, "pod/"+pod, ":"+baoread.LoopbackPort)
 	// Surface kubectl's own stderr live: without this the common failure modes
 	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
 	// swallowed and the operator only sees an opaque establish timeout. kubectl

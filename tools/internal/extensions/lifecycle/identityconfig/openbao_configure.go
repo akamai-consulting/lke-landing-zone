@@ -17,6 +17,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baoread"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baosnap"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/ghaout"
@@ -96,8 +97,14 @@ path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read
 // keys (Loki, Harbor registry) — never the provisioning
 // PAT or any read-only consumer path. Mapped to the `linode-rotator`
 // Kubernetes-auth role below. See docs/designs/linode-credential-rotator.md.
+//
+// secret/obj/openbao-backup is the second object-storage key the rotation table
+// owns (scoped to the OpenBao backup bucket alone); the reconciler rotates it on
+// the same cadence, so it needs the same write.
 const policyLinodeRotator = `path "secret/data/obj/platform"       { capabilities = ["create", "update", "read"] }
 path "secret/metadata/obj/platform"       { capabilities = ["read"] }
+path "secret/data/obj/openbao-backup"     { capabilities = ["create", "update", "read"] }
+path "secret/metadata/obj/openbao-backup" { capabilities = ["read"] }
 `
 
 // harbor-provisioner: read/write on exactly the two robot-credential paths the
@@ -133,6 +140,7 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 // robot password, either GitHub PAT, or any database credential.
 const policyReconcilerRead = `path "secret/data/obj/platform"     { capabilities = ["read"] }
 path "secret/metadata/obj/platform" { capabilities = ["read"] }
+path "secret/metadata/obj/openbao-backup" { capabilities = ["read"] }
 path "secret/metadata/grafana/admin" { capabilities = ["read"] }
 path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
 path "secret/metadata/harbor/admin"  { capabilities = ["read"] }
@@ -163,6 +171,25 @@ path "secret/metadata/infra/db-admin/*" { capabilities = ["read"] }
 // policy), NOT this role. Mapped to the `broad-pat-rotator` Kubernetes-auth role.
 const policyBroadPATRotator = `path "secret/data/linode/broad-pat"     { capabilities = ["create", "update", "read"] }
 path "secret/metadata/linode/broad-pat" { capabilities = ["read"] }
+`
+
+// openbao-backup: what the in-cluster openbaoBackup CronJob (`llz ci
+// openbao-backup`) needs and nothing more — READ on the Raft snapshot endpoint
+// (GET sys/storage/raft/snapshot streams the archive) and a data read on the one
+// object-storage key that may write the backup bucket.
+//
+// NOT update/sudo on the snapshot path, and a test pins the absence. `update` is
+// the RESTORE verb on the same path (and snapshot-force its forced twin): a role
+// that can take a snapshot must not be able to roll the store back to one. Restore
+// is break-glass, done with a root token by `llz openbao restore`.
+//
+// What `read` here does hand over is a complete copy of the store — as barrier
+// ciphertext. The token can neither decrypt it nor unseal anything with it; that
+// needs OPENBAO_SEAL_KEY, which no in-cluster identity other than OpenBao itself
+// can read. See docs/runbooks/openbao-backup-restore.md, "What the bucket gives away".
+const policyOpenBaoBackup = `path "sys/storage/raft/snapshot"          { capabilities = ["read"] }
+path "secret/data/obj/openbao-backup"     { capabilities = ["read"] }
+path "secret/metadata/obj/openbao-backup" { capabilities = ["read"] }
 `
 
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
@@ -271,6 +298,10 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team, 
 		// in-cluster broad-PAT rotator CronJob. Mapped to the broad-pat-rotator role.
 		{desc: "write policy broad-pat-rotator", fatal: true, stdin: policyBroadPATRotator,
 			args: []string{"policy", "write", "broad-pat-rotator", "-"}},
+		// openbao-backup policy: snapshot READ + the backup bucket's key, for the
+		// openbaoBackup CronJob. Mapped to the openbao-backup role below.
+		{desc: "write policy openbao-backup", fatal: true, stdin: policyOpenBaoBackup,
+			args: []string{"policy", "write", "openbao-backup", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -339,6 +370,18 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team, 
 				"bound_service_account_names=broad-pat-rotator",
 				"bound_service_account_namespaces=llz-pat-rotator",
 				"policies=broad-pat-rotator", "ttl=15m"}},
+		// Kubernetes auth role for the OpenBao backup CronJob — binds the
+		// openbao-backup ServiceAccount in its own llz-openbao-backup namespace (the
+		// only workload there) to the openbao-backup policy. Its own namespace and
+		// role, not a lane on the reconciler: the reconciler's role would otherwise
+		// carry a full copy of the store alongside everything else it holds, and a
+		// CronJob is what the restore drill can trigger on demand. Harmless when the
+		// component is disabled (the SA/namespace never exist).
+		{desc: "write kubernetes auth role openbao-backup", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/openbao-backup",
+				"bound_service_account_names=" + baosnap.ServiceAccount,
+				"bound_service_account_namespaces=" + baosnap.Namespace,
+				"policies=openbao-backup", "ttl=15m"}},
 		// NOTE: an OpenBao kubernetes-auth role for a day-2 Argo Workflows SA will be
 		// added HERE when the first rotation-style day-2 Argo job lands — bound to
 		// THAT job's own SA + namespace with a scoped write policy (the same shape as

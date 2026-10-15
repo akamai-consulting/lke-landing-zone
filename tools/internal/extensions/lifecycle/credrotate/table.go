@@ -25,8 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baosnap"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/capability"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
@@ -86,6 +88,7 @@ type CredEntry struct {
 // the actual bucket names, NOT the key label (an earlier revision minted against
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
 func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
+	backupBucket := clusterspec.ObjOpenBaoBackupBucket(prefix, region)
 	return []CredEntry{
 		// THE TWO PER-APP OBJ KEYS ARE GONE, and the broad one below is what
 		// replaced them. loki-object-store and harbor-registry-s3 minted read_write
@@ -119,6 +122,36 @@ func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
 			Permissions: "read_write",
 			BaoPath:     "secret/obj/platform", PresentField: "AWS_ACCESS_KEY_ID",
 			Fields: func(access, secret string) map[string]string { return objPlatformFields(access, secret) },
+		},
+		{
+			// The OpenBao BACKUP key — read_write on the openbao-backup bucket and
+			// nothing else. Its one consumer is the openbaoBackup CronJob (`llz ci
+			// openbao-backup`), which reads it straight from OpenBao under its own
+			// k8s-auth role at the start of every run; no ExternalSecret projects it,
+			// so it never sits in a Kubernetes Secret.
+			//
+			// A SEPARATE KEY, NOT A FIFTH BUCKET ON obj-platform. That key is handed to
+			// apl-core's Loki and Harbor; scoping it to the snapshot bucket too would let
+			// any of them — or anyone holding obj-secrets — delete every OpenBao backup.
+			// Linode keys are scoped per bucket and per read_only/read_write, never per
+			// verb, so a dedicated bucket + key is the narrowest grant the platform can
+			// express.
+			//
+			// BUCKET and ENDPOINT ride in the secret beside the key. The CronJob has no
+			// instance repo to derive them from, and putting them here means the one
+			// write that rotates the key also restates where it points — there is no
+			// per-env manifest patch to drift from the bucket the key is scoped to.
+			Name: "openbao-backup", Kind: CredKindObjKey, Label: prefix + "-openbao-backup-" + region,
+			ObjCluster:  objCluster,
+			Buckets:     []string{backupBucket},
+			Permissions: "read_write",
+			BaoPath:     baosnap.KeyPath, PresentField: "AWS_ACCESS_KEY_ID",
+			Fields: func(access, secret string) map[string]string {
+				return map[string]string{
+					"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret,
+					"BUCKET": backupBucket, "ENDPOINT": clusterspec.ObjEndpointHost(objCluster),
+				}
+			},
 		},
 	}
 }

@@ -77,6 +77,10 @@ var defaultScrapeRuleGroups = []string{
 	"support-plane-alerts",
 	"openbao-alerts",
 	"llz-reconciler",
+	// The OpenBao backup staleness alerts. Default-on like llz-reconciler, and
+	// the same shape of risk as that entry: a rule group that never loads is a
+	// stopped backup nobody is told about.
+	"llz-openbao-backup",
 }
 
 // activeTarget is the subset of a /api/v1/targets active target the gate reads.

@@ -301,7 +301,7 @@ var ReservedOpenBaoPolicies = map[string]bool{
 	"root": true, "default": true, OpenBaoManifestPolicy: true,
 	"platform-ci": true, "secret-propagator": true, "eso-pusher": true,
 	"linode-rotator": true, "harbor-provisioner": true, "reconciler-read": true,
-	"broad-pat-rotator": true,
+	"broad-pat-rotator": true, "openbao-backup": true,
 }
 
 // OpenBaoManifestPolicy is the deny-only policy whose comment lines record what
@@ -318,7 +318,7 @@ func ValidExtensionName(n string) bool { return extNameRe.MatchString(n) }
 // writes itself. Drift-checked the same way.
 var ReservedOpenBaoKubernetesRoles = map[string]bool{
 	"eso": true, "eso-pusher": true, "harbor-provisioner": true,
-	"reconciler": true, "broad-pat-rotator": true,
+	"reconciler": true, "broad-pat-rotator": true, "openbao-backup": true,
 }
 
 var (

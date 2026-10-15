@@ -166,6 +166,7 @@ var AllowedNames = map[string]KindRule{
 	"cert-manager.io/Certificate/llz-reconciler-serving-ca":           {reason: "llz-serving-ca anchor (ca.crt only); in-cluster issuer"},
 	"cert-manager.io/Certificate/harbor-robot-provisioner-client-tls": {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
 	"cert-manager.io/Certificate/broad-pat-rotator-client-tls":        {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/openbao-backup-client-tls":           {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
 	"cert-manager.io/Certificate/eso-openbao-client-tls":              {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
 	"cert-manager.io/Certificate/otel-client-ca":                      {reason: "llz-client-ca anchor (ca.crt only); in-cluster issuer"},
 	//

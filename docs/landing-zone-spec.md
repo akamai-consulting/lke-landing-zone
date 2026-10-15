@@ -331,7 +331,9 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
 `cidrFirewall`, `broadPatRotator` (requires `externalSecrets`),
-`llzReconciler` (requires `observability`), `clusterHealthWorkflow`
+`llzReconciler` (requires `observability`), `openbaoBackup` (requires `openbao` +
+`observability`; the scheduled OpenBao Raft snapshot — see
+[runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md)), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
@@ -375,8 +377,13 @@ naming either is a hard spec error.)
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
 image-store PVC, default `20Gi`); `broadPatRotator` takes `broadPATLabel` +
-`broadPATDeployments` (which PAT it rotates and where it propagates — not capacity).
-Those three are the whole set. An unset knob keeps the base default; a knob set
+`broadPATDeployments` (which PAT it rotates and where it propagates — not capacity);
+`openbaoBackup` takes `backupIntervalHours` (the backup CronJob runs every N hours, at
+:23; N must divide 24; default `6`) and `backupKeep` (snapshots retained **per OpenBao
+cluster id**; 1–1000; default `28`). Unlike the four knobs above, the two `openbaoBackup`
+knobs **do** reach the cluster: `llz render` writes them into the carved
+`llz-openbao-backup` app as a CronJob patch, defaults included.
+Those are the whole set. An unset knob keeps the base default; a knob set
 on a component that doesn't read it (or a bad duration/quantity) is a validation
 error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.
 

@@ -40,6 +40,12 @@ func TestInClusterOpenBaoConsumersVerifyTLS(t *testing.T) {
 			bundle:        "platform-apl/components/broadPatRotator/broad-pat-rotator/openbao-ca-bundle.yaml",
 			kustomization: "platform-apl/components/broadPatRotator/broad-pat-rotator/kustomization.yaml",
 		},
+		{
+			name:          "openbao-backup",
+			workload:      "platform-apl/components/openbaoBackup/openbao-backup/cronjob.yaml",
+			bundle:        "platform-apl/components/openbaoBackup/openbao-backup/openbao-ca-bundle.yaml",
+			kustomization: "platform-apl/components/openbaoBackup/openbao-backup/kustomization.yaml",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			workload := readForTLSTest(t, root, c.workload)

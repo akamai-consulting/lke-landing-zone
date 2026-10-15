@@ -12,6 +12,11 @@ output "harbor_registry_bucket" {
   value       = linode_object_storage_bucket.harbor_registry.label
 }
 
+output "openbao_backup_bucket" {
+  description = "OpenBao Raft snapshot bucket label for this region. Written by the openbaoBackup CronJob (llz ci openbao-backup) and read by `llz openbao restore`; neither reads this output — both derive the same label from the instance spec (clusterspec.ObjOpenBaoBackupBucket), and a coupling test holds the two together."
+  value       = linode_object_storage_bucket.openbao_backup.label
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (the full endpoint host, e.g. 'us-ord-10' → E3), which the buckets above are pinned to via endpoint_type — so this host actually serves them, and destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = "https://${var.obj_cluster}.linodeobjects.com"

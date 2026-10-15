@@ -977,6 +977,18 @@ sigv4 signing even though Linode OBJ ignores the value. `s3://bucket/*` matches
 all objects recursively in s5cmd's wildcard semantics. Errors when the bucket is
 already empty are tolerated by the `||` guard.
 
+**The OpenBao backup bucket is not drained here.** The step before it,
+`Guard the OpenBao backup bucket`, runs `llz ci openbao-backup-destroy-guard`. That
+bucket exists to outlive the cluster it backs up, and destroying object-storage is what
+a team does while rebuilding after a loss, so the guard lists every version in it (the
+bucket is versioned; pruned snapshots count) and **refuses the destroy** — before anything
+is drained or deleted — while any remain, unless `drain_data_buckets=true`. With that
+opt-in (plus the `--yes` the step passes) it deletes every version and delete marker and
+re-lists to prove the bucket empty so TF can delete it. A bucket holding only bare delete
+markers is cleared without consent, since nothing recoverable is in it. It fails closed on
+anything it cannot read — an account listing that errors, a key that never becomes usable,
+an unparseable version listing.
+
 The gitea-backup bucket drain was removed alongside the bucket/key/outputs in the
 apl-core anti-pattern cleanup.
 

@@ -282,6 +282,10 @@ type ComponentToggle struct {
 	// matches the CronJob's `strings.Fields(BROAD_PAT_DEPLOYMENTS)` parse (a
 	// scalar so `llz env set` can write it).
 	BroadPATDeployments string `json:"broadPATDeployments,omitempty"` // BROAD_PAT_DEPLOYMENTS (space-separated infra-<d> envs)
+	// openbaoBackup → the backup CronJob's cadence and retention, rendered by
+	// RenderOpenBaoBackupPatch. Unset means the defaults (every 6h, keep 28).
+	BackupIntervalHours *int `json:"backupIntervalHours,omitempty"` // CronJob schedule: every N hours (a divisor of 24)
+	BackupKeep          *int `json:"backupKeep,omitempty"`          // KEEP: snapshots retained PER OpenBao cluster id
 }
 
 // Cluster maps to the three per-env tfvars (cluster, cluster-bootstrap,

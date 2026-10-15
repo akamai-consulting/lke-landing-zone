@@ -659,6 +659,7 @@ var sizingKnobs = map[string][]string{
 	"observability":   {"retention", "storage", "replicas"},
 	"harbor":          {"registryStorage"},
 	"broadPatRotator": {"broadPATLabel", "broadPATDeployments"},
+	"openbaoBackup":   {"backupIntervalHours", "backupKeep"},
 }
 
 // validateComponentSizing rejects sizing knobs set on a component that does not
@@ -688,6 +689,12 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	if t.Replicas != nil {
 		set["replicas"] = ""
 	}
+	if t.BackupIntervalHours != nil {
+		set["backupIntervalHours"] = ""
+	}
+	if t.BackupKeep != nil {
+		set["backupKeep"] = ""
+	}
 	for knob := range set {
 		if !allowed[knob] {
 			errs = append(errs, fmt.Errorf("environments.%s.components.%s: %s is not a valid setting for this component (it reads: %s)", env, name, knob, knobList(name)))
@@ -695,6 +702,13 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	}
 	if t.Replicas != nil && *t.Replicas < 1 {
 		errs = append(errs, fmt.Errorf("environments.%s.components.%s.replicas must be >= 1", env, name))
+	}
+	if t.BackupIntervalHours != nil && !OpenBaoBackupIntervalValid(*t.BackupIntervalHours) {
+		errs = append(errs, fmt.Errorf("environments.%s.components.%s.backupIntervalHours %d must divide a day evenly (1, 2, 3, 4, 6, 8, 12 or 24): "+
+			"the schedule is `*/N` hours, which is only a regular interval for a divisor of 24 — and the staleness alert assumes one", env, name, *t.BackupIntervalHours))
+	}
+	if t.BackupKeep != nil && (*t.BackupKeep < 1 || *t.BackupKeep > OpenBaoBackupMaxKeep) {
+		errs = append(errs, fmt.Errorf("environments.%s.components.%s.backupKeep %d must be between 1 and %d", env, name, *t.BackupKeep, OpenBaoBackupMaxKeep))
 	}
 	if t.Retention != "" && !durationRe.MatchString(t.Retention) {
 		errs = append(errs, fmt.Errorf("environments.%s.components.%s.retention %q is not a duration (e.g. 7d, 720h)", env, name, t.Retention))
