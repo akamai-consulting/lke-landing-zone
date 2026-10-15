@@ -266,7 +266,7 @@ lives in the command rather than in workflow YAML.
 Runs daily. It replaces the former per-provider probe jobs (the Linode
 `cred-audit` and `gh-pat-expiry-health`) with a cluster-as-source-of-truth flow
 sharing one kubeconfig, and then builds the auditor evidence pack from what that
-flow — and the Wiz enrollment gate — just proved.
+flow just proved.
 
 It runs per-region because Linode PATs are per-env while GitHub PATs are
 instance-wide, so each cluster's reconciler exposes that region's view. It
@@ -297,35 +297,33 @@ per-provider probes used to mask: they would happily report "no findings" while
 the thing that produces findings was dead. `--summary` writes the verdict table
 to the job summary (see `llz ci alert-eval`).
 
-### Step: Assert Wiz enrollment
-
-`llz ci assert-wiz-enrollment --region <env>` — the scheduled half of the
-assert-suite `wiz-enrollment` lane, which release-e2e can only ever report as
-SKIPPED (it has no Wiz tenant). A deployment without `spec.components.wiz` skips
-loudly; one with it enabled fails unless the credential reached the cluster, the
-Wiz API registered the connector, and the broker tunnel is Ready. This is the run
-that catches an enrolled cluster dropping off Wiz months later — a rotated or
-revoked service account, blocked egress — which no Argo status shows.
-
-It publishes its verdict as the step output `result` (`pass` / `fail` /
-`skipped`), because a skip exits 0 exactly like a pass.
-
 ### Step: Build the compliance evidence pack
 
-`llz ci cis-evidence` assembles the pack for `docs/infosec/control-mapping.md`:
-the trivy `ClusterComplianceReport`s (when the `complianceReports` component is
-emitted), NetworkPolicy / restricted-PSS / StorageClass-encryption signals, the
-pre-filled org checklist answers, and the outcomes of this job's gates
-(`--gate <verb>=<outcome>`; a gate whose step did not run is recorded as
-skipped, never pass). The JSON, Markdown and sha256 sidecar upload as the
-`cis-evidence-<env>` artifact (90-day retention).
+`llz ci cis-evidence --strict` assembles the pack for
+`docs/infosec/control-mapping.md`: the trivy-operator compliance-scanner switch
+and apl-core's `ClusterComplianceReport`s, NetworkPolicy / restricted-PSS /
+StorageClass-encryption signals, the instance's answered checklist
+(`infosec/questionnaire.yaml`), and the outcomes of this job's gates
+(`--gate <verb>=<outcome>` for `token-inventory`, `assert-rotation-health` and
+`alert-eval` — exactly the gates the shipped example questionnaire cites; a gate
+whose step did not run is recorded as skipped, never pass). The JSON, Markdown and
+sha256 sidecar upload as the `cis-evidence-<env>` artifact (90-day retention).
 
-`continue-on-error: true`, deliberately: the pack is a report. Every gate it
-records already fails the job on its own step, and a failing CIS control is a
-finding for the auditor to read, not a broken pipeline. The sha256 sidecar stands
-in for a cosign attestation, which would need `id-token: write` on the caller
-stub — an instance that wants a signed bundle adds that permission and signs the
-artifact in its own step.
+It fails closed: a report with no `status.updateTimestamp`, 0 pass / 0 fail, or
+older than a day is NOT_COLLECTED, and the whole pack is NOT_COLLECTED while the
+compliance scanner is off — which `--strict` turns into a failed step. On managed
+App Platform that is the expected state today: apl-core runs trivy-operator with
+`clusterComplianceEnabled: false`, and LLZ's `_rawValues` channel does not reach
+that release (control-mapping.md, Section B explains why). So this step is red
+until the scanner is on.
+
+`continue-on-error: true`, deliberately: every gate the pack records already fails
+the job on its own step, and the red step plus the artifact are the record. An
+invalid questionnaire writes no pack, and the upload's `if-no-files-found: error`
+then fails the job — that is a config error to fix (`llz ci cis-evidence
+--check-questionnaire`). The sha256 sidecar stands in for a cosign attestation,
+which would need `id-token: write` on the caller stub — an instance that wants a
+signed bundle adds that permission and signs the artifact in its own step.
 
 ---
 

@@ -147,7 +147,7 @@ spec:
       # keyRotationDays: DEPRECATED/ignored — rotation is owned by the
       # in-cluster linodeCredRotator CronJob (obj_key_rotation_days was removed).
   # components omitted → all default-enabled except gitea, cidrFirewall,
-  # broadPatRotator, objProxy, wiz, clusterHealthWorkflow (see "Component defaults")
+  # broadPatRotator, objProxy, clusterHealthWorkflow (see "Component defaults")
 ```
 
 ```yaml
@@ -197,7 +197,7 @@ spec:
 ## Minimal example
 
 The smallest valid spec — components default to all-on except `gitea`,
-`cidrFirewall`, `broadPatRotator`, `objProxy`, `wiz`, and `clusterHealthWorkflow`:
+`cidrFirewall`, `broadPatRotator`, `objProxy`, and `clusterHealthWorkflow`:
 
 ```yaml
 # landingzone.yaml
@@ -321,7 +321,7 @@ enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
 adds the loki ExternalSecret + alert rules.
 
 Omit the `components:` block and every component is enabled except `gitea`,
-`cidrFirewall`, `broadPatRotator`, `objProxy`, `wiz`, and `clusterHealthWorkflow`. A partial
+`cidrFirewall`, `broadPatRotator`, `objProxy`, and `clusterHealthWorkflow`. A partial
 block changes only the components you name — an explicit `enabled: false` sticks;
 unmentioned components default on. `enabled` is tri-state: omitting it (a tune-only
 toggle, see below) inherits the default rather than reading as a disable. The set:
@@ -329,12 +329,9 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `certManagerBootstrapCA`, `imageSignature`,
 `openbao` (requires `externalSecrets` + `certManagerBootstrapCA`),
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
-`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy),
-`complianceReports` (the trivy CIS + org-control ClusterComplianceReports the
-evidence pack harvests; emitted only when `trivy` is in `managedApps`), `gitea`,
+`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
 `cidrFirewall`, `broadPatRotator` (requires `externalSecrets`), `objProxy`
-(requires `externalSecrets`), `wiz` (Wiz CSPM enrollment; requires
-`externalSecrets`),
+(requires `externalSecrets`),
 `llzReconciler` (requires `observability`), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.
@@ -379,12 +376,8 @@ naming either is a hard spec error.)
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
 image-store PVC, default `20Gi`); `broadPatRotator` takes `broadPATLabel` +
-`broadPATDeployments` (which PAT it rotates and where it propagates — not capacity);
-`wiz` takes `secretPath` — the OpenBao path holding the Wiz service-account
-`clientId` + `clientToken`, required when enabled and validated to sit under a
-declared `spec.teams[].openbaoSubtree` (the only non-platform paths the ESO identity
-can read). Those four are the whole set; the Wiz enrollment walkthrough is in
-[control-mapping.md](infosec/control-mapping.md#enrolling-a-cluster-in-cspm-sog-5). An unset knob keeps the base default; a knob set
+`broadPATDeployments` (which PAT it rotates and where it propagates — not capacity).
+Those three are the whole set. An unset knob keeps the base default; a knob set
 on a component that doesn't read it (or a bad duration/quantity) is a validation
 error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.
 

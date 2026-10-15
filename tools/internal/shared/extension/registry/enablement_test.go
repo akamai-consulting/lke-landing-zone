@@ -154,10 +154,6 @@ func TestComponentLinksArePinned(t *testing.T) {
 		// initialising the store, exchanging peer CAs and seeding into it all
 		// presuppose the store the component installs
 		"openbao": "openbao",
-		// enrollment needs a Wiz tenant and a credential the component's
-		// ExternalSecret delivers; without the component there is nothing to judge,
-		// and the battery must show the lane SKIPPED rather than fail it
-		"assert-wiz": "wiz",
 	}
 	got := ComponentLinks()
 	for name, comp := range want {

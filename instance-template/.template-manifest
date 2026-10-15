@@ -87,6 +87,11 @@ managed  landingzone.yaml.example
 managed  environments/*.yaml.example
 owned    landingzone.yaml
 owned    environments/*.yaml
+# The answered security checklist `llz ci cis-evidence` carries in the evidence
+# pack. The .example is the template's generic starting point (overwritten on
+# update); infosec/questionnaire.yaml — your org's own answers — is yours.
+managed  infosec/*.yaml.example
+owned    infosec/questionnaire.yaml
 # Operational tooling is NOT classified here: it's template-INTERNAL and not
 # delivered to instances (unlike .github/actions above, which IS vendored now).
 # The former instance-scripts/ were assimilated into the llz CLI, which is baked

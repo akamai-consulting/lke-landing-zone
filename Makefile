@@ -94,7 +94,6 @@ COVERAGE_MINS := \
 	internal/extensions/assertions/assertplatform=53 \
 	internal/extensions/assertions/assertreconciler=82 \
 	internal/extensions/assertions/assertregistry=62 \
-	internal/extensions/assertions/assertwiz=73 \
 	internal/extensions/assertions/evidencepack=86 \
 	internal/extensions/lifecycle/atrest=89 \
 	internal/shared/clusterspec=88 \

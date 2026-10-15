@@ -6,7 +6,7 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 
 // Extension is the `cis-evidence` declaration.
 //
-//	assertion:operating "cis-evidence" [cluster-read]
+//	assertion:operating "cis-evidence" [cluster-read, read-repo]
 //
 // OPERATING, NOT VERIFIED. The pack is a scheduled report over a cluster that has
 // been running for months — the evidence an auditor signs is about the cluster as
@@ -14,19 +14,23 @@ import "github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/exte
 // OUTPUT is the deliverable, and the gates whose outcomes it records already have
 // their own lanes.
 //
-// cluster-read only: it lists ClusterComplianceReports, NetworkPolicies,
-// Namespaces and StorageClasses. It never reads a Secret — the gate outcomes it
+// cluster-read: it lists ClusterComplianceReports, NetworkPolicies, Namespaces
+// and StorageClasses, and reads trivy-operator's config ConfigMap for the
+// compliance-scanner switch. It never reads a Secret — the gate outcomes it
 // records arrive as flags from the steps that ran those gates.
+//
+// read-repo: the answered checklist is instance DATA (infosec/questionnaire.yaml
+// by default), read through the fenced repo handle rather than compiled in.
 func Extension() extension.Extension {
 	return extension.Extension{
 		Name:   "cis-evidence",
-		Short:  "harvest compliance evidence and the answered org checklist into an auditor evidence pack",
+		Short:  "harvest compliance evidence and the instance's answered checklist into an auditor evidence pack",
 		Always: true,
 		Bindings: []extension.Binding{{
 			Kind:   extension.Assertion,
 			Name:   "cis-evidence",
 			State:  extension.Operating,
-			Grants: []extension.Grant{extension.ClusterRead},
+			Grants: []extension.Grant{extension.ClusterRead, extension.ReadRepo},
 		}},
 	}
 }

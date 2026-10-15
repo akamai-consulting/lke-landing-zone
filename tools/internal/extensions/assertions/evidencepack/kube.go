@@ -72,3 +72,29 @@ func DefaultStorageClassEncrypted(raw []byte) (*bool, error) {
 	}
 	return nil, nil
 }
+
+// ComplianceScannerState reads trivy-operator's `trivy-operator-config`
+// ConfigMap (`kubectl get configmap -o json`) and reports whether its
+// cluster-compliance scanner is on. Only the literal "true" is enabled: apl-core
+// renders the value from operator.clusterComplianceEnabled, and an absent or
+// unparseable key is not evidence that anything is being scored.
+func ComplianceScannerState(raw []byte) (string, error) {
+	var doc struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return ScannerNotCollected, fmt.Errorf("parse trivy-operator config: %w", err)
+	}
+	if doc.Data[complianceEnabledKey] == "true" {
+		return ScannerEnabled, nil
+	}
+	return ScannerDisabled, nil
+}
+
+// trivy-operator's config ConfigMap and the key apl-core sets to "false"
+// (values/trivy-operator/trivy-operator.gotmpl: operator.clusterComplianceEnabled).
+const (
+	trivyOperatorNamespace = "trivy-operator"
+	trivyOperatorConfigMap = "trivy-operator-config"
+	complianceEnabledKey   = "OPERATOR_CLUSTER_COMPLIANCE_ENABLED"
+)

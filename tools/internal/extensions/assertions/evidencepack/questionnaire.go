@@ -1,149 +1,202 @@
 package evidencepack
 
-// questionnaire.go — the pre-filled answers to the org security checklist (the
-// SOG table in docs/infosec/linode-account-request-checklist.md, Step 5), split
-// by WHO satisfies each requirement:
+// questionnaire.go — the answered org security checklist, as INSTANCE DATA.
 //
-//   - LLZ provides   — enforced by a module/chart/policy/gate in this template, on
-//     every instance, with no adopter action;
-//   - Instance configures — a spec/tfvars/secret value the instance must set for
-//     the control to hold;
-//   - Adopter process — organizational: tickets, tenancy, training, account
-//     settings no template can reach.
+// WHY IT IS A FILE, NOT CODE. Every org has its own checklist: its own row
+// numbering, its own intake process, its own CSPM vendor, its own training and
+// attribution rules. Compiled into `llz`, one org's answers would ship in every
+// adopter's evidence pack. So the engine (harvest, gate-outcome recording, the
+// sha256 sidecar) stays here and the answers live in the instance repo, at
+// DefaultQuestionnairePath unless --questionnaire says otherwise. The template
+// ships a generic, org-neutral starting point
+// (instance-template/infosec/questionnaire.yaml.example); docs/infosec/
+// control-mapping.md documents the format.
 //
-// It is DATA, rendered into every evidence pack (so the answers travel with the
-// signed evidence) and mirrored in docs/infosec/control-mapping.md. The two are
-// held together by tests rather than by hope: every Ref must exist in the repo,
-// every Gate must be a real `llz ci` verb (internal/cli), the doc's Section A
-// must cite every Ref of its row, and each "hardcoded" claim below is pinned to
-// the shipped file it describes (claims_test.go). An answer that drifts from the
-// code fails at PR time instead of in front of an auditor.
+// SCHEMA-VALIDATED, FAIL CLOSED. The file is strict-decoded (an unknown or
+// misspelled key is an error, not a silently dropped answer) and then validated
+// (ValidateQuestionnaire): a known apiVersion/kind, at least one requirement,
+// unique positive row numbers, a title on every row, at least one party that
+// satisfies it, and well-formed refs/gates. A questionnaire that does not
+// validate stops the pack — an evidence bundle that quietly omitted half the
+// answers would be worse than none. An ABSENT file is not an error: the pack is
+// still built and says, in the pack, that no questionnaire was provided.
 //
-// GAPS ARE ANSWERS TOO. Where LLZ falls short of the requirement as written, the
-// row says so (Gap) instead of rounding up: an approval granted on an overstated
-// answer is worse than a known exception.
+// Each row splits the requirement by WHO satisfies it:
+//
+//   - llz      — enforced by the template on every instance, no adopter action;
+//   - instance — a spec/tfvars/secret value the instance must set;
+//   - adopter  — organizational process no template can reach;
+//   - gap      — a known shortfall against the requirement as written. Gaps are
+//     answers too: an approval granted on an overstated answer is worse than a
+//     recorded exception.
+//
+// `gates` names `llz ci` verbs whose outcome the pack RECORDS for that row when
+// the scheduled job passes it with --gate. A cited gate with no recorded outcome
+// renders "not run" — never passed — so cite only gates the job that builds the
+// pack actually runs, and name build/bootstrap-time gates in the prose instead.
 
-// Requirement is one row of the org checklist, answered.
+import (
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"sigs.k8s.io/yaml"
+)
+
+// Questionnaire file identity.
+const (
+	QuestionnaireAPIVersion = "llz.akamai-consulting.io/v1alpha1"
+	QuestionnaireKind       = "EvidenceQuestionnaire"
+	// DefaultQuestionnairePath is where the scheduled job looks, relative to the
+	// instance checkout.
+	DefaultQuestionnairePath = "infosec/questionnaire.yaml"
+)
+
+// Questionnaire is one instance's answered checklist.
+type Questionnaire struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   QuestionnaireMetadata `json:"metadata"`
+	// Requirements are the answered rows, in checklist order.
+	Requirements []Requirement `json:"requirements"`
+}
+
+// QuestionnaireMetadata identifies the checklist being answered.
+type QuestionnaireMetadata struct {
+	// Name identifies the questionnaire (lowercase kebab).
+	Name string `json:"name"`
+	// Source names the checklist the rows answer, as the approver knows it.
+	Source string `json:"source,omitempty"`
+}
+
+// Requirement is one row of the checklist, answered.
 type Requirement struct {
 	Num   int    `json:"num"`
 	Title string `json:"title"`
 	// LLZ is what the template enforces by default ("" = nothing).
-	LLZ string `json:"llz_provides,omitempty"`
+	LLZ string `json:"llz,omitempty"`
 	// Instance is what the instance must configure ("" = nothing).
-	Instance string `json:"instance_configures,omitempty"`
+	Instance string `json:"instance,omitempty"`
 	// Adopter is the organizational process that remains ("" = none).
-	Adopter string `json:"adopter_process,omitempty"`
+	Adopter string `json:"adopter,omitempty"`
 	// Gap is a known shortfall against the requirement as written ("" = none).
 	Gap string `json:"gap,omitempty"`
-	// Refs are repo-relative paths implementing or documenting the control.
+	// Refs are paths (template- or instance-relative) implementing or documenting
+	// the control. Free text to the engine; the template's own example is checked
+	// against the template tree by its tests.
 	Refs []string `json:"refs,omitempty"`
-	// Gates are the `llz ci` verbs whose outcome is evidence for this row; when the
-	// pack is built with --gate <verb>=<result>, the row shows it.
+	// Gates are `llz ci` verbs whose recorded outcome is evidence for this row.
 	Gates []string `json:"gates,omitempty"`
 }
 
-// Questionnaire is the answered checklist, in checklist order.
-var Questionnaire = []Requirement{
-	{
-		Num: 1, Title: "Approved account type",
-		Adopter: "Request a Production account and obtain InfoSec approval through the org intake.",
-		Refs:    []string{"docs/infosec/linode-account-request-checklist.md"},
-	},
-	{
-		Num: 2, Title: "Required account tags applied",
-		LLZ:      "Every tag in spec.cluster.tags is stamped onto the LKE cluster, its node pool and the node Cloud Firewall.",
-		Instance: "Set spec.cluster.tags to the org's ownership / production / data-classification tags.",
-		Adopter:  "Apply the account-level tags in Cloud Manager (LLZ manages resources, not the account).",
-		Gap:      "No validator requires any tag; an empty tags list passes.",
-		Refs:     []string{"terraform-modules/llz-cluster/variables.tf", "tools/internal/shared/tfroots/roots/cluster/main.tf"},
-	},
-	{
-		Num: 3, Title: "Cloud Firewall with default DROP",
-		LLZ:     "The node Cloud Firewall is created with inbound_policy DROP (hardcoded, not a variable) and attached to the node pool; inbound rules are scoped to the VPC subnet, the LKE control-plane range and the NodeBalancer range.",
-		Adopter: "Operator ingress (bastion SSH / HTTPS) is reconciled by the org's firewall controller from the org firewall template.",
-		Gap:     "The baseline allows ICMP from 0.0.0.0/0 and ::/0; the checklist asks for no 0.0.0.0/0 rules and ICMP from org ranges only. Record an exception or narrow the rule.",
-		Refs:    []string{"terraform-modules/llz-cluster/firewall.tf"},
-	},
-	{
-		Num: 4, Title: "Enroll all accounts in CSPM",
-		Adopter: "Enroll each Linode account (dev/test/QA/prod) with the org CSPM team; LLZ enrolls clusters (#5), not accounts.",
-	},
-	{
-		Num: 5, Title: "CSPM agent integrations",
-		LLZ:      "Optional `wiz` component: the upstream Wiz connector, its credential delivered from OpenBao by ExternalSecret, a default-deny namespace, and a gate that fails unless the cluster is actually registered and the broker tunnel is Ready.",
-		Instance: "Enable components.wiz with secretPath under a declared team subtree, and seed clientId + clientToken there.",
-		Adopter:  "Provision the Wiz tenant and a service account for the connector. No standalone VMs exist, so no host agent is needed.",
-		Gap:      "The connector's ClusterRole (upstream) reads every resource, including Secrets.",
-		Refs:     []string{"platform-apl/components/wiz/kustomization.yaml", "platform-apl/components/wiz/wiz/application.yaml"},
-		Gates:    []string{"assert-wiz-enrollment"},
-	},
-	{
-		Num: 6, Title: "Port exposure ticket",
-		LLZ:     "Beyond the VPC and LKE control-plane ranges, the node firewall exposes only the NodePort range, and only to the NodeBalancer range (plus spec apiServerAllowCIDRs when set).",
-		Adopter: "File a port-exposure ticket for each externally reachable port before go-live.",
-		Refs:    []string{"terraform-modules/llz-cluster/firewall.tf"},
-	},
-	{
-		Num: 7, Title: "Managed SSH access for VM SSH",
-		LLZ:  "Not applicable: the landing zone declares no standalone Linode instances, and the node firewall has no TCP/22 rule.",
-		Refs: []string{"terraform-modules/llz-cluster/firewall.tf"},
-	},
-	{
-		Num: 8, Title: "Token/key rotation schedule",
-		LLZ:      "Credential single pane: daily token-inventory measures every CI token's expiry, assert-rotation-health fails any credential past the 90-day SLA, alert-eval reads the credential alerts; scheduled rotation for the lke-admin token, the Linode PAT and the object-storage keys.",
-		Instance: "Provide the credentials as environment secrets; optionally enable broadPatRotator for in-cluster PAT rotation.",
-		Adopter:  "Set and track the CSPM (Wiz) service-account rotation cadence.",
-		Gap:      "The in-cluster SLA is 90 days for all credentials (stricter than the 120-day bucket-key requirement); the 180-day CSPM token is not measured.",
-		Refs:     []string{"instance-template/.github/workflows/llz-scheduled-checks.yml", "instance-template/.github/workflows/llz-secret-rotation.yml", "docs/runbooks/linode-credential-rotation.md"},
-		Gates:    []string{"token-inventory", "assert-rotation-health", "alert-eval"},
-	},
-	{
-		Num: 9, Title: "No sensitive data on Private LAN; secrets encrypted at rest",
-		LLZ:      "Node disks and block volumes are encrypted (disk_encryption, the encrypted default StorageClass), secrets live in OpenBao and reach pods through ESO, Terraform state is encrypted, platform namespaces run default-deny NetworkPolicies.",
-		Instance: "Enable objProxy to encrypt Object Storage (SSE-C); keep workloads on the encrypted StorageClass.",
-		Adopter:  "Classify the data; keep cross-customer PII off the shared private network.",
-		Gap:      "LKE-E's control plane reaches nodes over the shared private range, so the node firewall admits that whole range on the kubelet/DNS/BGP ports rather than individual /32s.",
-		Refs:     []string{"tools/internal/extensions/lifecycle/bootstrapcluster/manifests/block-storage-class.yaml", "kubernetes-charts/llz-cluster-foundation/templates/network-policies.yaml", "platform-apl/components/objProxy/kustomization.yaml"},
-		Gates:    []string{"at-rest-guard", "assert-volume-encryption", "assert-obj-encryption", "assert-network-enforcement"},
-	},
-	{
-		Num: 10, Title: "LKE-Enterprise required",
-		LLZ:   "The cluster is created with tier enterprise (hardcoded); the pinned Kubernetes version is checked against the account's Enterprise catalog before apply.",
-		Refs:  []string{"terraform-modules/llz-cluster/main.tf"},
-		Gates: []string{"assert-k8s-version"},
-	},
-	{
-		Num: 11, Title: "LKE secret rotation runbook",
-		LLZ:     "Rotation runbooks ship with every instance (lke-admin token, Linode credentials) alongside the secrets reference.",
-		Adopter: "Accept or remediate the documented position on the OpenBao seal and recovery keys, which are static by design.",
-		Refs:    []string{"docs/secrets.md", "docs/runbooks/lke-admin-rotation.md", "docs/runbooks/linode-credential-rotation.md"},
-	},
-	{
-		Num: 12, Title: "LKE control-plane IP ACL",
-		LLZ:      "The control-plane ACL is enabled (hardcoded); open-world (/0) entries are refused by the CIDR validator and the readiness scan.",
-		Instance: "Add the CSPM scanner ranges to spec.cluster.apiServerAllowCIDRs.",
-		Adopter:  "Obtain the current scanner ranges from the CSPM team.",
-		Gap:      "apiServerAllowCIDRs also opens the NodePort range on the node firewall to those CIDRs; there is no ACL-only list.",
-		Refs:     []string{"terraform-modules/llz-cluster/main.tf", "tools/internal/shared/validate/validate.go"},
-	},
-	{
-		Num: 13, Title: "LKE disk encryption (LDE)",
-		LLZ:   "Node pools are created with disk_encryption enabled (hardcoded); at-rest-guard fails any node pool or instance without it and does not accept an exemption for it.",
-		Refs:  []string{"tools/internal/shared/tfroots/roots/cluster/main.tf", "tools/internal/extensions/lifecycle/atrest/atrest.go"},
-		Gates: []string{"at-rest-guard"},
-	},
-	{
-		Num: 14, Title: "Account attribution format",
-		Adopter: "Set the account Company Name to the org's attribution format in Cloud Manager.",
-	},
-	{
-		Num: 15, Title: "SSO for org accounts",
-		LLZ:     "In-cluster human access is OIDC through Keycloak (team login to OpenBao).",
-		Adopter: "Cloud Manager access through the org SSO.",
-		Refs:    []string{"docs/runbooks/openbao-team-login.md"},
-	},
-	{
-		Num: 16, Title: "Annual Linode Practitioner Training",
-		Adopter: "Training records for every team member with account access.",
-	},
+var (
+	qNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+	qVerbRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+)
+
+// ParseQuestionnaire strict-decodes and validates a questionnaire file's bytes.
+// knownVerbs, when non-nil, is the set of registered `llz ci` verbs every cited
+// gate must belong to.
+func ParseQuestionnaire(raw []byte, knownVerbs map[string]bool) (*Questionnaire, error) {
+	var q Questionnaire
+	if err := yaml.UnmarshalStrict(raw, &q); err != nil {
+		return nil, fmt.Errorf("questionnaire: %w", err)
+	}
+	if errs := ValidateQuestionnaire(&q, knownVerbs); len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return nil, fmt.Errorf("questionnaire is invalid:\n  - %s", strings.Join(msgs, "\n  - "))
+	}
+	return &q, nil
 }
+
+// LoadQuestionnaire reads path through read. A missing file returns (nil, nil):
+// the pack records that no questionnaire was provided. Any other failure —
+// unreadable, malformed, invalid — is an error.
+func LoadQuestionnaire(read func(string) ([]byte, error), path string, knownVerbs map[string]bool) (*Questionnaire, error) {
+	raw, err := read(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read questionnaire %s: %w", path, err)
+	}
+	q, err := ParseQuestionnaire(raw, knownVerbs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return q, nil
+}
+
+// ValidateQuestionnaire returns every schema violation in q (nil when valid).
+func ValidateQuestionnaire(q *Questionnaire, knownVerbs map[string]bool) []error {
+	var errs []error
+	if q.APIVersion != QuestionnaireAPIVersion {
+		errs = append(errs, fmt.Errorf("apiVersion %q, want %q", q.APIVersion, QuestionnaireAPIVersion))
+	}
+	if q.Kind != QuestionnaireKind {
+		errs = append(errs, fmt.Errorf("kind %q, want %q", q.Kind, QuestionnaireKind))
+	}
+	if !qNameRe.MatchString(q.Metadata.Name) {
+		errs = append(errs, fmt.Errorf("metadata.name %q must be lowercase kebab", q.Metadata.Name))
+	}
+	if len(q.Requirements) == 0 {
+		errs = append(errs, errors.New("requirements is empty — a questionnaire that answers nothing is not evidence"))
+	}
+	seen := map[int]bool{}
+	for i, r := range q.Requirements {
+		at := fmt.Sprintf("requirements[%d]", i)
+		if r.Num <= 0 {
+			errs = append(errs, fmt.Errorf("%s.num %d must be a positive row number", at, r.Num))
+		} else if seen[r.Num] {
+			errs = append(errs, fmt.Errorf("%s.num %d is answered twice", at, r.Num))
+		}
+		seen[r.Num] = true
+		if strings.TrimSpace(r.Title) == "" {
+			errs = append(errs, fmt.Errorf("%s (#%d) has no title", at, r.Num))
+		}
+		if blank(r.LLZ) && blank(r.Instance) && blank(r.Adopter) {
+			errs = append(errs, fmt.Errorf("%s (#%d) says nobody satisfies it — set llz, instance or adopter (and state a gap if that is the honest answer)", at, r.Num))
+		}
+		for _, ref := range r.Refs {
+			if blank(ref) || strings.ContainsAny(ref, "\n|") {
+				errs = append(errs, fmt.Errorf("%s (#%d) ref %q must be a non-empty single-line path", at, r.Num, ref))
+			}
+		}
+		for _, g := range r.Gates {
+			switch {
+			case !qVerbRe.MatchString(g):
+				errs = append(errs, fmt.Errorf("%s (#%d) gate %q must be a bare `llz ci` verb (e.g. assert-rotation-health)", at, r.Num, g))
+			case knownVerbs != nil && !knownVerbs[g]:
+				errs = append(errs, fmt.Errorf("%s (#%d) cites `llz ci %s`, which is not a registered verb", at, r.Num, g))
+			}
+		}
+	}
+	return errs
+}
+
+// CitedGates returns every gate the questionnaire cites, sorted and deduplicated.
+func (q *Questionnaire) CitedGates() []string {
+	if q == nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, r := range q.Requirements {
+		for _, g := range r.Gates {
+			set[g] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for g := range set {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func blank(s string) bool { return strings.TrimSpace(s) == "" }

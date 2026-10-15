@@ -3,7 +3,7 @@
 **Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
 an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
 and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
-**77 extensions across 76 packages** declare **129 bindings** between them. The set is not enumerated
+**76 extensions across 75 packages** declare **128 bindings** between them. The set is not enumerated
 here, because a list beside the code it describes is the hand-maintained second copy this design
 exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
 each declaration's constructor rather than transcribing it.
@@ -25,7 +25,7 @@ after it stopped being true. Three consumers read them today, and only one is di
 | consumer | what it does with a declaration |
 |---|---|
 | `registry/gates.go` | **RUNS** gate bindings — **29 rows**, covering 22 of the 24 extensions that declare one. A row is a *command*, so one extension can contribute several (`guard-manifests` has three). `llz ci gates` drives the whole table; `make llz-gates` is how CI calls it. The two that are not driven are declared undriven **with a reason** in the same file, not omitted |
-| `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 11 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in the cobra tree `internal/cli` builds |
+| `registry/enablement.go` | resolves an instance's enabled set from `spec.components`; 10 extensions name a component they follow. `registry.Commands()` separately pins that every verb an extension exposes is reachable in the cobra tree `internal/cli` builds |
 | `shared/capability` | builds the **handles** a binding's grants entitle it to — `capability.For`, `CloudFor`, `RepoForGate`. The grant IS the handle, so a binding declaring nothing is handed nothing |
 
 **Exactly one of the four kinds dispatches from the registry.** Gates do. Assertions and transitions
@@ -428,18 +428,18 @@ not a measurement**: the grants were assigned in the same pass that invented the
 reported the author's judgement about package `main`, and it "cannot become evidence until extensions
 declare their own grants and the distribution is *observed* rather than assigned".
 
-**That condition has since been met, and the observation disagrees.** 77 extensions now declare their
+**That condition has since been met, and the observation disagrees.** 76 extensions now declare their
 own grants. Measured against the live registry, per extension:
 
 | grant | extensions declaring it |
 |---|---|
-| `read-repo` | **55 / 77** |
-| `cluster-read` | 25 |
+| `read-repo` | **56 / 76** |
+| `cluster-read` | 24 |
 | `cloud-mutate` | 17 |
 | `cloud-read` | 17 |
 | `cluster-write` | 16 |
 | `secret-custody` | 12 |
-| `secret-read` | 10 |
+| `secret-read` | 9 |
 | `write-repo` | 6 |
 | `own-paths` | 1 |
 
@@ -730,7 +730,7 @@ described in the status block above. The catalog sized this at ~45–55 internal
 is now 64, so anything built here is built for dozens. `Always` is a **default**, not a constant:
 `llz ci assert-suite` is called from three places in `instance-template/`, so an instance with no
 object storage must be able to turn `assert-objstore` off in its own configuration rather than by
-taking a different build — `registry.EnabledFor` is what delivers that today, and 11 extensions name
+taking a different build — `registry.EnabledFor` is what delivers that today, and 10 extensions name
 the component they follow. Neither **ordering** (nothing sequences bindings against each other) nor a
 **loader** (every declaration is compiled in; none is read from anywhere) exists, and in both cases
 nothing has yet asked for one — which is why they sit in #399 rather than here.

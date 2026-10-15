@@ -224,13 +224,6 @@ func Lanes(region string) []Lane {
 				"Safe by construction: an e2e-unique label and BROAD_PAT_DEPLOYMENTS=e2e scope mint/revoke to the e2e PAT family only.",
 		},
 		{
-			Name: "wiz-enrollment", Gating: true,
-			Steps: []Step{regionStep("assert-wiz", "assert-wiz-enrollment")},
-			Why: "Wiz CSPM enrollment WORKS: the credential reached the wiz-api-token Secret from OpenBao, the Wiz API accepted the cluster (the registration record the upstream Job writes only on success), and the broker tunnel is Ready. " +
-				"Stays green without it: the llz-wiz Application reads Synced/Healthy through an unseeded path, a 401 from Wiz and a broker that never connects. " +
-				"Follows spec.components.wiz, so a deployment without a Wiz tenant (release-e2e included) shows this lane SKIPPED, not passed.",
-		},
-		{
 			Name: "wave-vap", Gating: true,
 			Steps: []Step{step("assert-network", "assert-wave-health-vap")},
 			Why:   "The llz-wave-health-guard VAP is BOUND and ENFORCING: server-dry-runs a Deployment at sync-wave -5 and requires the guard's own denial.",

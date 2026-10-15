@@ -37,7 +37,7 @@ func (lz *LandingZone) Defaults() {
 			env.Cluster.Bootstrap.ManagedApps = append([]string(nil), DefaultManagedApps...)
 		}
 		// Components default to all-enabled, except the DefaultDisabled ones (gitea,
-		// cidrFirewall, broadPatRotator, objProxy, wiz, clusterHealthWorkflow).
+		// cidrFirewall, broadPatRotator, clusterHealthWorkflow).
 		// A nil/empty map gets the full default set; a partial map only fills in
 		// components the author didn't mention (so an explicit enabled:false sticks).
 		if env.Components == nil {

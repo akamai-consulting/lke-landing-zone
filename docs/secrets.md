@@ -217,7 +217,6 @@ are instead sourced or rotated in-cluster are covered in
 | `secret/<project>/keys`       | `<app_secret>`                | Operator | Operator (drift check via `llz openbao get`) |
 | `secret/<project>/config`     | `<app_config_value>`          | Operator | Operator (drift check via `llz openbao get`) |
 | `secret/<project>/<workload>` | `<workload_private_pem>`      | Operator | Workload pod (via ExternalSecret → K8s Secret mount) |
-| `secret/<team>/wiz/connector` (= `components.wiz.secretPath`) | `clientId`, `clientToken` | Team operator (`llz openbao set … --yes`) | Wiz connector (via the `wiz-api-token` ExternalSecret). Rotate in the Wiz console, re-seed, and the ExternalSecret picks it up within 5 minutes; not measured by the 90-day credential SLA — see [control-mapping.md](infosec/control-mapping.md) SOG #8 |
 
 > **Note:** CI (deploy) reads the application secrets directly from **GitHub Actions
 > environment secrets** (`lab`, `staging`, `production`) — not from OpenBao at deploy

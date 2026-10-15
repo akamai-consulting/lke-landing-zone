@@ -64,7 +64,7 @@ import (
 var componentless = map[string]bool{
 	// No component: the evidence pack is evidence about the WHOLE cluster an
 	// auditor signs off — it must be produced on every instance, and records
-	// whatever optional parts (compliance reports, Wiz) are absent as not
+	// whatever optional parts (compliance reports, the questionnaire) are absent as not
 	// collected / skipped rather than not running at all.
 	"cis-evidence": true,
 	// No component: it judges .template-manifest against the Go sources under

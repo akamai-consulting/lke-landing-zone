@@ -18,7 +18,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertregistry"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsecrets"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertsuite"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/assertwiz"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/configreadiness"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/evidencepack"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/seedspecial"
@@ -384,11 +383,9 @@ func ciCmd() *cobra.Command {
 	// created — the truncation regression left every credential valid and every
 	// push and pull 401ing on a malformed host.
 	c.AddCommand(assertsecrets.RotationHealthCmd(), assertregistry.AssertHarborRoundTripCmd())
-	// assert-wiz-enrollment judges what the Wiz enrollment chain PRODUCED (the
-	// credential, the tenant's registration record, the broker tunnel) — the
-	// Application reads Synced through every one of those breaking. cis-evidence
-	// is the auditor pack: compliance reports, gate outcomes, answered checklist.
-	c.AddCommand(assertwiz.EnrollmentCmd(), evidencepack.CISEvidenceCmd())
+	// cis-evidence is the auditor pack: compliance reports, gate outcomes, and the
+	// instance's answered checklist.
+	c.AddCommand(evidencepack.CISEvidenceCmd())
 	// ── Delivery/health gates found in the post-review functional pass ───────
 	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
 	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks

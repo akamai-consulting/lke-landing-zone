@@ -44,16 +44,7 @@ import (
 // esManualPaths are KV paths intentionally seeded outside of any bootstrap
 // workflow's `bao kv put` steps. Add entries here only after confirming the
 // manual step is documented.
-var esManualPaths = map[string]bool{
-	// The wiz component's BASE placeholder. `llz render` replaces it per env with
-	// components.wiz.secretPath (clusterspec.RenderWizExternalSecretPatch), which
-	// Validate confines to a declared team subtree — so it is operator-seeded
-	// (`llz openbao set secret/<team>/wiz/connector clientId=… clientToken=… --yes`,
-	// documented in platform-apl/components/wiz/wiz/externalsecret.yaml) and its
-	// read is covered by the `<team>-reader` policy, not platform-ci. Neither a
-	// seeder nor a platform-ci stanza can exist for a path the spec chooses.
-	"TEAM_SUBTREE/wiz/connector": true,
-}
+var esManualPaths = map[string]bool{}
 
 // Policy source parsed for literal `path "secret/data/…" { capabilities }`
 // stanzas — the OpenBao read/seed policy HCL lives as Go string constants in

@@ -66,14 +66,14 @@ The requirements below are generic production-security controls (these map to a 
 | 2 | Required account tags applied | Apply your org's ownership/production/data-classification tags |
 | 3 | Cloud Firewall with default DROP | Configure CFW on all Linodes/LKE node pools — no 0.0.0.0/0 rules |
 | 4 | Enroll all accounts in CSPM (Dev/Test/QA/Prod) | Enroll each account with your org's CSPM team |
-| 5 | CSPM agent integrations | Install the CSPM LKE auto-enroll integration on LKE (for Wiz: the optional `wiz` component — see [control-mapping.md](./control-mapping.md#enrolling-a-cluster-in-cspm-sog-5)); install the host agent on any standalone VMs |
+| 5 | CSPM agent integrations | Install the CSPM LKE auto-enroll integration on LKE; install the host agent on any standalone VMs |
 | 6 | Port exposure ticket | File a port-exposure review ticket for each exposed port before go-live |
 | 7 | Managed SSH access for all VM SSH | Enroll any VMs in your org's SSH access gateway; no direct key-only SSH to production VMs |
 | 8 | Token/key rotation schedule | User/service tokens: 90 days; bucket keys: 120 days; CSPM tokens: 180 days |
 | 9 | No sensitive data on Private LAN | Encrypt all secrets at rest; no cross-customer PII on the shared private network (e.g. `192.168.128.0/17`) |
 | 10 | LKE-Enterprise required | Use LKE-Enterprise for production clusters (a hard given for this landing zone) |
 | 11 | LKE secret rotation runbook | Document the process for rotating secrets-manager seal/recovery keys + service credentials (see [docs/secrets.md](../secrets.md)) |
-| 12 | LKE Control Plane IP ACL | Enable IP ACL; whitelist your CSPM scanner IP ranges |
+| 12 | LKE Control Plane IP ACL | Enable IP ACL; allowlist your CSPM scanner IP ranges only if it scans the API server inbound — an outbound connector/broker needs no entry, and every `apiServerAllowCIDRs` entry also opens NodePorts to that range (see [control-mapping.md](./control-mapping.md) #10) |
 | 13 | LKE disk encryption (LDE) | Automated via Terraform — `disk_encryption = "enabled"` is hardcoded on the node pool in the cluster Terraform root and enforced by `llz ci at-rest-guard`; no manual LKE engineering request required |
 | 14 | Account attribution format | Set Company Name: `<org> - <project> - [Workload] Prod` |
 | 15 | SSO for org accounts | All team members must authenticate via your org's Control Center SSO |
@@ -99,9 +99,9 @@ After the account is provisioned and InfoSec approval received:
     --namespace kube-system \
     --set linodeToken=<service-PAT>
   ```
-- [ ] Enable **LKE Control Plane IP ACL** and add your CSPM scanner IP ranges
+- [ ] Enable **LKE Control Plane IP ACL**; add CSPM scanner IP ranges only for an inbound (agentless) scanner — not for an outbound connector
 - [ ] Confirm **LKE disk encryption (LDE)** is enabled — automated by the cluster Terraform root (`disk_encryption = "enabled"`); verify the node pool was created with disk encryption (check `terraform show` or Cloud Manager node pool details)
-- [ ] Install your CSPM **LKE auto-enroll** integration on each cluster (Wiz: enable the `wiz` component per [control-mapping.md](./control-mapping.md#enrolling-a-cluster-in-cspm-sog-5))
+- [ ] Install your CSPM **LKE auto-enroll** Helm chart on each cluster
 
 ### Account & Identity
 - [ ] Set **Company Name** in Cloud Manager → Account → Billing Contact
@@ -122,7 +122,7 @@ After the account is provisioned and InfoSec approval received:
 
 ## Related Docs
 
-- [Control mapping & evidence pack](./control-mapping.md) — this table answered, with the evidence an auditor signs
+- [Control mapping & evidence pack](./control-mapping.md) — answering this table in `infosec/questionnaire.yaml`, and the evidence pack that carries it
 - [Secrets management](../secrets.md) — secret rotation, seal/recovery keys, and service credentials
 - [Adopter guide](../adopter-guide.md) — onboarding a `<project>` onto the landing zone
 - [apl-core migration runbook](../apl-core-migration-runbook.md) — migrating workloads onto apl-core

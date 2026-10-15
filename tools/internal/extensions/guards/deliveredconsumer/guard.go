@@ -114,6 +114,9 @@ var Consumers = map[string]Consumer{
 		"the worked example an operator copies to landingzone.yaml, which LoadInstance then reads"},
 	"environments/*.yaml.example": {ConsumerSymbol, "clusterspec.LoadSplit",
 		"the per-env worked example; LoadSplit assembles environments/*.yaml from the same shape"},
+	"infosec/*.yaml.example": {ConsumerSymbol, "evidencepack.ParseQuestionnaire",
+		"the generic answered checklist an operator copies to infosec/questionnaire.yaml, which `llz ci cis-evidence` " +
+			"strict-parses into every evidence pack; the template's tests parse the example itself"},
 	"docs/**":   {ConsumerHuman, "", "the delivered operator docs — runbooks and playbooks read during an incident"},
 	"README.md": {ConsumerHuman, "", "the instance's front door"},
 	"AGENTS.md": {ConsumerHuman, "", "instructions for agents working in an adopter's checkout"},

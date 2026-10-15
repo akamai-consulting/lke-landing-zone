@@ -438,6 +438,7 @@ jobs:
       # WRITER: measure token expiry, push the llz-token-inventory ConfigMap the
       # reconciler re-exposes as metrics. Only metadata leaves; never a token.
       - name: Write token inventory to the cluster
+        id: tokeninv
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci token-inventory | kubectl apply -f -
 
@@ -506,42 +507,40 @@ jobs:
         continue-on-error: true
         run: llz ci alert-eval --match '^(Loki|Harbor|Grafana|OTel|SupportPlane)' --summary "Support-plane alerts (${REGION})"
 
-      # WIZ CSPM ENROLLMENT (org checklist SOG #5) — the scheduled half of the
-      # assert-suite `wiz-enrollment` lane. Release-e2e has no Wiz tenant, so the
-      # lane is SKIPPED there; this daily run against a real instance is where an
-      # enrolled cluster that silently dropped off Wiz (rotated credential, revoked
-      # service account, blocked egress) actually goes red. Anchored to the spec by
-      # --region: a deployment without the component skips loudly, one with it
-      # enabled but undeployed FAILS. always(): independent of the credential steps.
-      - name: Assert Wiz enrollment
-        id: wiz
-        if: always() && steps.kubeconfig.outputs.available == 'true'
-        run: llz ci assert-wiz-enrollment --region "${REGION}" --settle 60 | tee -a "$GITHUB_STEP_SUMMARY"
-
       # AUDITOR EVIDENCE PACK (docs/infosec/control-mapping.md). Rides this job
       # rather than its own: it records the outcomes of the gates above, and a
       # separate job would open and revoke the shared control-plane ACL a second
       # time for the same cluster. The gates are passed by OUTCOME, so a gate that
-      # never ran reads "skipped" in the pack, never "pass". The Wiz gate's own
-      # `result` output wins over its step outcome because a skip exits 0.
+      # never ran reads "skipped" in the pack, never "pass" — and these three are
+      # exactly the gates the shipped example questionnaire cites (a test holds the
+      # two together, so a cited gate cannot silently read "not run" forever).
+      #
+      # The answers come from infosec/questionnaire.yaml in this checkout (copy
+      # infosec/questionnaire.yaml.example). Absent, the pack says so; present but
+      # invalid, no pack is written and the upload below (if-no-files-found: error)
+      # fails the job — a questionnaire that does not validate is a config error to
+      # fix, not a finding to read. `llz ci cis-evidence --check-questionnaire`
+      # catches it before it lands.
+      #
+      # --strict: a pack whose compliance scan did not happen is NOT_COLLECTED and
+      # fails this step, by design. On managed App Platform that is today's state —
+      # apl-core runs trivy-operator with its cluster-compliance scanner off, and no
+      # LLZ channel reaches that setting — so this step is red until it is turned
+      # on. continue-on-error keeps that from failing the credential job, whose own
+      # gates already fail it on their own steps; the red step and the artifact are
+      # the record that the pack is not compliance evidence.
       #
       # No cosign attestation: keyless signing needs id-token: write, which the
       # caller stub does not grant. The pack carries a sha256 sidecar instead.
-      #
-      # continue-on-error, and that is the honest setting: the pack is a REPORT.
-      # Every gate it records already fails this job on its own step, and a failing
-      # CIS control (a trivy finding against the managed node image, say) is a
-      # finding for the auditor to read in the artifact, not a broken pipeline —
-      # failing the credential job on it would end with the job muted.
       - name: Build the compliance evidence pack
         if: always() && steps.kubeconfig.outputs.available == 'true'
         continue-on-error: true
         env:
           EVIDENCE_OUT_DIR:  ${{ runner.temp }}/evidence
+          GATE_TOKENINV:     ${{ steps.tokeninv.outcome }}
           GATE_FUNNEL:       ${{ steps.funnel.outcome }}
           GATE_CREDALERTS:   ${{ steps.credalerts.outcome }}
-          GATE_WIZ:          ${{ steps.wiz.outputs.result || steps.wiz.outcome }}
-        run: llz ci cis-evidence --cluster "${REGION}" --gate "assert-rotation-health=${GATE_FUNNEL}" --gate "alert-eval=${GATE_CREDALERTS}" --gate "assert-wiz-enrollment=${GATE_WIZ}"
+        run: llz ci cis-evidence --strict --cluster "${REGION}" --gate "token-inventory=${GATE_TOKENINV}" --gate "assert-rotation-health=${GATE_FUNNEL}" --gate "alert-eval=${GATE_CREDALERTS}"
 
       - name: Upload the compliance evidence pack
         if: always() && steps.kubeconfig.outputs.available == 'true'

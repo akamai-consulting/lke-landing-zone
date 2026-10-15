@@ -282,13 +282,6 @@ type ComponentToggle struct {
 	// matches the CronJob's `strings.Fields(BROAD_PAT_DEPLOYMENTS)` parse (a
 	// scalar so `llz env set` can write it).
 	BroadPATDeployments string `json:"broadPATDeployments,omitempty"` // BROAD_PAT_DEPLOYMENTS (space-separated infra-<d> envs)
-	// wiz → the OpenBao KV path the `wiz-api-token` ExternalSecret reads the Wiz
-	// service-account credential from (clientId + clientToken), in the bao CLI's
-	// absolute form, e.g. "secret/<team>/wiz/connector". Rendered by
-	// RenderWizExternalSecretPatch. Required when the component is enabled, and it
-	// must sit under a declared spec.teams[].openbaoSubtree: those are the only
-	// non-platform paths the ESO identity can read (Validate enforces both).
-	SecretPath string `json:"secretPath,omitempty"`
 }
 
 // Cluster maps to the three per-env tfvars (cluster, cluster-bootstrap,

@@ -603,11 +603,6 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		content["obj-proxy-env-patch.yaml"] = clusterspec.RenderObjProxyEnvPatch(oc)
 		content["obj-proxy-cert-patch.yaml"] = clusterspec.RenderObjProxyCertPatch(oc)
 		content["obj-proxy-dns-patch.yaml"] = clusterspec.RenderObjProxyDNSPatch(oc)
-	case "wiz":
-		// Where the credential lives (Validate guarantees secretPath is set and
-		// under a team subtree) and the name the cluster enrolls under.
-		content["wiz-externalsecret-patch.yaml"] = clusterspec.RenderWizExternalSecretPatch(e.Components[c.Name].SecretPath)
-		content["wiz-application-patch.yaml"] = clusterspec.RenderWizApplicationPatch(env)
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds) +
 		// OBJ_LABEL_PREFIX (the instance's bucket/key namespace — the in-cluster

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseComplianceReport_SummaryAndControls(t *testing.T) {
@@ -29,6 +30,7 @@ func TestParseComplianceReport_SummaryAndControls(t *testing.T) {
 	if rep.PassCount != 40 || rep.FailCount != 3 {
 		t.Errorf("counts: got pass=%d fail=%d, want 40/3", rep.PassCount, rep.FailCount)
 	}
+	EvaluateReport(&rep, time.Now(), time.Hour)
 	if rep.Result() != ResultFail {
 		t.Errorf("result: got %q, want FAIL", rep.Result())
 	}
@@ -44,13 +46,13 @@ func TestParseComplianceReport_SummaryAndControls(t *testing.T) {
 func TestParseComplianceReport_DetailFallback(t *testing.T) {
 	// No summary/summaryReport — must derive from detailReport.results[].
 	raw := []byte(`{
-      "metadata": {"name": "llz-org-controls"},
-      "spec": {"compliance": {"id": "llz-org-controls", "title": "Org"}},
+      "metadata": {"name": "k8s-pss-restricted-0.1"},
+      "spec": {"compliance": {"id": "k8s-pss-restricted-0.1", "title": "PSS restricted"}},
       "status": {
         "detailReport": {"results": [
-          {"id": "SOG-9-PSS", "name": "PSS", "severity": "HIGH", "status": "FAIL",
+          {"id": "XYZ-1", "name": "PSS", "severity": "HIGH", "status": "FAIL",
            "checks": [{"success": true}, {"success": false}, {"success": false}]},
-          {"id": "SOG-RBAC", "name": "RBAC", "severity": "HIGH", "status": "PASS",
+          {"id": "XYZ-2", "name": "RBAC", "severity": "HIGH", "status": "PASS",
            "checks": [{"success": true}]}
         ]}
       }
@@ -62,7 +64,7 @@ func TestParseComplianceReport_DetailFallback(t *testing.T) {
 	if rep.PassCount != 1 || rep.FailCount != 1 {
 		t.Errorf("derived counts: got pass=%d fail=%d, want 1/1", rep.PassCount, rep.FailCount)
 	}
-	if len(rep.FailingControls) != 1 || rep.FailingControls[0].ID != "SOG-9-PSS" {
+	if len(rep.FailingControls) != 1 || rep.FailingControls[0].ID != "XYZ-1" {
 		t.Fatalf("failing controls: %+v", rep.FailingControls)
 	}
 	if rep.FailingControls[0].FailCount != 2 {
@@ -72,11 +74,15 @@ func TestParseComplianceReport_DetailFallback(t *testing.T) {
 
 func TestParseComplianceReport_AllPass(t *testing.T) {
 	raw := []byte(`{"metadata":{"name":"cis"},"spec":{"compliance":{"id":"k8s-cis"}},
-      "status":{"summary":{"passCount":50,"failCount":0}}}`)
+      "status":{"updateTimestamp":"2023-11-14T22:00:00Z","summary":{"passCount":50,"failCount":0}}}`)
 	rep, err := ParseComplianceReport(raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	if rep.UpdatedAt != "2023-11-14T22:00:00Z" {
+		t.Errorf("updateTimestamp not read: %q", rep.UpdatedAt)
+	}
+	EvaluateReport(&rep, time.Date(2023, 11, 15, 0, 0, 0, 0, time.UTC), DefaultMaxReportAge)
 	if rep.Result() != ResultPass {
 		t.Errorf("result: got %q, want PASS", rep.Result())
 	}
@@ -91,9 +97,47 @@ func TestParseComplianceReport_BadJSON(t *testing.T) {
 	}
 }
 
+var t0 = time.Date(2023, 11, 15, 0, 0, 0, 0, time.UTC)
+
+// THE HOLLOW-REPORT CASES. Each of these is a ClusterComplianceReport object that
+// exists in the cluster and scored nothing — apl-core ships them with the
+// compliance scanner off — and each must read NOT_COLLECTED, never PASS.
+func TestEvaluateReportFailsClosed(t *testing.T) {
+	fresh := t0.Add(-time.Hour).Format(time.RFC3339)
+	cases := []struct {
+		name string
+		r    ComplianceReport
+		want string
+		why  string
+	}{
+		{"never reconciled (no updateTimestamp)", ComplianceReport{Name: "k8s-cis-1.23"}, ResultNotCollected, "never reconciled"},
+		{"0 pass / 0 fail", ComplianceReport{Name: "k8s-cis-1.23", UpdatedAt: fresh}, ResultNotCollected, "scored nothing"},
+		{"stale", ComplianceReport{Name: "k8s-cis-1.23", PassCount: 40, UpdatedAt: t0.Add(-48 * time.Hour).Format(time.RFC3339)}, ResultNotCollected, "stale"},
+		{"garbled timestamp", ComplianceReport{Name: "k8s-cis-1.23", PassCount: 40, UpdatedAt: "yesterday"}, ResultNotCollected, "RFC 3339"},
+		{"fresh and scored", ComplianceReport{Name: "k8s-cis-1.23", PassCount: 40, UpdatedAt: fresh}, ResultPass, ""},
+		// A failure is never laundered by staleness or a missing timestamp.
+		{"stale failure", ComplianceReport{Name: "k8s-cis-1.23", FailCount: 2, UpdatedAt: t0.Add(-48 * time.Hour).Format(time.RFC3339)}, ResultFail, ""},
+		{"failure without timestamp", ComplianceReport{Name: "k8s-cis-1.23", FailCount: 2}, ResultFail, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.r
+			EvaluateReport(&r, t0, DefaultMaxReportAge)
+			if r.Result() != tc.want || !strings.Contains(r.Reason, tc.why) {
+				t.Errorf("got %s (%q), want %s (%q)", r.Result(), r.Reason, tc.want, tc.why)
+			}
+		})
+	}
+	if (ComplianceReport{}).Result() != ResultNotCollected {
+		t.Error("an unevaluated report must read NOT_COLLECTED")
+	}
+}
+
 func TestBuildPack_Result(t *testing.T) {
-	pass := ComplianceReport{Name: "cis", PassCount: 10}
-	fail := ComplianceReport{Name: "cis", FailCount: 1}
+	pass := ComplianceReport{Name: "k8s-cis-1.23", PassCount: 10, Status: ResultPass}
+	fail := ComplianceReport{Name: "k8s-cis-1.23", FailCount: 1, Status: ResultFail}
+	hollow := MissingReport("k8s-nsa-1.0", "never reconciled")
+	on, off := ScannerEnabled, ScannerDisabled
 
 	tests := []struct {
 		name string
@@ -101,14 +145,19 @@ func TestBuildPack_Result(t *testing.T) {
 		want string
 	}{
 		// Nothing examined is not a pass — the vacuity arm.
-		{"nothing collected -> NOT_COLLECTED", Inputs{}, ResultNotCollected},
-		{"only a passing gate -> PASS", Inputs{Gates: map[string]string{"assert-rotation-health": GatePass}}, ResultPass},
-		{"skipped gate alone -> PASS", Inputs{Gates: map[string]string{"assert-wiz-enrollment": GateSkipped}}, ResultPass},
-		{"cis pass -> PASS", Inputs{CISReport: &pass}, ResultPass},
-		{"cis fail -> FAIL", Inputs{CISReport: &fail}, ResultFail},
-		{"org fail -> FAIL", Inputs{OrgReport: &fail}, ResultFail},
-		{"gate fail -> FAIL", Inputs{CISReport: &pass, Gates: map[string]string{"assert-rotation-health": GateFail}}, ResultFail},
-		{"gate pass -> PASS", Inputs{CISReport: &pass, Gates: map[string]string{"assert-rotation-health": GatePass}}, ResultPass},
+		{"nothing collected", Inputs{}, ResultNotCollected},
+		// Gate outcomes alone never make a pack PASS.
+		{"only a passing gate", Inputs{Gates: map[string]string{"assert-rotation-health": GatePass}}, ResultNotCollected},
+		{"scanner on, no reports expected", Inputs{ComplianceScanner: on}, ResultNotCollected},
+		{"all reports pass, scanner on", Inputs{ComplianceScanner: on, Reports: []ComplianceReport{pass}}, ResultPass},
+		// THE REVIEWED FAILURE: the reports exist, the scanner is off.
+		{"reports pass but scanner off", Inputs{ComplianceScanner: off, Reports: []ComplianceReport{pass}}, ResultNotCollected},
+		{"scanner state unknown", Inputs{Reports: []ComplianceReport{pass}}, ResultNotCollected},
+		{"one report hollow", Inputs{ComplianceScanner: on, Reports: []ComplianceReport{pass, hollow}}, ResultNotCollected},
+		{"report fail", Inputs{ComplianceScanner: on, Reports: []ComplianceReport{fail}}, ResultFail},
+		{"report fail with scanner off", Inputs{ComplianceScanner: off, Reports: []ComplianceReport{fail}}, ResultFail},
+		{"gate fail", Inputs{ComplianceScanner: on, Reports: []ComplianceReport{pass}, Gates: map[string]string{"assert-rotation-health": GateFail}}, ResultFail},
+		{"gate pass", Inputs{ComplianceScanner: on, Reports: []ComplianceReport{pass}, Gates: map[string]string{"assert-rotation-health": GatePass}}, ResultPass},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,20 +168,31 @@ func TestBuildPack_Result(t *testing.T) {
 	}
 }
 
+func TestNotCollectedReasonNamesTheCause(t *testing.T) {
+	off := BuildPack(Inputs{ComplianceScanner: ScannerDisabled})
+	if !strings.Contains(NotCollectedReason(off), "OPERATOR_CLUSTER_COMPLIANCE_ENABLED") {
+		t.Errorf("scanner-off reason = %q", NotCollectedReason(off))
+	}
+	hollow := BuildPack(Inputs{ComplianceScanner: ScannerEnabled, Reports: []ComplianceReport{MissingReport("k8s-nsa-1.0", "not readable: NotFound")}})
+	if !strings.Contains(NotCollectedReason(hollow), "k8s-nsa-1.0: not readable") {
+		t.Errorf("hollow reason = %q", NotCollectedReason(hollow))
+	}
+}
+
 func TestBuildPack_FieldsAndOrder(t *testing.T) {
-	cis := ComplianceReport{Name: "cis"}
-	org := ComplianceReport{Name: "llz-org-controls"}
-	p := BuildPack(Inputs{Cluster: "us-ord-primary", TimestampUnix: 1700000000, CISReport: &cis, OrgReport: &org})
+	a, b := MissingReport("k8s-cis-1.23", "x"), MissingReport("k8s-nsa-1.0", "y")
+	p := BuildPack(Inputs{Cluster: "us-ord-primary", TimestampUnix: 1700000000, Reports: []ComplianceReport{a, b}})
 	if p.Event != "cis-kubernetes-evidence" {
 		t.Errorf("event: %q", p.Event)
 	}
-	if p.Cluster != "us-ord-primary" {
-		t.Errorf("cluster: %q", p.Cluster)
+	if p.Cluster != "us-ord-primary" || p.ComplianceScanner != ScannerNotCollected {
+		t.Errorf("cluster/scanner: %q %q", p.Cluster, p.ComplianceScanner)
 	}
 	if p.GeneratedAt == "" || !strings.HasPrefix(p.GeneratedAt, "2023-") {
 		t.Errorf("generated_at not derived from timestamp: %q", p.GeneratedAt)
 	}
-	if len(p.Reports) != 2 || p.Reports[0].Name != "cis" || p.Reports[1].Name != "llz-org-controls" {
+	// An absent report stays IN the pack, so its absence is visible.
+	if len(p.Reports) != 2 || p.Reports[0].Name != "k8s-cis-1.23" || p.Reports[1].Name != "k8s-nsa-1.0" {
 		t.Errorf("reports order: %+v", p.Reports)
 	}
 }
@@ -141,12 +201,13 @@ func TestRenderMarkdown(t *testing.T) {
 	// FAIL pack with a failing control + a not-collected supplemental signal.
 	enc := true
 	p := BuildPack(Inputs{
-		Cluster:       "c1",
-		TimestampUnix: 1700000000,
-		CISReport: &ComplianceReport{
-			Name: "cis", Title: "CIS Kubernetes Benchmark", PassCount: 9, FailCount: 1,
+		Cluster:           "c1",
+		TimestampUnix:     1700000000,
+		ComplianceScanner: ScannerEnabled,
+		Reports: []ComplianceReport{{
+			Name: "k8s-cis-1.23", Title: "CIS Kubernetes Benchmarks v1.23", PassCount: 9, FailCount: 1, Status: ResultFail,
 			FailingControls: []ControlResult{{ID: "5.2.1", Name: "no privileged", Severity: "HIGH", FailCount: 2}},
-		},
+		}},
 		Supplemental: Supplemental{
 			NetworkPolicyCount:    -1, // not collected
 			RestrictedNamespaces:  []string{"llz-openbao", "llz-observability"},
@@ -155,12 +216,14 @@ func TestRenderMarkdown(t *testing.T) {
 	})
 	md := RenderMarkdown(p)
 	for _, want := range []string{
-		"# CIS Kubernetes Benchmark — Evidence Pack",
+		"# Compliance Evidence Pack",
 		"❌ FAIL",
 		"Failing controls",
 		"5.2.1",
+		"**Compliance scanner:** enabled",
 		"⚠️ not collected", // network policy count -1
 		"llz-openbao",
+		"No questionnaire was provided",
 		"Sign-Off",
 	} {
 		if !strings.Contains(md, want) {
@@ -169,10 +232,13 @@ func TestRenderMarkdown(t *testing.T) {
 	}
 }
 
-func TestRenderMarkdown_NoReports(t *testing.T) {
-	md := RenderMarkdown(BuildPack(Inputs{Cluster: "c1", TimestampUnix: 1700000000}))
-	if !strings.Contains(md, "No ClusterComplianceReport was collected") {
-		t.Errorf("expected no-reports warning, got:\n%s", md)
+func TestRenderMarkdown_ScannerOff(t *testing.T) {
+	md := RenderMarkdown(BuildPack(Inputs{Cluster: "c1", TimestampUnix: 1700000000, ComplianceScanner: ScannerDisabled,
+		Reports: []ComplianceReport{MissingReport("k8s-cis-1.23", "status.updateTimestamp is unset")}}))
+	for _, want := range []string{"NOT COLLECTED", "compliance scanner is disabled", "status.updateTimestamp is unset"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("markdown missing %q:\n%s", want, md)
+		}
 	}
 }
 
@@ -250,19 +316,41 @@ func TestDefaultStorageClassEncrypted(t *testing.T) {
 }
 
 func TestRenderMarkdown_CarriesTheAnsweredChecklist(t *testing.T) {
+	q, err := ParseQuestionnaire([]byte(validQ+"  - {num: 3, title: \"Pipes | in text\", adopter: Do it.}\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	md := RenderMarkdown(BuildPack(Inputs{
-		Cluster: "c1", TimestampUnix: 1700000000,
-		Gates: map[string]string{"assert-wiz-enrollment": GatePass},
+		Cluster: "c1", TimestampUnix: 1700000000, Questionnaire: q, QuestionnairePath: "infosec/questionnaire.yaml",
+		Gates: map[string]string{"alert-eval": GatePass},
 	}))
-	for _, r := range Questionnaire {
-		if !strings.Contains(md, fmt.Sprintf("| %d | %s |", r.Num, r.Title)) {
+	for _, r := range q.Requirements {
+		if !strings.Contains(md, fmt.Sprintf("| %d | %s |", r.Num, cell(r.Title))) {
 			t.Errorf("pack markdown is missing checklist row %d (%s)", r.Num, r.Title)
 		}
 	}
-	if !strings.Contains(md, "`assert-wiz-enrollment`: PASS") {
-		t.Error("a recorded gate outcome must appear on the row that cites it")
+	if !strings.Contains(md, `Pipes \| in text`) {
+		t.Error("a pipe in an answer must be escaped, or it splits the table row")
 	}
 	if !strings.Contains(md, "`assert-rotation-health`: not run") {
 		t.Error("a cited gate with no recorded outcome must say `not run`, not look passed")
+	}
+	if !strings.Contains(md, "my-org") {
+		t.Error("the pack must name the questionnaire it carries")
+	}
+}
+
+func TestComplianceScannerState(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"data":{"OPERATOR_CLUSTER_COMPLIANCE_ENABLED":"true"}}`:  ScannerEnabled,
+		`{"data":{"OPERATOR_CLUSTER_COMPLIANCE_ENABLED":"false"}}`: ScannerDisabled,
+		`{"data":{}}`: ScannerDisabled,
+	} {
+		if got, err := ComplianceScannerState([]byte(raw)); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	if got, err := ComplianceScannerState([]byte("nope")); err == nil || got != ScannerNotCollected {
+		t.Errorf("garbage = %q, %v", got, err)
 	}
 }
