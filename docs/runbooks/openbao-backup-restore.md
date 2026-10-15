@@ -20,7 +20,7 @@ half-bootstrapped OpenBao whose data is intact — that is
 > **Rebuilding after a loss? Turn the backup off first.** A rebuilt OpenBao is a new,
 > empty cluster that starts backing itself up into the same bucket. Set
 > `components.openbaoBackup.enabled: false` for the deployment *before* the rebuild's
-> bootstrap, and back on after the restore — see
+> bootstrap, and back on before the restore — see
 > [the rebuild procedure](#restore-the-cluster-was-lost-and-rebuilt).
 
 <!-- toc -->
@@ -175,25 +175,47 @@ bootstrap ([velero-dr](velero-dr.md)); a Schedule you add yourself needs the sam
 
 ## What a restore needs
 
-| You need | From |
-|---|---|
-| The snapshot | the backup bucket — read with a temporary key minted from `LINODE_API_TOKEN` (OpenBao holds the backup key, and OpenBao is what you are restoring) |
-| The **same** `OPENBAO_SEAL_KEY` the snapshot's cluster used | already in the `openbao-unseal-key` Secret on a cluster that was not rebuilt; restored from the `infra-<deployment>` environment secret by `llz ci bao-seed-seal-key` on one that was |
-| A root token **on the cluster you restore into**, exported in your shell | `llz openbao regen-root <deployment>` with 3 recovery shares you hold. (`breakglass-openbao.yml` reconstitutes root from the shares in `infra-<deployment>`, but writes the token back into that environment, where only workflows can read it — `llz openbao restore` runs from your workstation.) |
-| kubectl reach to that cluster | your kube-context. The command checks it is **this** deployment's LKE cluster — the cluster id on its nodes must be the one the Linode account labels with the spec's `cluster.clusterLabel` for `--region` — on the dry run and again just before applying, and refuses otherwise. `--force` does not waive this |
+There are two ways to run a restore, and they run the same code:
+
+- **The `restore-openbao.yml` workflow — use this.** It runs `llz openbao restore` inside
+  a job in the `infra-<deployment>` environment, mints the root token there from the
+  recovery quorum, uses it, and revokes it before the job ends. You need no recovery
+  shares, no kubeconfig and no root token of your own — only the right to run workflows
+  in `infra-<deployment>` (which is the control on this; see
+  [What the bucket gives away](#what-the-bucket-gives-away)). Maintainer notes:
+  [docs/workflows/llz-restore-openbao.md](../workflows/llz-restore-openbao.md).
+- **From a workstation — the fallback**, for when Actions is unavailable or you hold the
+  shares yourself: `llz openbao backups` / `llz openbao restore`, below each workflow
+  procedure.
+
+| You need | Workflow | Workstation |
+|---|---|---|
+| The snapshot | read from the backup bucket with a temporary key minted from `LINODE_API_TOKEN` (OpenBao holds the backup key, and OpenBao is what you are restoring) | same, with `LINODE_API_TOKEN` exported |
+| The **same** `OPENBAO_SEAL_KEY` the snapshot's cluster used | already in the `openbao-unseal-key` Secret on a cluster that was not rebuilt; restored from the `infra-<deployment>` environment secret by `llz ci bao-seed-seal-key` on one that was | same |
+| A root token **on the cluster you restore into** | minted in the job from `OPENBAO_RECOVERY_KEY_1..3` in `infra-<deployment>`, kept in a file under the job's temp directory, never printed and never written to GitHub, revoked by the job's last step | `llz openbao regen-root <deployment>` with 3 recovery shares **you hold**, exported as `OPENBAO_ROOT_TOKEN` |
+| Reach to that cluster | the job opens it (kubeconfig from Terraform state, control-plane ACL for the runner) | your kube-context |
+
+Either way the command checks the target is **this** deployment's LKE cluster — the
+cluster id on its nodes must be the one the Linode account labels with the spec's
+`cluster.clusterLabel` for the deployment — on the dry run and again just before applying,
+and refuses otherwise. `force` does not waive this.
 
 After a restore, the store's tokens, leases and **recovery-key configuration** are the
-snapshot's. The root token you used to restore is gone.
+snapshot's. The root token used to restore is gone.
 
-**Gap, stated rather than hidden:** no workflow wraps `llz openbao restore` yet. A
-deployment bootstrapped without `openbao_escrow_pubkey_b64` has its recovery shares only
-in GitHub, where a workstation cannot read them, so it cannot produce the root token this
-command needs without first running break-glass and recovering the token by other means.
-Bootstrap with an escrow key (see [docs/secrets.md](../secrets.md#initial-cluster-bring-up)).
+The workflow refuses `plan` and `restore` while `components.openbaoBackup` is disabled for
+the deployment — nothing is producing snapshots then, and a bucket it once filled is stale
+by a margin the form does not show. `list` still works.
 
 ## List the backups
 
-From the instance repo root, with `LINODE_API_TOKEN` exported:
+```bash
+gh workflow run restore-openbao.yml -f region=<deployment> -f mode=list
+```
+
+The list is in the run's log. It needs no cluster, so it works with the cluster gone.
+
+**From a workstation**, from the instance repo root with `LINODE_API_TOKEN` exported:
 
 ```bash
 llz openbao backups --region <deployment>
@@ -211,28 +233,47 @@ Someone deleted a path, overwrote a policy, or a bad automation run wrote garbag
 1. Pick the snapshot from **before** the damage — not reflexively the newest:
 
    ```bash
-   llz openbao backups --region <deployment>
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=list
    ```
 
-2. Dry-run it. Nothing changes; it fetches and verifies the snapshot, finds the active
-   pod, and tells you which cluster it would overwrite and whether the ids match:
+2. Dry-run it (`mode=plan`, the default). Nothing changes; it fetches and verifies the
+   snapshot, proves the cluster is this deployment's, finds the active pod, and tells you
+   which OpenBao cluster it would overwrite and whether the ids match:
 
    ```bash
-   llz openbao restore --region <deployment> --snapshot <key>
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=plan -f snapshot=<key>
    ```
 
-3. Get a root token on this cluster and restore:
+3. Restore. `confirm` must name the deployment exactly:
 
    ```bash
-   llz openbao regen-root <deployment>   # see playbooks/openbao-accounts.md
-   export OPENBAO_ROOT_TOKEN=...
-   llz openbao restore --region <deployment> --snapshot <key> --yes --confirm restore:<deployment>
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=restore -f snapshot=<key> \
+     -f confirm=restore:<deployment>
    ```
 
-   `--yes` executes; `--confirm` must name the deployment exactly. The command waits for
-   OpenBao to come back unsealed and serving, then prints what to do next.
+   The job mints root from the quorum, records the tracked credentials, restores, waits
+   for OpenBao to come back unsealed, mints root again on the restored store, re-applies
+   every tracked credential the restore reverted, re-runs bootstrap's configure step, and
+   revokes the token — whatever happened. The job summary lists what it did and the
+   checklist of what it did not.
 
-4. Work through [After a restore](#after-a-restore).
+4. Work through [After a restore](#after-a-restore) — the summary's checklist is the
+   same list, with the automated items already done.
+
+**From a workstation**, with the shares in hand:
+
+```bash
+llz openbao backups --region <deployment>
+llz openbao restore --region <deployment> --snapshot <key>            # dry run
+llz openbao regen-root <deployment>                                   # see playbooks/openbao-accounts.md
+export OPENBAO_ROOT_TOKEN=...
+llz openbao restore --region <deployment> --snapshot <key> --yes --confirm restore:<deployment>
+```
+
+`--yes` executes; `--confirm` must name the deployment exactly. The command waits for
+OpenBao to come back unsealed and serving, then prints what to do next — none of the
+post-restore steps the workflow automates, so all of [After a restore](#after-a-restore)
+is yours.
 
 ## Restore: the cluster was lost and rebuilt
 
@@ -243,7 +284,7 @@ rebuilt it with the normal pipeline.
    `components.openbaoBackup.enabled: false` in `environments/<deployment>.yaml`, run
    `llz render <deployment>`, and commit. Otherwise the rebuilt — empty — OpenBao starts
    backing itself up into the same bucket. Retention can no longer delete the lost
-   cluster's snapshots because of it, and `--latest` refuses to guess between the two,
+   cluster's snapshots because of it, and `latest` refuses to guess between the two,
    but there is no reason to fill the bucket with backups of nothing. (If you already
    rebuilt with it on, carry on — nothing pre-loss has been pruned.)
 1. **Confirm you still hold the snapshot-era recovery shares** —
@@ -252,36 +293,52 @@ rebuilt it with the normal pipeline.
    `infra-<deployment>`; after the restore the store answers only to the OLD ones.
 2. Let the rebuild finish. `llz ci bao-seed-seal-key` restores the same static seal key
    from `OPENBAO_SEAL_KEY`, so the new pods can unseal the old data.
-3. Regenerate root on the rebuilt (empty) store. The NEW shares are what open it now —
-   the rebuild delivered them to you (escrowed) or wrote them to `infra-<deployment>`:
+3. **Turn the backup back on** (`enabled: true`, or delete the line), re-render, commit.
+   The workflow refuses a restore while it is off; turning it on now is harmless —
+   retention is per OpenBao cluster id, so the rebuilt cluster's snapshots can never
+   prune the lost cluster's.
+4. List the backups and note the **lost** cluster's id — the one whose snapshots predate
+   the loss. The bucket now holds two ids, so `latest` on its own refuses; name the old
+   one with `from_cluster`. The ids will NOT match the live (new) cluster, so the plan
+   says `MISMATCH` and the restore needs `force`. The plan also proves the cluster is this
+   deployment's LKE cluster, whatever `force` says:
 
    ```bash
-   llz openbao regen-root <deployment>
-   export OPENBAO_ROOT_TOKEN=...
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=list
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=plan -f latest=true -f from_cluster=<lost-cluster-id>
+   gh workflow run restore-openbao.yml -f region=<deployment> -f mode=restore -f latest=true -f from_cluster=<lost-cluster-id> \
+     -f force=true -f confirm=restore:<deployment>
    ```
 
-4. Restore. List the backups and note the **lost** cluster's id — the one whose snapshots
-   predate the loss. If the backup ran on the rebuilt cluster, the bucket now holds two
-   ids and `--latest` on its own refuses; name the old one with `--from-cluster`. The ids
-   will NOT match the live (new) cluster, so the dry run says `MISMATCH` and the restore
-   needs `--force`. The dry run also proves the kube-context is this deployment's LKE
-   cluster, whatever `--force` says:
-
-   ```bash
-   llz openbao backups --region <deployment>
-   llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id>
-   llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id> --force --yes --confirm restore:<deployment>
-   ```
-
+   The job mints root on the rebuilt store from the NEW shares the rebuild wrote to
+   `infra-<deployment>`, and the restore goes through. **Then the job fails, by design**:
+   the restored store answers only to the OLD shares, so it cannot mint the second root
+   token its post-restore steps need. The summary says so and lists the credentials it
+   did not re-apply. The restore stands.
 5. Put the snapshot-era recovery shares back into `infra-<deployment>`
    (`OPENBAO_RECOVERY_KEY_1`..`3`) — the ones the rebuild wrote no longer open this store,
    and the next break-glass would fail on them.
-6. Turn the backup back on (`enabled: true`, or delete the line), re-render, commit.
-7. Re-run `bootstrap-openbao.yml` for the deployment. Its configure step re-applies the
+6. Re-run `bootstrap-openbao.yml` for the deployment. Its configure step re-applies the
    platform policies, roles and auth-mount configuration against the restored store —
    a rebuilt cluster usually has a new domain, which the team-login (Keycloak) mount
    points at — and it takes and verifies a first backup of the restored store.
-8. Work through [After a restore](#after-a-restore).
+7. Work through [After a restore](#after-a-restore), including the credentials the
+   summary listed as not re-applied.
+
+**From a workstation**, steps 3–4 become: regenerate root on the rebuilt (empty) store
+with the NEW shares (the rebuild delivered them to you escrowed, or wrote them to
+`infra-<deployment>`), then
+
+```bash
+llz openbao regen-root <deployment>
+export OPENBAO_ROOT_TOKEN=...
+llz openbao backups --region <deployment>
+llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id>
+llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id> --force --yes --confirm restore:<deployment>
+```
+
+The workstation path does not refuse with the backup off, so step 3 can wait until after
+the restore there.
 
 ## Restore: an HA pair
 
@@ -303,6 +360,23 @@ operator-managed paths in step by writing both. So:
 ## After a restore
 
 The store is now exactly as it was when the snapshot was taken.
+
+**What the workflow already did** (skip these if `restore-openbao.yml` ran to green):
+
+- re-applied every tracked credential path (`secret/obj/*`, `secret/linode/*`,
+  `secret/harbor/*`, … — the `credpaths` table) whose value the restore changed, putting
+  back the value that was live just before it. That covers item 2 below. The summary
+  names each path it re-applied: if the damage you restored from was to one of those
+  paths, re-mint that credential;
+- re-ran bootstrap's configure step (policies, roles, auth mounts) against the restored
+  store;
+- revoked the root token it minted, and checked whether
+  `infra-<deployment>::OPENBAO_ROOT_TOKEN` came back to life with the snapshot (if the
+  summary says it is live, dispatch `breakglass-openbao.yml` with `action=revoke` once
+  nobody is using it).
+
+The rest is a judgement the workflow does not make for you, and is in its summary as a
+checklist:
 
 1. **Tokens.** Every token issued after the snapshot is invalid, including the root token
    you restored with. In-cluster workloads re-authenticate on their own on their next
@@ -377,3 +451,10 @@ Every other deployment runs the safe half on each bootstrap
 (`assert-openbao-restore --backup-only`): the real Job, then a fetch and verify of
 exactly what it uploaded, through the restore path, with nothing restored. See
 [docs/workflows/llz-bootstrap-openbao.md](../workflows/llz-bootstrap-openbao.md).
+
+Release e2e also dispatches `restore-openbao.yml` in `list` mode after provision, so the
+delivered workflow is proven to start and to read this deployment's bucket. Its `plan`
+and `restore` modes are not driven live; their steps — the quorum mint with no
+write-back, the refusals before the quorum, the credential re-apply, the always()
+revoke — are unit-tested against a fake OpenBao whose restore also rolls back its token
+table. See [docs/workflows/llz-restore-openbao.md](../workflows/llz-restore-openbao.md#what-exercises-it).
