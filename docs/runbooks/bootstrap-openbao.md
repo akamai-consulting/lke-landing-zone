@@ -18,6 +18,7 @@
 - [Relationship to the release workflow](#relationship-to-the-release-workflow)
 - [Break-glass handles (when `bao-ensure-ready` is wedged)](#break-glass-handles-when-bao-ensure-ready-is-wedged)
 - [Break-glass root token (workflow) — `breakglass-openbao.yml`](#break-glass-root-token-workflow--breakglass-openbaoyml)
+- [Restoring OpenBao from a backup — `restore-openbao.yml`](#restoring-openbao-from-a-backup--restore-openbaoyml)
 
 <!-- /toc -->
 
@@ -268,7 +269,7 @@ If a pod stays sealed after a restart, the static seal key is the problem: check
 
 ## Re-configure (configuration incomplete)
 
-Use this if the cluster is already initialized and unsealed but configuration steps were missed or need to be re-applied — for example after a fresh cluster replacement with data restored from a snapshot.
+Use this if the cluster is already initialized and unsealed but configuration steps were missed or need to be re-applied — for example after a fresh cluster replacement with data restored from a snapshot. (`restore-openbao.yml` re-runs the configure step itself after a restore; you need this only when it could not — see [openbao-backup-restore](openbao-backup-restore.md#restore-the-cluster-was-lost-and-rebuilt).)
 
 1. Set `OPENBAO_ROOT_TOKEN` as a secret in the `infra-<env>` GitHub environment.
 2. Run the workflow:
@@ -435,7 +436,26 @@ gh workflow run breakglass-openbao.yml --field region=<env> --field action=revok
 
 ---
 
+## Restoring OpenBao from a backup — `restore-openbao.yml`
+
+Lost or damaged OpenBao **data** (not a sealed or half-bootstrapped OpenBao — that is
+this runbook) comes back from the Raft snapshots the `openbaoBackup` CronJob takes. The
+`restore-openbao.yml` workflow (thin caller for the vendored `llz-restore-openbao.yml`)
+lists them (`mode=list`), dry-runs a restore (`mode=plan`, the default), or restores
+(`mode=restore`, with `confirm=restore:<env>`). It mints the root token a restore needs
+from the same recovery quorum break-glass uses, **inside the job** — never printed, never
+written back to `infra-<env>` — and revokes it before the job ends, so it works for a
+deployment whose recovery shares live only in GitHub. It shares this workflow's
+`openbao-bootstrap-<env>` concurrency group, so it never races a bootstrap or a
+break-glass.
+
+Procedure: [openbao-backup-restore](openbao-backup-restore.md). Maintainer rationale:
+[`docs/workflows/llz-restore-openbao.md`](../workflows/llz-restore-openbao.md).
+
+---
+
 ## See also
 
+- [`docs/runbooks/openbao-backup-restore.md`](openbao-backup-restore.md) — restoring OpenBao's data from a backup (`restore-openbao.yml`)
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
 - [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — the thin caller in the TEMPLATE repo (in your instance it is `.github/workflows/bootstrap-openbao.yml`); the body is `llz-bootstrap-openbao.yml` beside it

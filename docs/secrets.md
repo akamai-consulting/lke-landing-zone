@@ -811,10 +811,16 @@ rebuilt, empty OpenBao backing up into the same bucket can never push the lost c
 snapshots out. Each deployment of an HA pair backs up its own, independent store.
 
 ```bash
-llz openbao backups --region <deployment>                       # list, newest first
-llz openbao restore --region <deployment> --snapshot <key>      # dry run: what would be overwritten
-llz openbao restore --region <deployment> --snapshot <key> --yes --confirm restore:<deployment>
+gh workflow run restore-openbao.yml -f region=<deployment> -f mode=list                     # list, newest first
+gh workflow run restore-openbao.yml -f region=<deployment> -f mode=plan -f snapshot=<key>   # dry run
+gh workflow run restore-openbao.yml -f region=<deployment> -f mode=restore -f snapshot=<key> -f confirm=restore:<deployment>
 ```
+
+The workflow mints the root token a restore needs from the `infra-<deployment>` recovery
+quorum inside the job, and revokes it before the job ends — so it works where the shares
+live only in GitHub. From a workstation holding the shares, the same restore is
+`llz openbao backups` / `llz openbao restore` (dry run unless `--yes --confirm
+restore:<deployment>`).
 
 **Confidentiality.** Linode Object Storage has no managed keys, and none are needed: every
 stored value in a snapshot is already ciphertext under OpenBao's barrier, which only this

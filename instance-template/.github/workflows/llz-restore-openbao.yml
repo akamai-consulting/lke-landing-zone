@@ -1,0 +1,231 @@
+name: llz-restore-openbao (reusable)
+
+# Reusable (`workflow_call`) OpenBao restore from a Raft snapshot. VENDORED: copier
+# copies this file verbatim into every instance, so maintainer rationale lives in
+# the TEMPLATE at docs/workflows/llz-restore-openbao.md — read it before changing
+# anything here.
+#
+# Lists, dry-runs or performs `llz openbao restore` for one deployment, inside the
+# infra-<region> environment, so an operator who holds no recovery shares can still
+# restore. The logic is unit-tested Go — `llz ci openbao-restore`
+# (tools/internal/extensions/lifecycle/openbao/ci_openbao_restore.go) — not inline
+# shell. For mode=restore it:
+#   1. checks the request, the typed confirmation and the spec   (no cluster yet)
+#   2. opens cluster access
+#   3. fetches + verifies the snapshot, proves the kube-context is this
+#      deployment's LKE cluster, inspects the live OpenBao        (changes nothing)
+#   4. mints a root token from the recovery quorum                (kept in a 0600
+#      file under $RUNNER_TEMP — never $GITHUB_ENV, never a GitHub secret)
+#   5. records the tracked credentials, restores, waits unsealed
+#   6. mints root again on the RESTORED store, re-applies the credentials the
+#      restore reverted, writes the post-restore checklist to the job summary
+#   7. re-applies the declared OpenBao configuration (`llz ci bao-configure`)
+#   8. ALWAYS: revokes the root token, then closes the control-plane ACL
+#
+# SECURITY MODEL: same environment, same reviewers, same quorum as break-glass —
+# this workflow is "can pass the infra-<region> environment gate" turned into
+# "can roll that deployment's OpenBao back". Protect every infra-<region>
+# Environment with required reviewers (docs/workflows/llz-breakglass-openbao.md).
+# Unlike break-glass it hands NO token to anyone: the token is minted, used and
+# revoked in-job, and this workflow is not given the secrets-write PAT, so it
+# cannot write one back to GitHub.
+
+on:
+  workflow_call:
+    inputs:
+      region:
+        description: 'Deployment to act on (any scaffolded deployment with an infra-<region> Environment).'
+        required: true
+        type: string
+      mode:
+        description: 'list | plan | restore. (Typed as string here — workflow_call has no choice type; the caller stub enforces the choice and `llz ci openbao-restore` re-checks it.)'
+        required: false
+        type: string
+        default: plan
+      snapshot:
+        description: 'Snapshot key to restore (as mode=list prints it). Give this OR latest.'
+        required: false
+        type: string
+        default: ''
+      latest:
+        description: 'Use the newest snapshot instead of naming one.'
+        required: false
+        type: boolean
+        default: false
+      from_cluster:
+        description: 'With latest: only snapshots taken by this OpenBao cluster id.'
+        required: false
+        type: string
+        default: ''
+      force:
+        description: 'Restore a snapshot taken by a different OpenBao cluster (a rebuild of THIS deployment).'
+        required: false
+        type: boolean
+        default: false
+      confirm:
+        description: 'mode=restore: must be exactly restore:<region>.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        description: >
+          Passphrase for OpenTofu state+plan encryption (ADR 0007 (state encryption)). Required by
+          the cluster-access action: the kubeconfig is read from Terraform state,
+          whose roots carry an `encryption` block.
+        required: false
+      # ALL required: false, deliberately — same rule as llz-bootstrap-openbao.yml.
+      # `secrets: inherit` cannot forward environment-scoped secrets, and
+      # `required: true` is checked statically at the call boundary, so it would fail
+      # the run before any job enters `environment: infra-<region>`. Presence is
+      # checked at runtime by the `llz ci` verbs.
+      TF_STATE_ACCESS_KEY:
+        required: false
+      TF_STATE_SECRET_KEY:
+        required: false
+      LINODE_API_TOKEN:
+        required: false
+      # Read ONLY to ask the restored store whether the snapshot brought it back to
+      # life (it normally holds the token the last bootstrap revoked). Never used
+      # to restore, never written.
+      OPENBAO_ROOT_TOKEN:
+        required: false
+      OPENBAO_RECOVERY_KEY_1:
+        required: false
+      OPENBAO_RECOVERY_KEY_2:
+        required: false
+      OPENBAO_RECOVERY_KEY_3:
+        required: false
+
+permissions:
+  contents: read
+
+# SHARE the bootstrap serialization group: a restore must never run beside a
+# bootstrap or a break-glass of the same deployment — all three drive the
+# generate-root quorum on the active pod, and a bootstrap configuring the store
+# while it is replaced underneath it would write into a store about to vanish.
+# Safe (no deadlock): this reusable calls no further reusable.
+concurrency:
+  group: openbao-bootstrap-${{ inputs.region }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+  REGION:              ${{ inputs.region }}
+
+jobs:
+  restore:
+    name: OpenBao restore (${{ inputs.mode }} — ${{ inputs.region }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ inputs.region }}
+    # cluster access (<=6m) + fetch/verify + two quorum mints + the restore's
+    # settle wait (3m) + configure. Every step budget below fits inside it, so a
+    # kill can never cost the always() revoke at the tail.
+    timeout-minutes: 30
+    env:
+      # Every dispatch input reaches a `run:` through here, never as ${{ }} in the
+      # script (workflow-injection guard).
+      MODE:         ${{ inputs.mode }}
+      SNAPSHOT:     ${{ inputs.snapshot }}
+      LATEST:       ${{ inputs.latest }}
+      FROM_CLUSTER: ${{ inputs.from_cluster }}
+      FORCE:        ${{ inputs.force }}
+      CONFIRM:      ${{ inputs.confirm }}
+      # S3 backend creds for the cluster-access kubeconfig fetch (terraform-init).
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+
+    steps:
+      - name: Checkout the instance (spec + TF roots + composite actions)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # THE GATE BEFORE ANYTHING IS TOUCHED: mode, snapshot XOR latest, the exact
+      # confirm=restore:<region> for mode=restore, and a spec with openbaoBackup on.
+      # Unconditional and first, so a mistyped dispatch opens no ACL and mints nothing.
+      - name: Check the request (mode, snapshot, typed confirmation, spec)
+        run: llz ci openbao-restore --preflight --region "$REGION" --mode "$MODE" --snapshot "$SNAPSHOT" --latest="$LATEST" --from-cluster "$FROM_CLUSTER" --force="$FORCE" --confirm "$CONFIRM"
+
+      # list needs no cluster: the bucket is read with a temporary key minted from
+      # LINODE_API_TOKEN, so this works with the cluster gone — when it matters.
+      - name: List the snapshots
+        if: env.MODE == 'list'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci openbao-restore --region "$REGION" --mode list
+
+      # Kubeconfig (from TF state) + open this runner's egress IP in the LKE-E
+      # control-plane ACL. Closed in the always() step at the tail.
+      - name: Cluster access (kubeconfig + runner ACL)
+        if: env.MODE != 'list'
+        uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
+        with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ env.REGION }}
+
+      - name: Plan the restore (dry run — changes nothing)
+        if: env.MODE == 'plan'
+        timeout-minutes: 10
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci openbao-restore --region "$REGION" --mode plan --snapshot "$SNAPSHOT" --latest="$LATEST" --from-cluster "$FROM_CLUSTER" --force="$FORCE"
+
+      # The recovery keys are mapped into THIS step only. The verb records the
+      # minted token in $RUNNER_TEMP/openbao-restore-root.token (0600) for the two
+      # steps below and nowhere else.
+      - name: Restore OpenBao from the snapshot
+        id: restore
+        if: env.MODE == 'restore'
+        timeout-minutes: 15
+        env:
+          LINODE_API_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          RECOVERY_K1:               ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
+          RECOVERY_K2:               ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
+          RECOVERY_K3:               ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
+          OPENBAO_STORED_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
+        run: llz ci openbao-restore --region "$REGION" --mode restore --snapshot "$SNAPSHOT" --latest="$LATEST" --from-cluster "$FROM_CLUSTER" --force="$FORCE" --confirm "$CONFIRM"
+
+      # The restored store's policies, roles and auth mounts are the SNAPSHOT's: an
+      # older template's, and — after a rebuild — pointed at the lost cluster's
+      # domain. bao-configure is bootstrap's own configure step (idempotent upserts),
+      # run under the root token minted on the restored store. Only after a
+      # restore that fully succeeded: without that token there is nothing to run as.
+      - name: Re-apply the declared OpenBao configuration
+        if: env.MODE == 'restore' && steps.restore.outcome == 'success'
+        timeout-minutes: 10
+        run: OPENBAO_ROOT_TOKEN="$(cat "$RUNNER_TEMP/openbao-restore-root.token")" llz ci bao-configure --region "$REGION"
+
+      # ALWAYS — success, failure or cancel — and BEFORE the ACL closes, because it
+      # needs the cluster. No token file means nothing was minted (exit 0).
+      - name: Revoke the root token this run minted
+        if: always() && env.MODE == 'restore'
+        timeout-minutes: 5
+        run: llz ci bao-revoke-root
+
+      # Close the control-plane ACL this runner opened, always.
+      - name: Revoke control-plane ACL for this runner
+        if: always() && env.MODE != 'list'
+        uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+          kubeconfig:   $HOME/.kube/config

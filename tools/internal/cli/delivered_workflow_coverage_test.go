@@ -260,13 +260,23 @@ func TestNoPullRequestPathWritesTerraformState(t *testing.T) {
 // can execute these workflows; what it can do is refuse to let the set of
 // unexercised ones grow silently. Adding a delivered workflow now forces one of
 // two decisions, in writing: drive it from the release lane, or say here why not.
-// The template's release-e2e lane drives exactly ONE instance workflow —
-// terraform.yml — which is a fact worth having written down somewhere a reviewer
-// meets, because it was not obvious to anyone until a rotation workflow turned
-// out to have been dead for months.
+// The template's release-e2e lane drives exactly TWO instance workflows —
+// terraform.yml, and restore-openbao.yml in its read-only list mode — which is a
+// fact worth having written down somewhere a reviewer meets, because it was not
+// obvious to anyone until a rotation workflow turned out to have been dead for
+// months.
 var exercisedEntryPoints = map[string]string{
 	"terraform.yml": "DRIVEN: release-e2e dispatches it (apply + destroy) and the PR-gate probe " +
-		"opens a pull request against it — the only delivered workflow the lane actually runs.",
+		"opens a pull request against it.",
+	"restore-openbao.yml": "DRIVEN, in list mode only: release-e2e dispatches it after provision, so the stub -> " +
+		"body call (permissions, environment, secrets) and the bucket read are exercised on every release. " +
+		"plan is not driven because the e2e bucket outlives its clusters and holds several OpenBao cluster ids, so " +
+		"latest refuses and the lane cannot name this cluster's id; restore is not driven because the in-place " +
+		"restore it performs is the restore drill's (`assert-openbao-restore`, same baosnap functions), and a second " +
+		"in-place restore would add a quorum mint per release for little signal. The restore mode's own steps " +
+		"(quorum mint without write-back, credential re-apply, always() revoke) are unit-tested against a fake " +
+		"whose restore rolls its token table back (ci_openbao_restore_test.go), and the step order by " +
+		"ci_openbao_restore_workflow_test.go.",
 
 	// ── Knowingly unexercised, with the risk each one carries ───────────────
 	"scheduled-checks.yml": "NOT DRIVEN: cron-only drift/health reporting. Its body (llz-scheduled-checks.yml) " +

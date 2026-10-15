@@ -44,9 +44,10 @@ package openbaobackup
 // the restore resurrects the key it has since revoked, and every later assert
 // that reads through it flakes. So the drill records every tracked credential
 // path (credpaths.CredPaths) just before the restore and re-writes any the
-// restore reverted. That is the drill cleaning up after itself — it is not what
-// `llz openbao restore` does, whose snapshot is hours old and whose operator
-// follows the runbook's "After a restore" instead.
+// restore reverted, through baosnap.CaptureCreds / ReapplyCreds. Those are the
+// same functions the restore-openbao workflow (`llz ci openbao-restore`) uses
+// after a real restore, whose snapshot is hours old; the bare workstation
+// `llz openbao restore` leaves it to the runbook's "After a restore".
 //
 // --backup-only IS THE SAFE HALF, FOR EVERY DEPLOYMENT. Steps 2 and 3 alone — run
 // the real producer, then fetch and verify the exact object it uploaded through
@@ -64,13 +65,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baosnap"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/credpaths"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
@@ -242,10 +241,10 @@ func RunDrill(ctx context.Context, region string) error {
 
 	// 5. Restore, through the operator path's own functions — after recording the
 	// credentials the rollback could revert (see the file comment).
-	var before credState
+	var before baosnap.CredState
 	if err := withActive(ctx, func(t baosnap.Target) error {
 		var err error
-		before, err = captureCreds(ctx, openbao.NewWithClient(t.Addr, root, "", t.HTTP), drillCredPaths())
+		before, err = baosnap.CaptureCreds(ctx, openbao.NewWithClient(t.Addr, root, "", t.HTTP), baosnap.TrackedCredPaths())
 		return err
 	}); err != nil {
 		return fmt.Errorf("record the credentials before the restore: %w", err)
@@ -482,87 +481,17 @@ func readCanary(ctx context.Context, root string) (string, error) {
 	}
 }
 
-// credState is a set of KV paths' data as read at one moment; a nil entry means
-// the path did not exist.
-type credState map[string]map[string]string
-
-// drillCredPaths are the paths the drill protects from its own rollback: every
-// tracked credential. Read from credpaths.CredPaths, the table the rotators and
-// the age sampler share, so a new credential is covered the day it is tracked.
-func drillCredPaths() []string {
-	out := make([]string, 0, len(credpaths.CredPaths))
-	for _, p := range credpaths.CredPaths {
-		out = append(out, p.Path)
-	}
-	return out
-}
-
-func captureCreds(ctx context.Context, c *openbao.Client, paths []string) (credState, error) {
-	st := credState{}
-	for _, p := range paths {
-		raw, ok, err := c.Read(ctx, openbao.DataPath(p))
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", p, err)
-		}
-		if !ok {
-			st[p] = nil
-			continue
-		}
-		st[p] = kvStrings(raw)
-	}
-	return st, nil
-}
-
-// CredsToReapply returns, sorted, the paths whose value after the restore is not
-// what it was just before it — the writes the rollback undid. A path that did not
-// exist before is never "re-applied" (there is nothing to put back). Pure.
-func CredsToReapply(before, after credState) []string {
-	var out []string
-	for p, b := range before {
-		if b == nil {
-			continue
-		}
-		if !sameFields(b, after[p]) {
-			out = append(out, p)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sameFields(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if bv, ok := b[k]; !ok || bv != v {
-			return false
-		}
-	}
-	return true
-}
-
 // reapplyCreds re-reads the tracked paths after the restore and writes back the
-// pre-restore value of every one the restore changed.
-func reapplyCreds(ctx context.Context, root string, before credState) error {
+// pre-restore value of every one the restore changed — baosnap.ReapplyCreds, the
+// same rule the restore-openbao workflow applies, against the current active pod.
+func reapplyCreds(ctx context.Context, root string, before baosnap.CredState) error {
 	if len(before) == 0 {
 		return nil
 	}
 	return withActive(ctx, func(t baosnap.Target) error {
-		c := openbao.NewWithClient(t.Addr, root, "", t.HTTP)
-		paths := make([]string, 0, len(before))
-		for p := range before {
-			paths = append(paths, p)
-		}
-		after, err := captureCreds(ctx, c, paths)
+		todo, err := baosnap.ReapplyCreds(ctx, openbao.NewWithClient(t.Addr, root, "", t.HTTP), before)
 		if err != nil {
 			return err
-		}
-		todo := CredsToReapply(before, after)
-		for _, p := range todo {
-			if err := c.Write(ctx, p, before[p]); err != nil {
-				return fmt.Errorf("re-apply %s: %w", p, err)
-			}
 		}
 		if len(todo) > 0 {
 			fmt.Printf("✓ re-applied %d credential(s) the rollback had reverted to a pre-rotation value: %s\n", len(todo), strings.Join(todo, ", "))

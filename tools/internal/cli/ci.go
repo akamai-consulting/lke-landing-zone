@@ -119,7 +119,7 @@ func ciCmd() *cobra.Command {
 		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
 		baoread.BaoStatusCmd(),
 		openbaoext.BaoInitCmd(), openbaoext.BaoRegenRootCmd(), identityconfig.BaoConfigureCmd(), openbaoext.BaoEnsureReadyCmd(),
-		openbaoext.BaoBreakglassCmd(),
+		openbaoext.BaoBreakglassCmd(), openbaoext.OpenBaoRestoreCICmd(), openbaoext.BaoRevokeRootCmd(),
 		openbaoext.ExtractOpenbaoCACmd(), converge.NudgeArgoCmd(), openbaoext.ProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
 		// ensure the device-flow client); team-login-smoke stays a manual operator check.

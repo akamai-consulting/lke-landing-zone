@@ -187,18 +187,13 @@ func Inspect(ctx context.Context, t Target, snap Snapshot, m Manifest) (Plan, er
 // Then it waits, bounded, for the node to come back unsealed and serving: a
 // restore that returned 204 to a node that never unsealed again is a failure,
 // and saying "restored" there would be the vacuous green.
+//
+// The guards are CheckApplicable, exported so a caller about to spend something
+// irreversible on the restore (the restore workflow burns a recovery-key quorum
+// on a root token) can ask the same question first, from the same code.
 func Apply(ctx context.Context, t Target, token string, p Plan, data []byte, force bool, settle time.Duration) error {
-	switch {
-	case !p.Live.Initialized:
-		return fmt.Errorf("the target OpenBao is not initialized — initialize it (with the SAME static seal key the snapshot's cluster used) before restoring into it")
-	case p.Live.Sealed:
-		return fmt.Errorf("the target OpenBao is sealed — check the openbao-unseal-key Secret holds the deployment's OPENBAO_SEAL_KEY")
-	case p.Live.Standby:
-		return fmt.Errorf("the target pod is a standby, not the active node — the restore must be sent to the pod labelled openbao-active=true")
-	case !p.SameCluster && !force:
-		return fmt.Errorf("%w: snapshot cluster %s, live cluster %s. If this deployment's OpenBao was REBUILT, re-run with --force. "+
-			"If it was not, your kube-context is probably pointing at the OTHER cluster of an HA pair — stop", ErrNeedsForce,
-			p.Snapshot.ClusterID, orUnknown(p.Live.ClusterID))
+	if err := CheckApplicable(p, force); err != nil {
+		return err
 	}
 	if err := Restore(ctx, t.HTTP, t.Addr, token, data, force); err != nil {
 		if errors.Is(err, ErrForeignSnapshot) {
@@ -242,4 +237,21 @@ func orUnknown(s string) string {
 		return "(unknown)"
 	}
 	return s
+}
+
+// CheckApplicable is Apply's guard set over a Plan, with nothing sent. Pure.
+func CheckApplicable(p Plan, force bool) error {
+	switch {
+	case !p.Live.Initialized:
+		return fmt.Errorf("the target OpenBao is not initialized — initialize it (with the SAME static seal key the snapshot's cluster used) before restoring into it")
+	case p.Live.Sealed:
+		return fmt.Errorf("the target OpenBao is sealed — check the openbao-unseal-key Secret holds the deployment's OPENBAO_SEAL_KEY")
+	case p.Live.Standby:
+		return fmt.Errorf("the target pod is a standby, not the active node — the restore must be sent to the pod labelled openbao-active=true")
+	case !p.SameCluster && !force:
+		return fmt.Errorf("%w: snapshot cluster %s, live cluster %s. If this deployment's OpenBao was REBUILT, re-run with --force. "+
+			"If it was not, your kube-context is probably pointing at the OTHER cluster of an HA pair — stop", ErrNeedsForce,
+			p.Snapshot.ClusterID, orUnknown(p.Live.ClusterID))
+	}
+	return nil
 }

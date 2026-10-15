@@ -38,6 +38,7 @@ flowchart LR
 | `llz-scheduled-checks.yml` | The scheduled health/audit checks, including the credential single pane | [llz-scheduled-checks.md](llz-scheduled-checks.md) |
 | `llz-cluster-health.yml` | The cluster-health check, honouring the convergence contract's exit codes | [llz-cluster-health.md](llz-cluster-health.md) |
 | `llz-breakglass-openbao.yml` | Break-glass OpenBao root-token generation | [llz-breakglass-openbao.md](llz-breakglass-openbao.md) |
+| `llz-restore-openbao.yml` | Restore a deployment's OpenBao from a Raft snapshot, with root minted from the recovery quorum and revoked in-job | [llz-restore-openbao.md](llz-restore-openbao.md) |
 | `llz-wedge-gameday.yml` | The blast-radius game-day that exercises the wedge classes the guards protect against | [llz-wedge-gameday.md](llz-wedge-gameday.md) |
 | `llz-discover-deployments.yml` | A tiny shim: the single source of truth for the per-deployment CI matrix | [llz-discover-deployments.md](llz-discover-deployments.md) |
 | `llz-template-upgrade.yml` | **Opt-in.** Runs `llz upgrade` in CI and opens the result as a reviewable pull request | [llz-template-upgrade.md](llz-template-upgrade.md) |

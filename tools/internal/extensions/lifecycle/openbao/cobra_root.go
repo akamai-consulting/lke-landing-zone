@@ -110,7 +110,10 @@ func RestoreCmd() *cobra.Command {
 			"A snapshot from a DIFFERENT cluster (a rebuilt one — or the other half of an HA pair) is\n" +
 			"refused without --force. The cluster must hold the same static seal key\n" +
 			"(OPENBAO_SEAL_KEY) the snapshot's cluster used. HA pairs are restored one deployment at\n" +
-			"a time; see docs/runbooks/openbao-backup-restore.md.",
+			"a time; see docs/runbooks/openbao-backup-restore.md.\n" +
+			"\n" +
+			"Without recovery shares of your own, dispatch the restore-openbao.yml workflow instead: it\n" +
+			"runs this restore in the infra-<deployment> environment and mints root there.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// --yes is the global flag (as for `llz openbao set`), not a local one.

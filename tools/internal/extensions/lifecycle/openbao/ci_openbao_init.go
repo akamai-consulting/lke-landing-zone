@@ -267,39 +267,9 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would validate $OPENBAO_ROOT_TOKEN and regenerate via quorum if revoked")
 		return nil
 	}
-	// RESOLVE THE ACTIVE NODE — DO NOT ASSUME POD-0. This was `baoread.PodNames[0]`,
-	// while the interactive twin (RunRegenRoot) has always called findLeaderPod().
-	// generate-root is unauthenticated and node-local, so a standby rejects it with
-	// `400 * Vault is in standby mode` — but only at `-init`, five steps into the
-	// command, AFTER the sealed probe and the token lookup have both passed (a
-	// standby is unsealed, and it FORWARDS authenticated calls like `token lookup`).
-	// A prod bootstrap failed exactly here with pod-0 a standby, and a plain re-run
-	// could not clear it: raft leadership is sticky, so pod-0 stays a standby until
-	// something forces an election.
-	//
-	// This is the SECOND divergence between these two implementations of one flow —
-	// the `break` on `complete` below documents the first. See resolveGenerateRootPod.
-	pod, found := resolveGenerateRootPod()
-	if !found {
-		fmt.Fprintf(os.Stderr, "::error::no OpenBao pod reported itself the active raft node (every pod is a standby, or none answered). "+
-			"generate-root is node-local and standbys reject it; it cannot run against any pod in this state. "+
-			"Check `bao status` on %v — a cluster with no leader needs an election, not a re-run.\n", baoread.PodNames)
-		return fmt.Errorf("no active OpenBao node among %v to run generate-root against", baoread.PodNames)
-	}
-
-	// The generate-root flow requires an unsealed leader; if the cluster is
-	// still sealed surface that explicitly instead of a confusing API error
-	// halfway through. (The bash needed a jq-`//`-operator workaround here;
-	// the typed parse sidesteps it.)
-	statusOut, _, _ := baoread.ExecFn(pod, "", "", "status", "-format=json")
-	st, ok := baoread.ParsePodStatus(statusOut)
-	if !ok || st.Sealed {
-		state := "true"
-		if !ok {
-			state = "unknown"
-		}
-		fmt.Fprintf(os.Stderr, "::error::%s sealed-status check returned '%s' (expected 'false'). generate-root requires an unsealed leader. Check the unseal steps above and the cluster's bao status.\n", pod, state)
-		return fmt.Errorf("%s is not unsealed (sealed=%s)", pod, state)
+	pod, err := generateRootPod()
+	if err != nil {
+		return err
 	}
 
 	// `token lookup` (no args = self) succeeds for any valid token; the -self
@@ -333,21 +303,88 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		fmt.Println("No OPENBAO_ROOT_TOKEN set — regenerating via quorum.")
 	}
 
+	newRoot, err := generateRootQuorum(pod, region)
+	if err != nil {
+		return err
+	}
+
+	// Update env for downstream steps + the GH secret for the next run. The
+	// os.Setenv mirror lets the in-process `bao-ensure-ready` availability gate
+	// read the REGENERATED token (not the stale one it loaded) via os.Getenv;
+	// a standalone step gets it from the $GITHUB_ENV injection.
+	if err := ghaout.Append("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+newRoot); err != nil {
+		return err
+	}
+	os.Setenv("OPENBAO_ROOT_TOKEN", newRoot)
+	if err := ghsecret.SetFn("OPENBAO_ROOT_TOKEN", "infra-"+region, newRoot); err != nil {
+		return err
+	}
+	fmt.Printf("New root token written to infra-%s::OPENBAO_ROOT_TOKEN.\n", region)
+	return nil
+}
+
+// generateRootPod resolves the pod that will accept generate-root and proves it
+// is unsealed. Shared by every unattended quorum flow (bao-regen-root here, and
+// the restore workflow's ephemeral mint in ci_openbao_restore_root.go), so the
+// two cannot drift on the standby/sealed lessons recorded below.
+func generateRootPod() (string, error) {
+	// RESOLVE THE ACTIVE NODE — DO NOT ASSUME POD-0. This was `baoread.PodNames[0]`,
+	// while the interactive twin (RunRegenRoot) has always called findLeaderPod().
+	// generate-root is unauthenticated and node-local, so a standby rejects it with
+	// `400 * Vault is in standby mode` — but only at `-init`, five steps into the
+	// command, AFTER the sealed probe and the token lookup have both passed (a
+	// standby is unsealed, and it FORWARDS authenticated calls like `token lookup`).
+	// A prod bootstrap failed exactly here with pod-0 a standby, and a plain re-run
+	// could not clear it: raft leadership is sticky, so pod-0 stays a standby until
+	// something forces an election.
+	//
+	// This is the SECOND divergence between these two implementations of one flow —
+	// the `break` on `complete` below documents the first. See resolveGenerateRootPod.
+	pod, found := resolveGenerateRootPod()
+	if !found {
+		fmt.Fprintf(os.Stderr, "::error::no OpenBao pod reported itself the active raft node (every pod is a standby, or none answered). "+
+			"generate-root is node-local and standbys reject it; it cannot run against any pod in this state. "+
+			"Check `bao status` on %v — a cluster with no leader needs an election, not a re-run.\n", baoread.PodNames)
+		return "", fmt.Errorf("no active OpenBao node among %v to run generate-root against", baoread.PodNames)
+	}
+
+	// The generate-root flow requires an unsealed leader; if the cluster is
+	// still sealed surface that explicitly instead of a confusing API error
+	// halfway through. (The bash needed a jq-`//`-operator workaround here;
+	// the typed parse sidesteps it.)
+	statusOut, _, _ := baoread.ExecFn(pod, "", "", "status", "-format=json")
+	st, ok := baoread.ParsePodStatus(statusOut)
+	if !ok || st.Sealed {
+		state := "true"
+		if !ok {
+			state = "unknown"
+		}
+		fmt.Fprintf(os.Stderr, "::error::%s sealed-status check returned '%s' (expected 'false'). generate-root requires an unsealed leader. Check the unseal steps above and the cluster's bao status.\n", pod, state)
+		return "", fmt.Errorf("%s is not unsealed (sealed=%s)", pod, state)
+	}
+
+	return pod, nil
+}
+
+// generateRootQuorum runs the recovery-key quorum (RECOVERY_K1..3 from the
+// environment) against pod and returns the decoded, MASKED root token. It
+// persists nothing: where the token goes is the caller's decision.
+func generateRootQuorum(pod, region string) (string, error) {
 	keys, err := baoread.RecoveryKeysFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::error::Cannot regenerate — OPENBAO_RECOVERY_KEY_{1,2,3} env secrets not set on infra-%s.\n", region)
-		return err
+		return "", err
 	}
 
 	// Cancel any in-progress attempt (idempotent), then start fresh.
 	_, _, _ = baoread.ExecFn(pod, "", "", "operator", "generate-root", "-cancel")
 	initOut, errOut, err := baoread.ExecFn(pod, "", "", "operator", "generate-root", "-init", "-format=json")
 	if err != nil {
-		return fmt.Errorf("generate-root -init: %s", strings.TrimSpace(firstNonEmpty(errOut, initOut)))
+		return "", fmt.Errorf("generate-root -init: %s", strings.TrimSpace(firstNonEmpty(errOut, initOut)))
 	}
 	nonce, otp := parseGenRootInit(initOut)
 	if nonce == "" || otp == "" {
-		return fmt.Errorf("generate-root -init returned no nonce/otp: %s", strings.TrimSpace(initOut))
+		return "", fmt.Errorf("generate-root -init returned no nonce/otp: %s", strings.TrimSpace(initOut))
 	}
 	ghsecret.Mask(otp)
 
@@ -372,7 +409,7 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		out, errOut, err := baoread.ExecFn(pod, "", key+"\n",
 			"operator", "generate-root", "-nonce="+nonce, "-format=json", "-")
 		if err != nil {
-			return fmt.Errorf("generate-root rejected key %d/%d: %s", i+1, len(keys), strings.TrimSpace(firstNonEmpty(errOut, out)))
+			return "", fmt.Errorf("generate-root rejected key %d/%d: %s", i+1, len(keys), strings.TrimSpace(firstNonEmpty(errOut, out)))
 		}
 		if complete, _, _, enc := parseGenRootStep(out); complete {
 			encoded = enc
@@ -381,7 +418,7 @@ func RunRegenRootCI(dryRun bool, region string) error {
 	}
 	if encoded == "" {
 		fmt.Fprintln(os.Stderr, "::error::Quorum didn't produce encoded_token. Check unseal-key correctness.")
-		return fmt.Errorf("quorum completed without an encoded_token")
+		return "", fmt.Errorf("quorum completed without an encoded_token")
 	}
 
 	// Decode the encoded token using the OTP (in-pod, like regenroot.go).
@@ -392,21 +429,9 @@ func RunRegenRootCI(dryRun bool, region string) error {
 		newRoot = strings.TrimSpace(bare)
 	}
 	if newRoot == "" {
-		return fmt.Errorf("generate-root decode produced no token")
+		return "", fmt.Errorf("generate-root decode produced no token")
 	}
 	ghsecret.Mask(newRoot)
 
-	// Update env for downstream steps + the GH secret for the next run. The
-	// os.Setenv mirror lets the in-process `bao-ensure-ready` availability gate
-	// read the REGENERATED token (not the stale one it loaded) via os.Getenv;
-	// a standalone step gets it from the $GITHUB_ENV injection.
-	if err := ghaout.Append("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+newRoot); err != nil {
-		return err
-	}
-	os.Setenv("OPENBAO_ROOT_TOKEN", newRoot)
-	if err := ghsecret.SetFn("OPENBAO_ROOT_TOKEN", "infra-"+region, newRoot); err != nil {
-		return err
-	}
-	fmt.Printf("New root token written to infra-%s::OPENBAO_ROOT_TOKEN.\n", region)
-	return nil
+	return newRoot, nil
 }

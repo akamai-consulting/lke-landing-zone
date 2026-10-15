@@ -113,6 +113,9 @@ var unbackedGrants = map[string]bool{
 	// openbao/CloudMutate WAS HERE AND IS PAID DOWN: `llz openbao restore` mints
 	// its temporary bucket key through capability.CloudFor(restore binding).
 	"openbao/ClusterWrite": true,
+	// openbao/SecretCustody WAS HERE AND IS PAID DOWN: the restore workflow's
+	// root-token lifecycle (`token lookup` / `token revoke`, ci_openbao_restore_root.go)
+	// goes through capability.For(restore binding).BaoAdmin.
 	// The restore drill's custody is a ROOT token used over a port-forward: the
 	// restore endpoint needs `update` on sys/storage/raft/snapshot, which no
 	// Custodian operation expresses. (Its cloud grant IS backed — CloudFor on the
@@ -123,7 +126,6 @@ var unbackedGrants = map[string]bool{
 	// and the temporary bucket key it holds (minted through CloudFor on the drill
 	// binding, in deps.go, which backs its cloud-mutate).
 	"velero/SecretCustody":          true,
-	"openbao/SecretCustody":         true,
 	"reconcilelanes/CloudMutate":    true,
 	"reconcilelanes/SecretCustody":  true,
 	"reconciler/ClusterWrite":       true,

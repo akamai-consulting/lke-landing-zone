@@ -173,49 +173,15 @@ func RunRestore(o RestoreOpts) error {
 		return fmt.Errorf("choose the snapshot explicitly: --snapshot <key> (see `llz openbao backups --region %s`) or --latest", o.Region)
 	}
 	ctx := context.Background()
-	st, revoke, err := openBackupStore(ctx, o.Region)
+	s, err := prepareRestore(ctx, o)
 	if err != nil {
 		return err
 	}
-	defer revoke()
-
-	snap, data, m, err := baosnap.Fetch(ctx, st, o.Snapshot, o.FromCluster)
-	if err != nil {
-		return err
-	}
-	now := restoreNow()
-	fmt.Printf("snapshot   %s\n           %d bytes, raft index %d term %d, sealed hashes %v — verified\n",
-		baosnap.Describe(snap, now), len(data), m.Index, m.Term, m.Sealed)
-
-	cl := restoreCluster()
-	ctxName, _ := cl.Run("config", "current-context")
-	lke, err := verifyTargetCluster(ctx, cl, o.Region)
-	if err != nil {
-		return err
-	}
-	t, err := baosnap.OpenActive(cl.Run, restorePF)
-	if err != nil {
-		return err
-	}
-	defer t.Close()
-	plan, err := baosnap.Inspect(ctx, t, snap, m)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("target     kube-context %q = %s, OpenBao cluster %s (%s) initialized=%v sealed=%v\n",
-		strings.TrimSpace(string(ctxName)), lke, plan.Live.ClusterID, plan.Live.ClusterName, plan.Live.Initialized, plan.Live.Sealed)
-	if plan.SameCluster {
-		fmt.Println("match      the snapshot was taken by this cluster")
-	} else {
-		fmt.Printf("MISMATCH   the snapshot was taken by cluster %s, not this one — restoring needs --force\n", snap.ClusterID)
-	}
-	if peer := haPeer(o.Region); peer != "" {
-		fmt.Printf("HA pair    %s is paired with %s. They are independent stores: this restores %s ONLY.\n", o.Region, peer, o.Region)
-	}
+	defer s.Close()
 
 	if !o.Yes {
 		force := ""
-		if !plan.SameCluster {
+		if !s.plan.SameCluster {
 			force = " --force"
 		}
 		fmt.Printf("\nDRY RUN — nothing changed. To restore, re-run with --yes --confirm restore:%s%s\n", o.Region, force)
@@ -229,17 +195,110 @@ func RunRestore(o RestoreOpts) error {
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN is not set — a restore needs root on the TARGET cluster. " +
 			"Regenerate one with `llz openbao regen-root` (recovery-key quorum), export it, and re-run")
 	}
+	if err := s.apply(ctx, root); err != nil {
+		return err
+	}
+	fmt.Print(postRestoreChecklist(o.Region, haPeer(o.Region), s.snap, s.now))
+	return nil
+}
+
+// restoreSession is a restore between its two halves: everything has been
+// fetched, verified and inspected, and nothing has been changed. It holds the
+// temporary bucket key and the tunnel to the active pod until Close.
+//
+// TWO HALVES BECAUSE THERE ARE TWO CALLERS. `llz openbao restore` runs them back
+// to back. The restore-openbao workflow (`llz ci openbao-restore`) puts the one
+// thing it must not waste between them — a root token minted from the recovery
+// quorum — so that every refusal prepareRestore can reach (no such snapshot, an
+// archive that does not verify, a kube-context on another deployment, a foreign
+// snapshot without --force) happens before a quorum is spent.
+type restoreSession struct {
+	o      RestoreOpts
+	snap   baosnap.Snapshot
+	data   []byte
+	m      baosnap.Manifest
+	cl     capability.Cluster
+	t      baosnap.Target
+	plan   baosnap.Plan
+	now    time.Time
+	closer []func()
+}
+
+// Close releases the tunnel and deletes the temporary bucket key.
+func (s *restoreSession) Close() {
+	for i := len(s.closer) - 1; i >= 0; i-- {
+		s.closer[i]()
+	}
+	s.closer = nil
+}
+
+// prepareRestore is everything up to the irreversible call: fetch and verify the
+// snapshot, prove the kube-context is --region's LKE cluster, find the active
+// pod, and read the live cluster. It prints the plan. On error nothing is left
+// open.
+func prepareRestore(ctx context.Context, o RestoreOpts) (s *restoreSession, err error) {
+	s = &restoreSession{o: o}
+	defer func() {
+		if err != nil {
+			s.Close()
+			s = nil
+		}
+	}()
+	st, revoke, err := openBackupStore(ctx, o.Region)
+	if err != nil {
+		return s, err
+	}
+	s.closer = append(s.closer, revoke)
+
+	s.snap, s.data, s.m, err = baosnap.Fetch(ctx, st, o.Snapshot, o.FromCluster)
+	if err != nil {
+		return s, err
+	}
+	s.now = restoreNow()
+	fmt.Printf("snapshot   %s\n           %d bytes, raft index %d term %d, sealed hashes %v — verified\n",
+		baosnap.Describe(s.snap, s.now), len(s.data), s.m.Index, s.m.Term, s.m.Sealed)
+
+	s.cl = restoreCluster()
+	ctxName, _ := s.cl.Run("config", "current-context")
+	lke, err := verifyTargetCluster(ctx, s.cl, o.Region)
+	if err != nil {
+		return s, err
+	}
+	s.t, err = baosnap.OpenActive(s.cl.Run, restorePF)
+	if err != nil {
+		return s, err
+	}
+	s.closer = append(s.closer, s.t.Close)
+	s.plan, err = baosnap.Inspect(ctx, s.t, s.snap, s.m)
+	if err != nil {
+		return s, err
+	}
+	fmt.Printf("target     kube-context %q = %s, OpenBao cluster %s (%s) initialized=%v sealed=%v\n",
+		strings.TrimSpace(string(ctxName)), lke, s.plan.Live.ClusterID, s.plan.Live.ClusterName, s.plan.Live.Initialized, s.plan.Live.Sealed)
+	if s.plan.SameCluster {
+		fmt.Println("match      the snapshot was taken by this cluster")
+	} else {
+		fmt.Printf("MISMATCH   the snapshot was taken by cluster %s, not this one — restoring needs --force\n", s.snap.ClusterID)
+	}
+	if peer := haPeer(o.Region); peer != "" {
+		fmt.Printf("HA pair    %s is paired with %s. They are independent stores: this restores %s ONLY.\n", o.Region, peer, o.Region)
+	}
+	return s, nil
+}
+
+// apply is the irreversible half: re-prove the kube-context, then restore with
+// root and wait for OpenBao to serve again.
+func (s *restoreSession) apply(ctx context.Context, root string) error {
 	// Again, immediately before the one irreversible call: a dry run read minutes
 	// ago says nothing about where the context points now.
-	if _, err := verifyTargetCluster(ctx, cl, o.Region); err != nil {
+	if _, err := verifyTargetCluster(ctx, s.cl, s.o.Region); err != nil {
 		return err
 	}
-	fmt.Printf("restoring %s into %s…\n", snap.Key, o.Region)
-	if err := baosnap.Apply(ctx, t, root, plan, data, o.Force, restoreSettle); err != nil {
+	fmt.Printf("restoring %s into %s…\n", s.snap.Key, s.o.Region)
+	if err := baosnap.Apply(ctx, s.t, root, s.plan, s.data, s.o.Force, restoreSettle); err != nil {
 		return err
 	}
-	fmt.Printf("✓ restored %s — OpenBao is unsealed and serving the snapshot's state (raft index %d).\n", snap.Key, m.Index)
-	fmt.Print(postRestoreChecklist(o.Region, haPeer(o.Region), snap, now))
+	fmt.Printf("✓ restored %s — OpenBao is unsealed and serving the snapshot's state (raft index %d).\n", s.snap.Key, s.m.Index)
 	return nil
 }
 
