@@ -1,0 +1,7 @@
+# spec.components.cnpgBackup → the CNPG backup alert rules in their own
+# namespace. Template-managed. See docs/runbooks/cnpg-backup-restore.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - prometheusrule.yaml

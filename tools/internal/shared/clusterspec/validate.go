@@ -641,6 +641,9 @@ func validateComponents(env string, components map[string]ComponentToggle) []err
 			// The broad-PAT rotator's CronJob errors at runtime without its account-
 			// wide label + deployment list; require them at render time (the env patch
 			// would otherwise fill BROAD_PAT_* with empty strings). See RenderBroadPATEnvPatch.
+			if r.Name == CnpgBackupComponent {
+				errs = append(errs, validateCnpgBackupDependencies(env, components)...)
+			}
 			if r.Name == "broadPatRotator" {
 				t := components[r.Name]
 				if t.BroadPATLabel == "" || t.BroadPATDeployments == "" {
@@ -661,6 +664,7 @@ var sizingKnobs = map[string][]string{
 	"broadPatRotator": {"broadPATLabel", "broadPATDeployments"},
 	"openbaoBackup":   {"backupIntervalHours", "backupKeep"},
 	"velero":          {"backupIntervalHours", "retention", "backupIncludeNamespaces", "backupExcludeNamespaces"},
+	"cnpgBackup":      {"backupIntervalHours", "retention", "backupDatabases", "backupGeneration"},
 }
 
 // validateComponentSizing rejects sizing knobs set on a component that does not
@@ -702,6 +706,12 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	if t.BackupExcludeNamespaces != "" {
 		set["backupExcludeNamespaces"] = t.BackupExcludeNamespaces
 	}
+	if t.BackupDatabases != "" {
+		set["backupDatabases"] = t.BackupDatabases
+	}
+	if t.BackupGeneration != nil {
+		set["backupGeneration"] = ""
+	}
 	for knob := range set {
 		if !allowed[knob] {
 			errs = append(errs, fmt.Errorf("environments.%s.components.%s: %s is not a valid setting for this component (it reads: %s)", env, name, knob, knobList(name)))
@@ -717,11 +727,16 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	if t.BackupKeep != nil && (*t.BackupKeep < 1 || *t.BackupKeep > OpenBaoBackupMaxKeep) {
 		errs = append(errs, fmt.Errorf("environments.%s.components.%s.backupKeep %d must be between 1 and %d", env, name, *t.BackupKeep, OpenBaoBackupMaxKeep))
 	}
-	if t.Retention != "" && !durationRe.MatchString(t.Retention) {
+	// cnpgBackup's retention is barman's grammar, not this one (`m` is MONTHS
+	// there), so its own validator owns the format check.
+	if t.Retention != "" && name != CnpgBackupComponent && !durationRe.MatchString(t.Retention) {
 		errs = append(errs, fmt.Errorf("environments.%s.components.%s.retention %q is not a duration (e.g. 7d, 720h)", env, name, t.Retention))
 	}
 	if name == "velero" {
 		errs = append(errs, validateVeleroKnobs(env, t)...)
+	}
+	if name == CnpgBackupComponent {
+		errs = append(errs, validateCnpgBackupKnobs(env, t)...)
 	}
 	for knob, v := range map[string]string{"storage": t.Storage, "registryStorage": t.RegistryStorage} {
 		if v != "" && !quantityRe.MatchString(v) {

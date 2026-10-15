@@ -1,0 +1,13 @@
+# spec.components.cnpgBackup → this kustomize Component (default-disabled): the
+# alerts that say when apl-core's CloudNativePG database backups stop. That is ALL
+# it deploys — the backups themselves are apl-core's, switched on through its
+# native platformBackups settings by the apl-overlay reconciler (`llz render`
+# writes apl-values/<env>/apl-overlay/platformBackups.yaml, and buckets.cnpg into
+# obj.yaml). Rendered into its own carved Application (llz-cnpg-backup), so a
+# rule group that cannot sync fails that App and nothing else.
+#
+# Template-managed. See docs/runbooks/cnpg-backup-restore.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - cnpg-backup

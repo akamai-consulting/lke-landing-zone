@@ -162,6 +162,10 @@ func SizingSummary(t ComponentToggle) string {
 	}
 	add("backupIncludeNamespaces", t.BackupIncludeNamespaces)
 	add("backupExcludeNamespaces", t.BackupExcludeNamespaces)
+	add("backupDatabases", t.BackupDatabases)
+	if t.BackupGeneration != nil {
+		parts = append(parts, "backupGeneration="+strconv.Itoa(*t.BackupGeneration))
+	}
 	return strings.Join(parts, " ")
 }
 

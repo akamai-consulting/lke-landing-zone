@@ -92,8 +92,9 @@ func TestSiblingsOf(t *testing.T) {
 	// image pull and log write, so a Degraded proxy must fail its own App rather than
 	// platform-bootstrap. llz-openbao-backup joined with the scheduled OpenBao
 	// snapshot (spec.components.openbaoBackup): a failing backup fails its own App.
-	// llz-velero joined with spec.components.velero, for the same reason.
-	want := []string{"llz-broad-pat-rotator", "llz-externalsecrets", "llz-harbor",
+	// llz-velero joined with spec.components.velero, for the same reason, and
+	// llz-cnpg-backup with spec.components.cnpgBackup.
+	want := []string{"llz-broad-pat-rotator", "llz-cnpg-backup", "llz-externalsecrets", "llz-harbor",
 		"llz-obj-proxy", "llz-openbao-backup", "llz-reconciler", "llz-velero"}
 	if strings.Join(sibs, ",") != strings.Join(want, ",") {
 		t.Errorf("siblingsOf(llz-observability) = %v, want %v", sibs, want)

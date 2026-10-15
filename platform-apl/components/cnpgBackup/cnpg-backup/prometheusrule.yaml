@@ -1,0 +1,130 @@
+# Alerts that make a stopped or failing apl-core database backup loud. Same
+# doctrine as the OpenBao and Velero backups': FRESHNESS (when did a backup last
+# succeed) and the OUTCOME of the most recent attempt — never the presence of
+# objects in the bucket, which keeps a month of history after the producer dies.
+#
+# INPUTS ARE THE BARMAN-CLOUD PLUGIN'S METRICS, NOT CNPG's cnpg_collector_*. apl-core
+# backs its databases up through the plugin (apps.cnpg.useBackupPlugin, default
+# true, and a v64 values migration forces it on), and plugin-barman-cloud v0.15's
+# docs say its barman_cloud_cloudnative_pg_io_* gauges SUPERSEDE the in-core
+# cnpg_collector_last_{available,failed}_backup_timestamp, which CNPG 1.30 still
+# exports on every instance as "(Deprecated)" — whether a database is backed up or
+# not, so they cannot tell "no backup configured" from "no backup taken". The plugin
+# gauges exist only on a Cluster whose plugin stanza names the ObjectStore, which is
+# exactly "apl-core was told to back this database up". (apl-core's own
+# BackupHarborDbFailing / BackupKeycloakDbFailing read the cnpg_collector_* series.)
+# `llz ci assert-cnpg-backup` refuses a live Cluster on the in-tree barmanObjectStore
+# path for that reason: these rules would be blind to it.
+#
+# The gauges are served by every instance (primary and replicas) of a Cluster,
+# from the ObjectStore's status, through the PodMonitor apl-core's chart creates
+# (monitoring.enablePodMonitor, label prometheus: system). 0 means "none yet".
+# Scoped to the two namespaces LLZ backs up: gitea is disabled on every LLZ
+# cluster, and team databases are not this component's.
+#
+# NOT SCHEDULE-RENDERED, ON PURPOSE, as for velero: the interval is a knob
+# (components.cnpgBackup.backupIntervalHours, a divisor of 24, default 24), so
+# Stale is set for the LONGEST allowed interval — two missed daily runs plus an
+# hour (49h). It can never false-fire, and a shorter interval only makes it slower
+# to notice; Failing still fires on the first failed attempt.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llz-cnpg-backup-alerts
+  namespace: llz-cnpg-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system}. Without it the rule is never loaded.
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: llz-cnpg-backup
+      interval: 60s
+      rules:
+        - alert: LLZCnpgBackupFailing
+          # The newest attempt failed: the plugin records a failure later than the
+          # last success. A database that has never backed up has both at 0 and
+          # does not fire here (NeverSucceeded covers it).
+          expr: |
+            max by (namespace) (barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace=~"harbor|keycloak"})
+            > max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"harbor|keycloak"})
+          for: 15m
+          labels:
+            severity: warning
+            service: cnpg-backup
+          annotations:
+            summary: The most recent backup of the {{ $labels.namespace }} database failed
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/cnpg-backup-restore.md"
+            description: The barman-cloud plugin recorded a failed backup of the CNPG cluster in {{ $labels.namespace }} after its last successful one. `kubectl -n {{ $labels.namespace }} get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp` and the newest Backup's status.error name what failed; the instance pods' plugin-barman-cloud container logs carry barman's own error. LLZCnpgBackupStale escalates if it persists.
+        - alert: LLZCnpgBackupStale
+          # Two missed runs of the longest allowed interval (24h) plus an hour —
+          # see the header. Only over a database that HAS backed up once (> 0):
+          # one that never has is NeverSucceeded's, and would otherwise read as
+          # fifty-six years stale.
+          expr: |
+            (time() - max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"harbor|keycloak"}) > 176400)
+            and on (namespace)
+            (max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"harbor|keycloak"}) > 0)
+          for: 15m
+          labels:
+            severity: critical
+            service: cnpg-backup
+          annotations:
+            summary: No backup of the {{ $labels.namespace }} database has succeeded for over 49 hours
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/cnpg-backup-restore.md"
+            description: The newest available base backup of the CNPG cluster in {{ $labels.namespace }} is more than two daily intervals old. Point-in-time recovery still reaches as far as the WAL archive does, but every hour this persists lengthens the replay a restore needs and, once retention expires the last good base backup, removes the restore point altogether.
+        - alert: LLZCnpgBackupNeverSucceeded
+          # The plugin is wired (the series exists) but no base backup has ever
+          # completed: the ScheduledBackup never ran, every attempt failed before
+          # the plugin recorded it, or WAL archiving never started (a CNPG cluster
+          # refuses to archive into a non-empty destination — "Expected empty
+          # archive" — after a rebuild that did not bump backupGeneration). 26h: past
+          # the first run of the longest interval.
+          expr: |
+            max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"harbor|keycloak"}) == 0
+          for: 26h
+          labels:
+            severity: warning
+            service: cnpg-backup
+          annotations:
+            summary: The {{ $labels.namespace }} database has never completed a backup
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/cnpg-backup-restore.md"
+            description: The CNPG cluster in {{ $labels.namespace }} has had backups configured for over a day with no successful base backup. Check the Cluster's ContinuousArchiving condition (`kubectl -n {{ $labels.namespace }} get clusters.postgresql.cnpg.io -o yaml`) — "Expected empty archive" there means the cnpg bucket already holds this database's archive from an earlier cluster, and the runbook's backupGeneration step is the fix.
+        - alert: LLZCnpgWalArchivingFailing
+          # Continuous archiving is the half of the RPO the schedule does not set:
+          # the base backup is daily, but the WAL is what a restore replays up to the
+          # failure. pg_stat_archiver's last failure newer than its last success means
+          # WAL is piling up on the instance's volume instead of reaching the bucket.
+          # cnpg_pg_stat_archiver_* is CNPG's default monitoring query, served by the
+          # same PodMonitor.
+          expr: |
+            max by (namespace, pod) (cnpg_pg_stat_archiver_last_failed_time{namespace=~"harbor|keycloak"})
+            > max by (namespace, pod) (cnpg_pg_stat_archiver_last_archived_time{namespace=~"harbor|keycloak"})
+          for: 15m
+          labels:
+            severity: warning
+            service: cnpg-backup
+          annotations:
+            summary: WAL archiving from {{ $labels.namespace }}/{{ $labels.pod }} is failing
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/cnpg-backup-restore.md"
+            description: The instance's archiver has failed more recently than it succeeded, so new transactions are not reaching the cnpg bucket and the restore point is not advancing. Unarchived WAL also accumulates on the instance's WAL volume until it fills. The plugin-barman-cloud container logs in that pod name barman's error (credentials, endpoint, a non-empty archive).
+        - alert: LLZCnpgBackupMetricsAbsent
+          # Every rule above evaluates over the plugin's own series, so a plugin that
+          # was never wired — the overlay did not land, apl-core did not render the
+          # plugin stanza — or a PodMonitor nothing scrapes silences all of them at
+          # once. This is the presence companion that notices the silence. Any
+          # namespace: harbor's database is optional, keycloak's is not, so "neither"
+          # is the one absence that is always wrong while this component is on.
+          expr: |
+            absent(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"harbor|keycloak"})
+          for: 30m
+          labels:
+            severity: warning
+            service: cnpg-backup
+          annotations:
+            summary: The CNPG backup metrics are missing — the database backup alerts cannot fire
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/cnpg-backup-restore.md"
+            description: No barman_cloud_cloudnative_pg_io_last_available_backup_timestamp series for the harbor or keycloak database. Either apl-core has not wired backups onto the Cluster (env/settings/platformBackups.yaml on the apl-<env> branch, then apl-operator's sync), the instances are not running, or Prometheus is not scraping their PodMonitor. `llz ci assert-cnpg-backup --region <env>` checks the first two from the cluster side.

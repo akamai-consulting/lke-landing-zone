@@ -122,6 +122,8 @@ func mergeToggle(base, over ComponentToggle) ComponentToggle {
 		BackupKeep:              pickIntPtr(base.BackupKeep, over.BackupKeep),
 		BackupIncludeNamespaces: pickStr(base.BackupIncludeNamespaces, over.BackupIncludeNamespaces),
 		BackupExcludeNamespaces: pickStr(base.BackupExcludeNamespaces, over.BackupExcludeNamespaces),
+		BackupDatabases:         pickStr(base.BackupDatabases, over.BackupDatabases),
+		BackupGeneration:        pickIntPtr(base.BackupGeneration, over.BackupGeneration),
 	}
 }
 

@@ -1,0 +1,74 @@
+# Kyverno ClusterPolicy: point apl-core's CloudNativePG ObjectStores at the CA
+# that signs the obj-proxy certificate, so the barman-cloud plugin trusts the SSE-C
+# gateway standing in front of object storage.
+#
+# WHY CNPG NEEDS IT. apl-core's otomi-db chart renders a barman-cloud ObjectStore
+# per database when platformBackups is on (spec.components.cnpgBackup), with
+# endpointURL https://<cluster>.linodeobjects.com — the exact host the CoreDNS
+# rewrite captures. barman-cloud is boto3, and botocore FORCES PATH-STYLE
+# addressing whenever an endpoint_url is given (botocore/args.py: force_path_style
+# = addressing_style != 'virtual'; barman sets no addressing style), so the bucket
+# rides in the path, the host is the rewritten one, and every archive and backup
+# request reaches the proxy. Its certificate is from llz-serving-ca, which
+# python's certifi bundle does not hold: without this, WAL archiving and every
+# backup fail with CERTIFICATE_VERIFY_FAILED the moment the rewrite is live.
+#
+# WHY THE ObjectStore AND NOT THE POD. The plugin has a native knob for exactly
+# this — ObjectStore spec.configuration.endpointCA, a Secret key it mounts into its
+# own sidecar and the restore job — so the mutation is one field on the CR, not an
+# env var and a volume threaded into a sidecar CNPG-i injects. apl-core exposes no
+# value for it (charts/otomi-db/templates/objectstore.yaml), so admission is the
+# only lever, as for Harbor's registry. Helm's three-way merge leaves a field
+# neither manifest mentions alone, and every re-apply is re-mutated on UPDATE.
+#
+# WHAT IT BUYS. The proxy then writes the database backups SSE-C under
+# secret/obj/ssec, so they are encrypted at rest like Loki's and Harbor's objects
+# — and, like theirs, readable only through the proxy with that key: a rebuild
+# restores OpenBao first. Without objProxy none of this exists and the backups are
+# plaintext at rest (see the at-rest registration of the cnpg bucket).
+#
+# ORDERING. The plugin reads endpointCA when it builds an instance pod, so a pod
+# admitted before an ObjectStore carried it keeps failing until it is recreated.
+# On the usual order — objProxy already on when backups are enabled — the
+# ObjectStore is created after this policy and nothing needs doing. Enabling
+# objProxy UNDER existing backups is the other order: `llz ci assert-cnpg-backup`
+# reads the live ObjectStore, re-admits it if the field is missing, and fails
+# naming the restart the instances then need. It never restarts a database itself.
+#
+# FAILURE MODE: failurePolicy Ignore, as for Harbor — Fail would block apl-core
+# from writing its own ObjectStores whenever Kyverno is down. A missed mutation is
+# loud (archiving fails, LLZCnpgWalArchivingFailing) and the gate catches it.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: cnpg-obj-proxy-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    policies.kyverno.io/title: Trust the obj-proxy CA in apl-core's CNPG backups
+    policies.kyverno.io/category: Storage / Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: ObjectStore
+    policies.kyverno.io/description: >-
+      Sets spec.configuration.endpointCA on the barman-cloud ObjectStores in the
+      harbor and keycloak namespaces to the obj-proxy CA bundle, so apl-core's
+      CloudNativePG WAL archiving and backups trust the SSE-C gateway.
+spec:
+  background: false
+  failurePolicy: Ignore
+  rules:
+    - name: add-obj-proxy-endpoint-ca
+      match:
+        any:
+          - resources:
+              kinds: [barmancloud.cnpg.io/v1/ObjectStore]
+              # The two namespaces apl-core runs LLZ-backed-up databases in, each of
+              # which carries an obj-proxy-ca bundle (ca-trust.yaml).
+              namespaces: [harbor, keycloak]
+              operations: [CREATE, UPDATE]
+      mutate:
+        patchStrategicMerge:
+          spec:
+            configuration:
+              endpointCA:
+                name: obj-proxy-ca
+                key: ca.crt

@@ -154,7 +154,7 @@ func RenderObjOverlayShared() string {
 }
 
 // RenderObjOverlayEnv is a deployment's per-env obj.yaml override: the object-storage
-// region (the OBJ cluster id) and the loki/harbor bucket names, derived from the spec
+// region (the OBJ cluster id) and the loki/harbor/cnpg bucket names, derived from the spec
 // per the llz-object-storage module's naming. It deep-merges onto the _shared CR (same
 // kind/metadata; spec.provider.linode gains region+buckets). Empty when the env
 // declares no object-storage cluster (nothing to point at).
@@ -176,6 +176,14 @@ func RenderObjOverlayEnv(prefix, env, objCluster string) string {
 				// its existing registry bucket. Both on the platform-<app>-<env> convention.
 				"loki":   ObjLokiChunksBucket(prefix, env),
 				"harbor": ObjHarborRegistryBucket(prefix, env),
+				// apl-core's CNPG backups (platformBackups) build every database's
+				// destinationPath as s3://<buckets.cnpg>/<pathSuffix>. UNCONDITIONAL,
+				// like the bucket: apl-core reads it only for a database whose backup
+				// is enabled, and naming it everywhere keeps this file the same shape on
+				// every deployment — the whole-file write never toggles a key with the
+				// cnpgBackup component. Without it apl-core's default ("cnpg") names a
+				// bucket in nobody's account.
+				"cnpg": ObjCnpgBucket(prefix, env),
 			},
 		}}},
 	})

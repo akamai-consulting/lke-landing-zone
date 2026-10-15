@@ -95,6 +95,7 @@ spec:
       components:
         harbor: { enabled: false }
         velero: { enabled: true, backupIntervalHours: 12, retention: 14d, backupExcludeNamespaces: "kube-system team-scratch" }
+        cnpgBackup: { enabled: true, backupIntervalHours: 12, retention: 2w, backupGeneration: 2 }
     staging:
       cluster:
         clusterLabel: platform-staging
@@ -105,6 +106,7 @@ spec:
         objectStorage: { cluster: us-sea-1 }
       components:
         velero: { enabled: true }
+        cnpgBackup: { enabled: true }
 `
 
 const goldenPath = "testdata/render_golden.txt"

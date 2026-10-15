@@ -1,0 +1,18 @@
+# The cnpgBackup component's namespace. It holds the PrometheusRule and nothing
+# else — no pods, no Secrets, no credentials: the databases being backed up are
+# apl-core's and run in `harbor` and `keycloak`, and the gate's restore drill
+# builds (and deletes) its own scratch namespace. A namespace of its own rather
+# than a file in llz-observability so the rules arrive and leave with the
+# component, in their own carved App.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-cnpg-backup
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    kubernetes.io/metadata.name: llz-cnpg-backup
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    app.kubernetes.io/part-of: platform

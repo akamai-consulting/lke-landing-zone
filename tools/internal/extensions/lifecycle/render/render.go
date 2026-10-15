@@ -537,6 +537,14 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
 	}
 	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Cluster.Bootstrap, e.Components)
+	// apl-core's database backups (spec.components.cnpgBackup) — no file when the
+	// component is off, which the reconciler reads as "no opinion", not "disable".
+	// The same render-only-adds caveat as otomi.yaml below applies: turning the
+	// component off leaves a committed file asserting the backups until it is
+	// deleted, which docs/runbooks/cnpg-backup-restore.md says.
+	if pb := clusterspec.RenderPlatformBackupsOverlayEnv(e.Cluster.Bootstrap, e.Components); pb != "" {
+		targets[filepath.Join(overlay, clusterspec.OverlayPlatformBackupsFile)] = pb
+	}
 	// The platform's OWN version — no file unless manageAplVersion is set. See
 	// clusterspec.RenderOtomiOverlayEnv.
 	// THE OFF-SWITCH IS NOT SELF-ENFORCING, and that is a known gap rather than an

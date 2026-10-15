@@ -62,7 +62,7 @@ type Config struct {
 // apl-operator's "otomi commit" so the two writers' history stays legible.
 // maxAttempts bounds the fast-forward retry loop against concurrent pushes.
 const (
-	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + app values + teams) [ci skip]"
+	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + app values + teams + db backups) [ci skip]"
 	maxAttempts   = 4
 )
 
@@ -88,6 +88,23 @@ var aplOverlayTargets = map[string]string{
 // writes whole. apl-core co-writes this one and LLZ owns a single key of it, so it
 // takes the key-level path (otomiOverlayFiles) exactly as the per-app CRs do.
 const aplOtomiTarget = "env/settings/otomi.yaml"
+
+// aplPlatformBackupsTarget is apl-core's AplBackupCollection settings CR — where
+// platformBackups.database.<db> lives (src/common/repo.ts, apl-core main b7da647).
+//
+// NOT IN aplOverlayTargets, for the reason aplOtomiTarget is not: that map is for
+// files LLZ owns OUTRIGHT. This one is apl-core's settings resource, carries the
+// gitea application backup and gitea's database entry LLZ has no opinion on, and is
+// the shape the Console's settings pages write. So it takes the KEY-LEVEL path
+// (platformBackupsOverlayFiles → clusterspec.SetPlatformBackups), writing only
+// spec.database.<db>.{enabled,schedule,retentionPolicy,pathSuffix} for the
+// databases the spec backs up.
+//
+// LAB-GATED like everything in this file: the path is apl-core-internal. If a lab
+// finds apl-core keeping the CR elsewhere, this constant is the one-line fix — and
+// `llz ci assert-cnpg-backup` is what would notice, because it reads the live
+// Cluster and finds no backup stanza.
+const aplPlatformBackupsTarget = "env/settings/" + clusterspec.OverlayPlatformBackupsFile
 
 // aplAppTarget is apl-core's per-app AplApp CR path on the machine branch.
 func aplAppTarget(app string) string { return "env/apps/" + app + ".yaml" }
@@ -208,6 +225,10 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 	// absent, so apl-operator provisions the namespace + Keycloak group + realm role
 	// team-<name>. Never clobbers a team apl-core / the App Platform Console owns.
 	if err := teamOverlayFiles(ctx, repo, cfg, files); err != nil {
+		return err
+	}
+
+	if err := platformBackupsOverlayFiles(ctx, repo, cfg, files, reg); err != nil {
 		return err
 	}
 
@@ -541,6 +562,85 @@ func teamOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[stri
 				files[target] = src
 			}
 		}
+	}
+	return nil
+}
+
+// platformBackupsOverlayFiles asserts the database backups the spec turns on
+// (spec.components.cnpgBackup) onto apl-core's own AplBackupCollection CR.
+//
+// No source means the component is off for this env, and that is NO OPINION —
+// not "disable". The renderer emits no file, so apl-core's own settings, Console
+// edits included, stand untouched.
+//
+// AN ABSENT TARGET IS CREATED from the source as written — a complete
+// AplBackupCollection with only LLZ's databases in it. Unlike otomi.yaml, apl-core
+// does not necessarily keep this file on a fresh branch, and refusing to create it
+// would make the component look wired and back nothing up. There is nothing of
+// apl-core's to clobber in a file that does not exist.
+//
+// A DEGENERATE OR MULTI-DOCUMENT TARGET IS LEFT ALONE and said out loud (a gauge,
+// because this runs in a pod), for the reasons otomiOverlayFiles gives: merging
+// into nothing would push a kind-less fragment over apl-core's CR, and a merge
+// re-marshals one document. A target that does not parse is the same — and never
+// fails the pass, which would drop obj.yaml and every app toggle with it.
+func platformBackupsOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string, reg *metrics.Registry) error {
+	unusable := 0.0
+	defer func() {
+		reg.SetGauge("llz_apl_overlay_platform_backups_target_unusable",
+			"1 when llz is asserting apl-core database backups but env/settings/platformBackups.yaml cannot be merged into",
+			map[string]string{"branch": cfg.TargetBranch}, unusable)
+	}()
+
+	srcPath := envOverlayPath(cfg.Env, clusterspec.OverlayPlatformBackupsFile)
+	src, found, err := repo.ReadFile(ctx, cfg.SourceBranch, srcPath)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", srcPath, err)
+	}
+	if !found {
+		return nil // cnpgBackup off for this env — apl-core's settings stand
+	}
+	// LLZ'S OWN FILE: a parse failure is a real error in this repo, not apl-core's.
+	desired, err := clusterspec.PlatformBackupsDesired([]byte(src))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", srcPath, err)
+	}
+	if len(desired) == 0 {
+		unusable = 1
+		fmt.Printf("apl-overlay: %s names no database, so apl-core's database backups are asserted by NOTHING — "+
+			"re-run `llz render` and commit the result\n", srcPath)
+		return nil
+	}
+
+	current, exists, err := repo.ReadFile(ctx, cfg.TargetBranch, aplPlatformBackupsTarget)
+	if err != nil {
+		return fmt.Errorf("read target %s: %w", aplPlatformBackupsTarget, err)
+	}
+	if !exists {
+		files[aplPlatformBackupsTarget] = src
+		return nil
+	}
+	switch {
+	case !clusterspec.OtomiCRIsMergeable([]byte(current)):
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s exists but is not a settings CR (empty, or no kind), so the database backups "+
+			"are NOT being asserted — the rest of this pass still syncs\n", aplPlatformBackupsTarget, cfg.TargetBranch)
+		return nil
+	case !clusterspec.OtomiTargetIsSingleDocument([]byte(current)):
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s holds more than one YAML document; merging would truncate it, so the "+
+			"database backups are NOT being asserted\n", aplPlatformBackupsTarget, cfg.TargetBranch)
+		return nil
+	}
+	updated, changed, err := clusterspec.SetPlatformBackups([]byte(current), desired)
+	if err != nil {
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s does not parse (%v), so the database backups are NOT being asserted — "+
+			"the rest of this pass still syncs\n", aplPlatformBackupsTarget, cfg.TargetBranch, err)
+		return nil
+	}
+	if changed {
+		files[aplPlatformBackupsTarget] = string(updated)
 	}
 	return nil
 }

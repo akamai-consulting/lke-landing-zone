@@ -294,6 +294,15 @@ type ComponentToggle struct {
 	// llz-velero) are appended whatever it says.
 	BackupIncludeNamespaces string `json:"backupIncludeNamespaces,omitempty"` // Schedule includedNamespaces
 	BackupExcludeNamespaces string `json:"backupExcludeNamespaces,omitempty"` // Schedule excludedNamespaces (+ the mandatory ones)
+	// cnpgBackup → apl-core's platformBackups for its CNPG databases, rendered by
+	// RenderPlatformBackupsOverlayEnv (the component also reads
+	// backupIntervalHours and retention above — retention in barman's d/w/m form).
+	// BackupDatabases is SPACE-separated (harbor, keycloak); unset means both,
+	// minus harbor where Harbor is not run. BackupGeneration (default 1) is the
+	// <db>-<generation> object prefix: bump it after a restore, because a CNPG
+	// cluster will not archive over an existing archive.
+	BackupDatabases  string `json:"backupDatabases,omitempty"`  // platformBackups.database.<db> to enable
+	BackupGeneration *int   `json:"backupGeneration,omitempty"` // pathSuffix <db>-<generation>
 }
 
 // Cluster maps to the three per-env tfvars (cluster, cluster-bootstrap,
