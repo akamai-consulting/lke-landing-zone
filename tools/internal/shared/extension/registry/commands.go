@@ -255,6 +255,7 @@ var commands = []Command{
 	{"seedspecial", seedspecial.ResolveHarborURLCmd},
 	{"statepassphrase", statepassphrase.RotateStatePassphraseCmd},
 	{"teardown", teardown.DrainObjBucketsCmd},
+	{"teardown", teardown.OpenBaoBackupDestroyGuardCmd},
 	{"teardown", teardown.ReapCmd},
 	{"teardown", teardown.ReapNodeBalancersCmd},
 	{"teardown", teardown.ReapObjKeysCmd},

@@ -49,6 +49,7 @@ func BackupCmd() *cobra.Command {
 // DrillCmd is `llz ci assert-openbao-restore`, the e2e restore drill.
 func DrillCmd() *cobra.Command {
 	var region string
+	var backupOnly bool
 	c := &cobra.Command{
 		Use:   "assert-openbao-restore",
 		Short: "e2e: write a canary, run the backup Job, restore its snapshot, and require the canary back",
@@ -58,12 +59,25 @@ func DrillCmd() *cobra.Command {
 			"same functions `llz openbao restore` uses, and fails unless the canary reads back its\n" +
 			"snapshotted value.\n" +
 			"\n" +
-			"RESTORES THE LIVE STORE IN PLACE — for the e2e cluster only. Needs OPENBAO_ROOT_TOKEN\n" +
-			"(so it runs before the bootstrap job revokes root) and LINODE_API_TOKEN. Skips cleanly\n" +
-			"when spec.components.openbaoBackup is disabled for --region.",
+			"RESTORES THE LIVE STORE IN PLACE, so it refuses any --region but the e2e lane's own\n" +
+			"deployments (e2e, e2e-<forge>). Needs OPENBAO_ROOT_TOKEN (so it runs before the bootstrap\n" +
+			"job revokes root) and LINODE_API_TOKEN. Re-writes any tracked credential the rollback\n" +
+			"reverted.\n" +
+			"\n" +
+			"--backup-only runs the producer Job and the consumer-side fetch + verify and stops: no\n" +
+			"canary, no root, no restore, any deployment. bootstrap-openbao runs it everywhere so a\n" +
+			"backup that cannot work fails the bootstrap instead of the first scheduled tick.\n" +
+			"\n" +
+			"Skips cleanly when spec.components.openbaoBackup is disabled for --region.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return RunDrill(context.Background(), region) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if backupOnly {
+				return RunBackupCheck(context.Background(), region)
+			}
+			return RunDrill(context.Background(), region)
+		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) to drill (required)")
+	c.Flags().BoolVar(&backupOnly, "backup-only", false, "only run the backup Job and verify its upload through the restore path; never restores (safe on any deployment)")
 	return c
 }

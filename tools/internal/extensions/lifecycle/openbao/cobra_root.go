@@ -93,7 +93,7 @@ func BackupsCmd() *cobra.Command {
 func RestoreCmd() *cobra.Command {
 	var o RestoreOpts
 	c := &cobra.Command{
-		Use:   "restore --region <deployment> (--snapshot <key> | --latest) [--yes --confirm restore:<deployment>] [--force]",
+		Use:   "restore --region <deployment> (--snapshot <key> | --latest [--from-cluster <id>]) [--yes --confirm restore:<deployment>] [--force]",
 		Short: "restore a deployment's OpenBao from a Raft snapshot (dry run unless --yes)",
 		Long: "REPLACES THE WHOLE STORE of the OpenBao your kube-context points at with a snapshot from\n" +
 			"--region's backup bucket. Fetches the snapshot through a temporary read-only key\n" +
@@ -101,6 +101,11 @@ func RestoreCmd() *cobra.Command {
 			"reports what it would do. With --yes --confirm restore:<deployment> it restores, using\n" +
 			"OPENBAO_ROOT_TOKEN (regenerate with `llz openbao regen-root`), and waits for OpenBao to\n" +
 			"come back unsealed.\n" +
+			"\n" +
+			"The kube-context must point at --region's own LKE cluster (its nodes' cluster id must be\n" +
+			"the one the Linode account labels with the spec's cluster.clusterLabel); this is checked\n" +
+			"on every run and --force does not waive it. --latest refuses when the bucket holds more\n" +
+			"than one OpenBao cluster's snapshots (what a rebuild leaves) — add --from-cluster <id>.\n" +
 			"\n" +
 			"A snapshot from a DIFFERENT cluster (a rebuilt one — or the other half of an HA pair) is\n" +
 			"refused without --force. The cluster must hold the same static seal key\n" +
@@ -117,6 +122,7 @@ func RestoreCmd() *cobra.Command {
 	f.StringVar(&o.Region, "region", "", "deployment (spec env name) whose snapshot to restore (required)")
 	f.StringVar(&o.Snapshot, "snapshot", "", "snapshot key, as printed by 'llz openbao backups'")
 	f.BoolVar(&o.Latest, "latest", false, "restore the newest snapshot (must be asked for explicitly)")
+	f.StringVar(&o.FromCluster, "from-cluster", "", "only consider snapshots taken by this OpenBao cluster id (as printed by 'llz openbao backups'); required with --latest when the bucket holds several")
 	f.BoolVar(&o.Force, "force", false, "restore a snapshot taken by a different OpenBao cluster (a rebuild)")
 	f.StringVar(&o.Confirm, "confirm", "", "must be exactly restore:<deployment> to execute")
 	return c

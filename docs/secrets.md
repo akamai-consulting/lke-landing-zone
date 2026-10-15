@@ -804,8 +804,11 @@ or Raft storage is unhealthy.
 OpenBao is the one piece of platform state nothing can re-derive, so the
 `openbaoBackup` component (on by default) snapshots it: the `openbao-backup` CronJob takes
 a Raft snapshot from the active node every six hours, verifies it, uploads it to the
-deployment's `<prefix>-openbao-backup-<deployment>` bucket, reads it back, and keeps the
-newest 28 (seven days). Each deployment of an HA pair backs up its own, independent store.
+deployment's versioned `<prefix>-openbao-backup-<deployment>` bucket, reads it back, and
+keeps the newest 28 **per OpenBao cluster id** (seven days; both are spec knobs,
+`components.openbaoBackup.backupIntervalHours` / `backupKeep`). Per cluster id so that a
+rebuilt, empty OpenBao backing up into the same bucket can never push the lost cluster's
+snapshots out. Each deployment of an HA pair backs up its own, independent store.
 
 ```bash
 llz openbao backups --region <deployment>                       # list, newest first
@@ -818,18 +821,27 @@ stored value in a snapshot is already ciphertext under OpenBao's barrier, which 
 deployment's `OPENBAO_SEAL_KEY` unwraps. The bucket does expose storage **key names**
 (secret paths, policy and role names), Raft membership and timing — never a value. Bucket
 read plus the seal key is the whole store, so keep the seal key away from anyone who can
-read the bucket. The backup key is scoped to that one bucket and is deliberately not the
-platform key apl-core hands to Loki and Harbor.
+read the bucket. Today the `infra-<deployment>` environment holds both the seal key and
+`LINODE_API_TOKEN` (which can mint a read key on the bucket), so the effective boundary is
+**who can run workflows in that environment** — escrow the seal key offline and protect the
+environment; the seal/recovery-key custody ADR proposed in
+[#568](https://github.com/akamai-consulting/lke-landing-zone/pull/568) is the planned fix. For the same reason **no other backup may include the `llz-openbao`
+namespace**: its `openbao-unseal-key` Secret is the seal key, so a Velero schedule over
+every namespace would put key and data in one bucket. The backup key is scoped to that one
+bucket and is deliberately not the platform key apl-core hands to Loki and Harbor.
 
 **Restore** replaces the whole store, needs a root token on the target cluster and the
-same seal key the snapshot's cluster used, refuses a snapshot from a different cluster
-(the HA peer, or a rebuild) without `--force`, and leaves follow-up work — rotated keys the
+same seal key the snapshot's cluster used, refuses a kube-context that is not `--region`'s
+own LKE cluster (whatever `--force` says), refuses a snapshot from a different OpenBao
+cluster (the HA peer, or a rebuild) without `--force`, refuses `--latest` across several
+cluster ids without `--from-cluster`, and leaves follow-up work — rotated keys the
 snapshot predates, writes made since. The procedure, per scenario, is
 [runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md).
 
-**The gate.** `llz ci assert-openbao-restore` runs in release-e2e before the root token is
-revoked: canary write → the real backup Job → fetch its exact snapshot → overwrite the
-canary → restore through the operator command's own code → the canary must read back.
+**The gate.** `llz ci assert-openbao-restore` runs in release-e2e (`restore_drill`) before
+the root token is revoked: canary write → the real backup Job → fetch its exact snapshot →
+overwrite the canary → restore through the operator command's own code → the canary must
+read back. Every deployment's bootstrap runs its non-destructive half (`--backup-only`).
 
 ## Cross-references
 

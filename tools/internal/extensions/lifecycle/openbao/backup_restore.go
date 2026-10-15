@@ -22,8 +22,17 @@ package openbao
 //     replayed against another.
 //   - a snapshot must be chosen explicitly: --snapshot <key>, or --latest. There
 //     is no default — "the newest" is a choice, and after an incident it is often
-//     the wrong one (it may already contain the damage).
+//     the wrong one (it may already contain the damage). --latest is refused when
+//     the bucket holds more than one OpenBao cluster's snapshots (after a rebuild
+//     the newest is the rebuilt cluster's empty store) unless --from-cluster says
+//     whose history is meant — see baosnap.Select.
 //   - the snapshot must verify before it is sent.
+//   - the kube-context must point at THIS deployment's LKE cluster. --region picks
+//     the bucket; the kube-context picks the target; nothing else ties the two.
+//     The LKE cluster id read off the context's nodes must be the one the Linode
+//     account labels with the spec's cluster.clusterLabel for --region — checked
+//     on the dry run and again before applying, and NOT waived by --force (which
+//     answers a different question).
 //   - a snapshot whose cluster id is not the live cluster's needs --force. In an
 //     HA pair the two clusters are INDEPENDENT stores with their own keyrings; a
 //     mismatch is the peer (wrong kube-context) as often as a rebuild.
@@ -32,6 +41,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +54,12 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/linode"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
+
+// restoreLKEClusters lists the ids of the LKE clusters in the account carrying
+// label. Seamed for tests; built from the restore binding like every other handle.
+var restoreLKEClusters = func(ctx context.Context, token, label string) ([]uint64, error) {
+	return capability.CloudFor(restoreBinding()).Client(token, 30*time.Second).ClustersWithLabel(ctx, label)
+}
 
 // restoreBinding is the declaration every handle here is built from.
 func restoreBinding() extension.Binding { return Extension().MustBinding("restore") }
@@ -59,31 +76,44 @@ var (
 	restoreNow     = time.Now
 )
 
+// location is where a deployment's snapshots live, and which LKE cluster they
+// belong on, all from the spec.
+type location struct {
+	objCluster, bucket, endpoint string
+	// clusterLabel is the deployment's LKE cluster label (cluster.clusterLabel) —
+	// what the kube-context check holds the restore target to.
+	clusterLabel string
+}
+
 // backupLocation resolves where a deployment's snapshots live, from the spec.
-func backupLocation(region string) (objCluster, bucket, endpoint string, err error) {
+func backupLocation(region string) (location, error) {
 	if region == "" {
-		return "", "", "", fmt.Errorf("--region is required")
+		return location{}, fmt.Errorf("--region is required")
 	}
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
-		return "", "", "", fmt.Errorf("load the instance spec (run from the instance repo root): %w", err)
+		return location{}, fmt.Errorf("load the instance spec (run from the instance repo root): %w", err)
 	}
 	e, ok := lz.Env(region)
 	if !ok {
-		return "", "", "", fmt.Errorf("no deployment %q in the spec", region)
+		return location{}, fmt.Errorf("no deployment %q in the spec", region)
 	}
-	objCluster = e.Cluster.ObjectStorage.Cluster
-	if objCluster == "" {
-		return "", "", "", fmt.Errorf("deployment %q declares no cluster.objectStorage.cluster", region)
+	oc := e.Cluster.ObjectStorage.Cluster
+	if oc == "" {
+		return location{}, fmt.Errorf("deployment %q declares no cluster.objectStorage.cluster", region)
 	}
-	return objCluster, clusterspec.ObjOpenBaoBackupBucket(lz.ObjLabelPrefix(), region), clusterspec.ObjEndpointHost(objCluster), nil
+	return location{
+		objCluster: oc, bucket: clusterspec.ObjOpenBaoBackupBucket(lz.ObjLabelPrefix(), region),
+		endpoint: clusterspec.ObjEndpointHost(oc), clusterLabel: e.Cluster.ClusterLabel,
+	}, nil
 }
 
 func openBackupStore(ctx context.Context, region string) (baosnap.Store, func(), error) {
-	objCluster, bucket, endpoint, err := backupLocation(region)
+	loc, err := backupLocation(region)
 	if err != nil {
 		return baosnap.Store{}, func() {}, err
 	}
+	objCluster, bucket, endpoint := loc.objCluster, loc.bucket, loc.endpoint
 	tok, err := linode.TokenFromEnv()
 	if err != nil {
 		return baosnap.Store{}, func() {}, fmt.Errorf("%w — the backups are read with a temporary key minted from it, because the backup key itself lives in OpenBao", err)
@@ -114,6 +144,11 @@ func RunBackups(region string) error {
 	for _, s := range snaps {
 		fmt.Println("  " + baosnap.Describe(s, now))
 	}
+	if ids := baosnap.ClusterIDs(snaps); len(ids) > 1 {
+		fmt.Printf("\nNOTE: these come from %d different OpenBao clusters (%s). That is what a rebuild leaves behind: the\n"+
+			"newest are usually the rebuilt cluster's backups of its own (empty) store. `restore --latest` needs\n"+
+			"--from-cluster <id> here; see docs/runbooks/openbao-backup-restore.md.\n", len(ids), strings.Join(ids, ", "))
+	}
 	if len(foreign) > 0 {
 		fmt.Printf("(%d other object(s) under %s are not snapshot names and are ignored: %s)\n",
 			len(foreign), baosnap.Prefix, strings.Join(foreign, ", "))
@@ -123,12 +158,13 @@ func RunBackups(region string) error {
 
 // RestoreOpts are the restore flags.
 type RestoreOpts struct {
-	Region   string
-	Snapshot string
-	Latest   bool
-	Force    bool
-	Confirm  string
-	Yes      bool
+	Region      string
+	Snapshot    string
+	Latest      bool
+	FromCluster string
+	Force       bool
+	Confirm     string
+	Yes         bool
 }
 
 // RunRestore is `llz openbao restore`.
@@ -143,7 +179,7 @@ func RunRestore(o RestoreOpts) error {
 	}
 	defer revoke()
 
-	snap, data, m, err := baosnap.Fetch(ctx, st, o.Snapshot)
+	snap, data, m, err := baosnap.Fetch(ctx, st, o.Snapshot, o.FromCluster)
 	if err != nil {
 		return err
 	}
@@ -153,6 +189,10 @@ func RunRestore(o RestoreOpts) error {
 
 	cl := restoreCluster()
 	ctxName, _ := cl.Run("config", "current-context")
+	lke, err := verifyTargetCluster(ctx, cl, o.Region)
+	if err != nil {
+		return err
+	}
 	t, err := baosnap.OpenActive(cl.Run, restorePF)
 	if err != nil {
 		return err
@@ -162,8 +202,8 @@ func RunRestore(o RestoreOpts) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("target     kube-context %q, OpenBao cluster %s (%s) initialized=%v sealed=%v\n",
-		strings.TrimSpace(string(ctxName)), plan.Live.ClusterID, plan.Live.ClusterName, plan.Live.Initialized, plan.Live.Sealed)
+	fmt.Printf("target     kube-context %q = %s, OpenBao cluster %s (%s) initialized=%v sealed=%v\n",
+		strings.TrimSpace(string(ctxName)), lke, plan.Live.ClusterID, plan.Live.ClusterName, plan.Live.Initialized, plan.Live.Sealed)
 	if plan.SameCluster {
 		fmt.Println("match      the snapshot was taken by this cluster")
 	} else {
@@ -189,6 +229,11 @@ func RunRestore(o RestoreOpts) error {
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN is not set — a restore needs root on the TARGET cluster. " +
 			"Regenerate one with `llz openbao regen-root` (recovery-key quorum), export it, and re-run")
 	}
+	// Again, immediately before the one irreversible call: a dry run read minutes
+	// ago says nothing about where the context points now.
+	if _, err := verifyTargetCluster(ctx, cl, o.Region); err != nil {
+		return err
+	}
 	fmt.Printf("restoring %s into %s…\n", snap.Key, o.Region)
 	if err := baosnap.Apply(ctx, t, root, plan, data, o.Force, restoreSettle); err != nil {
 		return err
@@ -196,6 +241,107 @@ func RunRestore(o RestoreOpts) error {
 	fmt.Printf("✓ restored %s — OpenBao is unsealed and serving the snapshot's state (raft index %d).\n", snap.Key, m.Index)
 	fmt.Print(postRestoreChecklist(o.Region, haPeer(o.Region), snap, now))
 	return nil
+}
+
+// verifyTargetCluster proves the kube-context points at --region's LKE cluster:
+// the cluster id its nodes carry must be one the Linode account labels with the
+// spec's cluster.clusterLabel for that deployment. Returns a description for the
+// dry-run output.
+//
+// WHY THIS IS NOT THE CLUSTER-ID CHECK. The OpenBao cluster-id comparison asks
+// "did this store take this snapshot?" and --force exists to answer "no, it was
+// rebuilt" — at which point it no longer guards anything, and a rebuild is exactly
+// when an operator juggles several contexts. This asks "is the target the
+// deployment the bucket belongs to?", which has the same answer before and after a
+// rebuild, so nothing waives it.
+func verifyTargetCluster(ctx context.Context, cl capability.Cluster, region string) (string, error) {
+	loc, err := backupLocation(region)
+	if err != nil {
+		return "", err
+	}
+	if loc.clusterLabel == "" {
+		return "", fmt.Errorf("deployment %q declares no cluster.clusterLabel — cannot tell whether the kube-context points at it, so refusing", region)
+	}
+	nodes, nerr := cl.Run("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}")
+	server, _ := cl.Run("config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}")
+	liveID, err := LKEClusterOfContext(strings.Fields(string(nodes)), strings.TrimSpace(string(server)))
+	if err != nil {
+		if nerr != nil {
+			err = fmt.Errorf("%w (listing nodes: %v)", err, nerr)
+		}
+		return "", err
+	}
+	tok, err := linode.TokenFromEnv()
+	if err != nil {
+		return "", err
+	}
+	ids, err := restoreLKEClusters(ctx, tok, loc.clusterLabel)
+	if err != nil {
+		return "", fmt.Errorf("look up LKE cluster %q in the Linode account: %w", loc.clusterLabel, err)
+	}
+	if err := TargetIsDeployment(region, loc.clusterLabel, liveID, ids); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("LKE cluster %s (%s)", liveID, loc.clusterLabel), nil
+}
+
+// lkeServerRe matches an LKE-Enterprise API server host, which leads with the
+// cluster id: https://lke637329.api.us-ord.enterprise.linodelke.net:6443.
+var lkeServerRe = regexp.MustCompile(`^https?://lke([0-9]+)\.`)
+
+// LKEClusterOfContext reads the LKE cluster id a kube-context points at: from its
+// nodes' names (`lke<cluster>-<pool>-<suffix>`, linode.LKEClusterIDFromNodeName —
+// the same parser discovery uses) and, when there are none to read, from an
+// LKE-Enterprise API server host. Every node must agree; a context whose nodes
+// name two clusters, or none, is not something to restore into. Pure.
+func LKEClusterOfContext(nodeNames []string, server string) (string, error) {
+	seen := map[string]bool{}
+	var unparsed []string
+	for _, n := range nodeNames {
+		if id := linode.LKEClusterIDFromNodeName(n); id != "" {
+			seen[id] = true
+		} else {
+			unparsed = append(unparsed, n)
+		}
+	}
+	switch {
+	case len(seen) > 1:
+		ids := make([]string, 0, len(seen))
+		for id := range seen {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return "", fmt.Errorf("the kube-context's nodes belong to more than one LKE cluster (%s) — refusing to pick one", strings.Join(ids, ", "))
+	case len(seen) == 1 && len(unparsed) == 0:
+		for id := range seen {
+			return id, nil
+		}
+	case len(seen) == 1:
+		return "", fmt.Errorf("the kube-context's nodes are not all LKE nodes of one cluster (unrecognised: %s) — refusing", strings.Join(unparsed, ", "))
+	}
+	if m := lkeServerRe.FindStringSubmatch(server); m != nil && len(nodeNames) == 0 {
+		return m[1], nil
+	}
+	return "", fmt.Errorf("cannot tell which LKE cluster the kube-context points at (nodes %v, server %q) — refusing to restore into an unidentified cluster", nodeNames, server)
+}
+
+// TargetIsDeployment is the verdict: liveID must be one of the account's clusters
+// labelled clusterLabel. Pure.
+func TargetIsDeployment(region, clusterLabel, liveID string, idsWithLabel []uint64) error {
+	if len(idsWithLabel) == 0 {
+		return fmt.Errorf("no LKE cluster labelled %q (deployment %s's cluster.clusterLabel) exists in this Linode account, "+
+			"but the kube-context points at LKE cluster %s — refusing: that is not %s", clusterLabel, region, liveID, region)
+	}
+	want := make([]string, 0, len(idsWithLabel))
+	for _, id := range idsWithLabel {
+		if fmt.Sprint(id) == liveID {
+			return nil
+		}
+		want = append(want, fmt.Sprint(id))
+	}
+	return fmt.Errorf("the kube-context points at LKE cluster %s, but deployment %s is LKE cluster %s (%s) — "+
+		"--region chose %s's backups and the context would restore them somewhere else. Switch your kube-context "+
+		"to %s's cluster and re-run; --force does not waive this", liveID, region, strings.Join(want, ", "), clusterLabel, region, region)
 }
 
 // postRestoreChecklist is what the operator must do next. Printed, not

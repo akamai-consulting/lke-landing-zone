@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -449,6 +450,9 @@ type fakeWriter struct {
 	capability.Writer
 	logs    *string
 	applied int
+	// afterSnapshot runs once the producer has taken its snapshot — the window in
+	// which a rotator can re-mint a credential the restore will then revert.
+	afterSnapshot func()
 }
 
 func (w *fakeWriter) Delete(string, string, ...string) ([]byte, error) { return nil, nil }
@@ -468,10 +472,17 @@ func (w *fakeWriter) ApplyStdin(manifest, _ string) ([]byte, error) {
 	}
 	b, _ := json.Marshal(rec)
 	*w.logs = "starting\n" + string(b) + "\n"
+	if w.afterSnapshot != nil {
+		w.afterSnapshot()
+	}
 	return nil, nil
 }
 
-func drillInstance(t *testing.T, enabled bool) {
+// drillInstance writes a one-deployment instance named e2e — the lane the drill
+// is allowed to restore.
+func drillInstance(t *testing.T, enabled bool) { t.Helper(); drillInstanceAs(t, "e2e", enabled) }
+
+func drillInstanceAs(t *testing.T, name string, enabled bool) {
 	t.Helper()
 	root := t.TempDir()
 	lz := `apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -487,15 +498,15 @@ spec:
 	env := `apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: ClusterDefinition
 metadata:
-  name: prod
+  name: ` + name + `
 spec:
   cluster:
-    clusterLabel: inst-prod
+    clusterLabel: inst-` + name + `
     region: us-ord
     k8sVersion: v1.33.6+lke7
     nodePool: {type: g8-dedicated-8-4, count: 5}
     bootstrap:
-      name: inst-prod
+      name: inst-` + name + `
       managedAppPlatform: true
     objectStorage:
       cluster: us-ord-10
@@ -508,7 +519,7 @@ spec:
 	if err := os.MkdirAll(filepath.Join(root, "environments"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "environments", "prod.yaml"), []byte(env), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "environments", name+".yaml"), []byte(env), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
@@ -516,6 +527,9 @@ spec:
 
 func drillHarness(t *testing.T) (*fakeBao, *fakeWriter) {
 	bao, _, baosrv, s3srv := harness(t)
+	// The drill only runs on the e2e lane's deployment, so the producer's key
+	// names that deployment's bucket.
+	bao.kv["obj/openbao-backup"]["BUCKET"] = "inst-openbao-backup-e2e"
 	logs := new(string)
 	w := &fakeWriter{Writer: capability.Denied(), logs: logs}
 	old, oldTS := caps, tempStoreFn
@@ -548,7 +562,7 @@ func drillHarness(t *testing.T) (*fakeBao, *fakeWriter) {
 func TestDrillRoundTripsTheCanaryThroughTheRealProducer(t *testing.T) {
 	drillInstance(t, true)
 	bao, w := drillHarness(t)
-	if err := RunDrill(context.Background(), "prod"); err != nil {
+	if err := RunDrill(context.Background(), "e2e"); err != nil {
 		t.Fatalf("drill failed against a working backup/restore: %v", err)
 	}
 	if w.applied != 1 || bao.restores != 1 {
@@ -563,7 +577,7 @@ func TestDrillFailsWhenARestoreChangesNothing(t *testing.T) {
 	drillInstance(t, true)
 	bao, _ := drillHarness(t)
 	bao.inertRestore = true
-	err := RunDrill(context.Background(), "prod")
+	err := RunDrill(context.Background(), "e2e")
 	if err == nil || !strings.Contains(err.Error(), "did not roll its state back") {
 		t.Errorf("an inert restore must fail the drill, got %v", err)
 	}
@@ -573,7 +587,7 @@ func TestDrillFailsWhenTheProducerWritesElsewhere(t *testing.T) {
 	drillInstance(t, true)
 	bao, _ := drillHarness(t)
 	bao.kv["obj/openbao-backup"]["BUCKET"] = "someone-elses-bucket"
-	err := RunDrill(context.Background(), "prod")
+	err := RunDrill(context.Background(), "e2e")
 	if err == nil || !strings.Contains(err.Error(), "would not find") {
 		t.Errorf("a producer writing to a bucket the restore path does not derive must fail, got %v", err)
 	}
@@ -582,7 +596,7 @@ func TestDrillFailsWhenTheProducerWritesElsewhere(t *testing.T) {
 func TestDrillSkipsOnlyWhenTheComponentIsOff(t *testing.T) {
 	drillInstance(t, false)
 	_, w := drillHarness(t)
-	if err := RunDrill(context.Background(), "prod"); err != nil {
+	if err := RunDrill(context.Background(), "e2e"); err != nil {
 		t.Fatalf("disabled component: %v", err)
 	}
 	if w.applied != 0 {
@@ -591,7 +605,7 @@ func TestDrillSkipsOnlyWhenTheComponentIsOff(t *testing.T) {
 
 	drillInstance(t, true)
 	t.Setenv("OPENBAO_ROOT_TOKEN", "")
-	if err := RunDrill(context.Background(), "prod"); err == nil || !strings.Contains(err.Error(), "root") {
+	if err := RunDrill(context.Background(), "e2e"); err == nil || !strings.Contains(err.Error(), "root") {
 		t.Errorf("an enabled component with no root token must fail, not skip: %v", err)
 	}
 }
@@ -617,5 +631,191 @@ func TestDrillJobJSONIsOwnedAndFaithful(t *testing.T) {
 	}
 	if _, err := DrillJobJSON([]byte(`{"metadata":{"name":"x"},"spec":{"jobTemplate":{"spec":{}}}}`)); err == nil {
 		t.Error("a CronJob with no uid (not read from a cluster) must be refused")
+	}
+}
+
+// THE IN-PLACE SCAR. The drill used to run on any bootstrap with assert_loki=true.
+// It must refuse every deployment that is not an e2e lane's — before it touches
+// the cluster, with or without a root token.
+func TestDrillRefusesAnyDeploymentButTheE2ELane(t *testing.T) {
+	for _, name := range []string{"prod", "primary", "staging", "e2e-prod", "xe2e", "e2e-"} {
+		drillInstanceAs(t, name, true)
+		_, w := drillHarness(t)
+		err := RunDrill(context.Background(), name)
+		if err == nil || !strings.Contains(err.Error(), "refusing") {
+			t.Errorf("RunDrill(%q) = %v, want a refusal", name, err)
+		}
+		if w.applied != 0 {
+			t.Errorf("RunDrill(%q) ran a backup Job before refusing", name)
+		}
+	}
+	for _, name := range []string{"e2e", "e2e-ghes", "e2e-ghec", "e2e-gitlab"} {
+		if !DrillAllowed(name) {
+			t.Errorf("DrillAllowed(%q) = false; it is an e2e lane deployment", name)
+		}
+	}
+}
+
+// The drill's allow-list must cover every deployment name the release-e2e lane
+// actually dispatches — read from the lane's own E2E_ENV expression, so a renamed
+// lane fails here rather than as a refused drill in a release run.
+func TestDrillAllowsEveryE2ELaneTheReleaseWorkflowUses(t *testing.T) {
+	lane := read(t, ".github/workflows/release-e2e-lane.yml")
+	re := regexp.MustCompile(`(?m)^\s*E2E_ENV:\s*(.+)$`)
+	m := re.FindStringSubmatch(lane)
+	if m == nil {
+		t.Fatal("release-e2e-lane.yml declares no E2E_ENV — the drill's allow-list has nothing to be checked against")
+	}
+	names := regexp.MustCompile(`'([a-z0-9-]+)'`).FindAllStringSubmatch(m[1], -1)
+	var envs []string
+	for _, n := range names {
+		if strings.HasPrefix(n[1], "e2e") {
+			envs = append(envs, n[1])
+		}
+	}
+	if len(envs) == 0 {
+		t.Fatalf("no e2e deployment names found in E2E_ENV %q", m[1])
+	}
+	for _, e := range envs {
+		if !DrillAllowed(e) {
+			t.Errorf("release-e2e-lane dispatches deployment %q, which the restore drill refuses", e)
+		}
+	}
+}
+
+// Release e2e must still run the drill — and only it may. The step is gated on
+// the dedicated restore_drill input (never assert_loki, whose description is a
+// read-only Loki check), the input defaults false, and every release-e2e dispatch
+// that provisions sets it.
+func TestOnlyReleaseE2EArmsTheRestoreDrill(t *testing.T) {
+	boot := read(t, "instance-template/.github/workflows/llz-bootstrap-openbao.yml")
+	step := stepBlock(t, boot, "(e2e) assert OpenBao backup restores (drill)")
+	if !strings.Contains(step, "inputs.restore_drill") || strings.Contains(step, "assert_loki") {
+		t.Errorf("the drill step must be gated on inputs.restore_drill and not on assert_loki:\n%s", step)
+	}
+	if !strings.Contains(step, "assert-openbao-restore") || strings.Contains(step, "--backup-only") {
+		t.Errorf("the drill step does not run the full drill:\n%s", step)
+	}
+	for _, f := range []string{
+		"instance-template/.github/workflows/llz-bootstrap-openbao.yml",
+		"instance-template/.github/workflows/llz-terraform.yml",
+		"instance-template/.github/workflows/terraform.yml",
+	} {
+		in := inputBlock(t, read(t, f), "restore_drill")
+		if !strings.Contains(in, "default: false") || !strings.Contains(in, "type: boolean") {
+			t.Errorf("%s: restore_drill must be a boolean defaulting to false:\n%s", f, in)
+		}
+	}
+	for _, f := range []string{".github/workflows/release-e2e-lane.yml", ".github/workflows/release-e2e-warm.yml"} {
+		if !strings.Contains(read(t, f), "--field restore_drill=true") {
+			t.Errorf("%s no longer dispatches restore_drill=true — release e2e would stop proving a backup restores", f)
+		}
+	}
+	// The backup-only half runs on every deployment.
+	check := stepBlock(t, boot, "Take a first OpenBao backup")
+	if !strings.Contains(check, "--backup-only") {
+		t.Errorf("the per-deployment backup check does not run --backup-only:\n%s", check)
+	}
+}
+
+// stepBlock returns the text of the workflow step whose name line contains name,
+// up to the next step.
+func stepBlock(t *testing.T, wf, name string) string {
+	t.Helper()
+	i := strings.Index(wf, "- name: "+name)
+	if i < 0 {
+		t.Fatalf("no step named %q", name)
+	}
+	rest := wf[i+len("- name: "):]
+	if j := strings.Index(rest, "\n      - name: "); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
+// inputBlock returns a workflow input's block (its key line through the next key
+// at the same indent).
+func inputBlock(t *testing.T, wf, name string) string {
+	t.Helper()
+	re := regexp.MustCompile(`(?m)^( +)` + regexp.QuoteMeta(name) + `:\s*$`)
+	loc := re.FindStringSubmatchIndex(wf)
+	if loc == nil {
+		t.Fatalf("no input %q", name)
+	}
+	indent := wf[loc[2]:loc[3]]
+	rest := wf[loc[1]:]
+	next := regexp.MustCompile(`(?m)^` + indent + `[a-zA-Z_]`)
+	if n := next.FindStringIndex(rest); n != nil {
+		rest = rest[:n[0]]
+	}
+	return rest
+}
+
+// THE ROTATION SCAR. A rotator that re-mints a credential between the snapshot
+// and the restore has its new key reverted to the one it just revoked. The drill
+// must put the rotated value back.
+func TestDrillPutsBackACredentialRotatedDuringTheWindow(t *testing.T) {
+	drillInstance(t, true)
+	bao, w := drillHarness(t)
+	bao.kv["obj/platform"] = map[string]string{"AWS_ACCESS_KEY_ID": "OLD", "AWS_SECRET_ACCESS_KEY": "old-secret"}
+	w.afterSnapshot = func() {
+		bao.mu.Lock()
+		bao.kv["obj/platform"] = map[string]string{"AWS_ACCESS_KEY_ID": "NEW", "AWS_SECRET_ACCESS_KEY": "new-secret"}
+		bao.mu.Unlock()
+	}
+	if err := RunDrill(context.Background(), "e2e"); err != nil {
+		t.Fatalf("drill: %v", err)
+	}
+	if got := bao.kv["obj/platform"]["AWS_ACCESS_KEY_ID"]; got != "NEW" {
+		t.Errorf("after the drill obj/platform holds %q — the restore resurrected the revoked key and the drill left it", got)
+	}
+}
+
+func TestCredsToReapply(t *testing.T) {
+	before := credState{"a": {"k": "2"}, "b": {"k": "1"}, "c": nil, "d": {"k": "1"}}
+	after := credState{"a": {"k": "1"}, "b": {"k": "1"}, "c": {"k": "x"}}
+	got := CredsToReapply(before, after)
+	if strings.Join(got, ",") != "a,d" {
+		t.Errorf("CredsToReapply = %v, want [a d] (a reverted, d deleted by the rollback; c did not exist before)", got)
+	}
+}
+
+// --backup-only is safe anywhere: it runs the producer and the consumer-side
+// fetch, and never restores or needs root.
+func TestBackupOnlyNeverRestoresAndRunsOnAnyDeployment(t *testing.T) {
+	drillInstanceAs(t, "prod", true)
+	bao, w := drillHarness(t)
+	bao.kv["obj/openbao-backup"]["BUCKET"] = bucket
+	t.Setenv("OPENBAO_ROOT_TOKEN", "")
+	if err := RunBackupCheck(context.Background(), "prod"); err != nil {
+		t.Fatalf("backup check on a working deployment: %v", err)
+	}
+	if w.applied != 1 || bao.restores != 0 {
+		t.Errorf("applied %d Job(s), %d restore(s); want 1 and 0", w.applied, bao.restores)
+	}
+	// And it fails when the producer's upload does not land where the restore looks.
+	bao.kv["obj/openbao-backup"]["BUCKET"] = "elsewhere"
+	if err := RunBackupCheck(context.Background(), "prod"); err == nil {
+		t.Error("backup check passed with the producer writing to a bucket the restore path does not derive")
+	}
+}
+
+// The :443 egress rule is for a PUBLIC object-storage endpoint. It must not also
+// admit the cluster's pod and Service networks (LKE: 10.2.0.0/16, 10.128.0.0/16),
+// which a bare 0.0.0.0/0 does.
+func TestBackupEgressExceptsClusterNetworks(t *testing.T) {
+	np := read(t, "platform-apl/components/openbaoBackup/openbao-backup/network-policy.yaml")
+	i := strings.Index(np, "cidr: 0.0.0.0/0")
+	if i < 0 {
+		t.Fatal("no 0.0.0.0/0 egress rule found — update this test with the policy")
+	}
+	rule := np[i:]
+	if j := strings.Index(rule, "ports:"); j >= 0 {
+		rule = rule[:j]
+	}
+	for _, want := range []string{"except:", "- 10.0.0.0/8", "- 172.16.0.0/12", "- 192.168.0.0/16", "- 100.64.0.0/10", "- 169.254.0.0/16"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("the 0.0.0.0/0:443 egress rule does not except %q:\n%s", want, rule)
+		}
 	}
 }

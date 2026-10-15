@@ -31,3 +31,21 @@ variable "label_prefix" {
   type        = string
   default     = "platform"
 }
+
+# How long a DELETED or OVERWRITTEN OpenBao snapshot stays recoverable as a
+# noncurrent version in the versioned backup bucket. 30 days: four times the
+# CronJob's default seven-day retention, so a snapshot retention pruned is still
+# there a month later — long past the point a "we restored the wrong one" or a
+# retention bug is noticed — while the bucket stays a few hundred megabytes. Lower
+# it and the safety net under prune shrinks; it does not affect how many current
+# snapshots exist (that is spec.components.openbaoBackup.backupKeep).
+variable "openbao_backup_noncurrent_days" {
+  description = "Days a deleted/overwritten OpenBao snapshot is kept as a noncurrent version in the versioned openbao-backup bucket before expiring."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.openbao_backup_noncurrent_days >= 1 && floor(var.openbao_backup_noncurrent_days) == var.openbao_backup_noncurrent_days
+    error_message = "openbao_backup_noncurrent_days must be a whole number of days >= 1."
+  }
+}

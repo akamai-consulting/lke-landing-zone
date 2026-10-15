@@ -68,9 +68,22 @@ func (f *restoreFixture) bao(w http.ResponseWriter, r *http.Request) {
 
 type pinCluster struct{}
 
+// fixtureNodes are the kube-context's node names; fixtureLKE the account's
+// clusters by label. Together they say the context points at prod (LKE 4242).
+var (
+	fixtureNodes = "lke4242-77-aaaa lke4242-77-bbbb"
+	fixtureLKE   = map[string][]uint64{"inst-prod": {4242}}
+)
+
 func (pinCluster) Run(args ...string) ([]byte, error) {
-	if strings.Contains(strings.Join(args, " "), "openbao-active=true") {
+	joined := strings.Join(args, " ")
+	switch {
+	case strings.Contains(joined, "openbao-active=true"):
 		return []byte("platform-openbao-2"), nil
+	case strings.HasPrefix(joined, "get nodes"):
+		return []byte(fixtureNodes), nil
+	case strings.HasPrefix(joined, "config view"):
+		return []byte("https://api.example:443"), nil
 	}
 	return []byte("ctx-under-test"), nil
 }
@@ -93,7 +106,13 @@ func withRestoreFixture(t *testing.T, liveID string) (*restoreFixture, string) {
 	}))
 	t.Cleanup(s3srv.Close)
 
-	ok, oc, op, os_, oset := restoreKeys, restoreCluster, restorePF, restoreStore, restoreSettle
+	ok, oc, op, os_, oset, olke, onodes := restoreKeys, restoreCluster, restorePF, restoreStore, restoreSettle, restoreLKEClusters, fixtureNodes
+	restoreLKEClusters = func(_ context.Context, tok, label string) ([]uint64, error) {
+		if tok != "lin" {
+			t.Error("cluster lookup did not use the Linode token from the environment")
+		}
+		return fixtureLKE[label], nil
+	}
 	restoreKeys = func(string) baosnap.KeyAPI { return nil }
 	restoreCluster = func() capability.Cluster { return pinCluster{} }
 	restorePF = func(pod string) (string, func(), error) {
@@ -109,7 +128,9 @@ func withRestoreFixture(t *testing.T, liveID string) (*restoreFixture, string) {
 		return baosnap.Store{AccessKey: "AK", SecretKey: "SK", Endpoint: s3srv.URL, Bucket: bucket, HTTP: s3srv.Client()}, func() {}, nil
 	}
 	restoreSettle = time.Second
-	t.Cleanup(func() { restoreKeys, restoreCluster, restorePF, restoreStore, restoreSettle = ok, oc, op, os_, oset })
+	t.Cleanup(func() {
+		restoreKeys, restoreCluster, restorePF, restoreStore, restoreSettle, restoreLKEClusters, fixtureNodes = ok, oc, op, os_, oset, olke, onodes
+	})
 
 	root := t.TempDir()
 	lz := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: inst\nspec:\n  instance:\n    upstreamOrg: akamai-consulting\n    repo: acme/inst\n    forge: github\n"
@@ -119,6 +140,7 @@ func withRestoreFixture(t *testing.T, liveID string) (*restoreFixture, string) {
 	_ = os.WriteFile(filepath.Join(root, "environments", "prod.yaml"), []byte(env), 0o644)
 	t.Chdir(root)
 	t.Setenv("LINODE_API_TOKEN", "lin")
+	t.Setenv("LINODE_TOKEN", "lin")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	return f, key
 }
@@ -209,5 +231,84 @@ func TestRestoreBindingMatchesRegenRoot(t *testing.T) {
 	r, g := Extension().MustBinding("restore"), Extension().MustBinding("regen-root")
 	if r.State != g.State || r.Requires != g.Requires || len(r.Grants) != len(g.Grants) {
 		t.Errorf("restore %+v drifted from regen-root %+v", r, g)
+	}
+}
+
+// --region picks the bucket and the kube-context picks the target; the restore
+// must refuse when they name different deployments — on the dry run, with --yes,
+// and with --force, which answers a different question.
+func TestRestoreRefusesAKubeContextOnAnotherDeployment(t *testing.T) {
+	f, key := withRestoreFixture(t, "c-1")
+	fixtureNodes = "lke9999-1-aaaa lke9999-1-bbbb" // the peer's cluster
+	for _, o := range []RestoreOpts{
+		{Region: "prod", Snapshot: key},
+		{Region: "prod", Snapshot: key, Yes: true, Confirm: "restore:prod"},
+		{Region: "prod", Snapshot: key, Yes: true, Confirm: "restore:prod", Force: true},
+	} {
+		err := RunRestore(o)
+		if err == nil || !strings.Contains(err.Error(), "9999") || !strings.Contains(err.Error(), "4242") {
+			t.Errorf("RunRestore(%+v) with the context on another cluster = %v, want a refusal naming both", o, err)
+		}
+	}
+	if f.restored != 0 {
+		t.Fatal("restored into a cluster that is not the deployment's")
+	}
+}
+
+func TestLKEClusterOfContext(t *testing.T) {
+	for _, tc := range []struct {
+		nodes  []string
+		server string
+		want   string
+	}{
+		{[]string{"lke12-3-aa", "lke12-4-bb"}, "", "12"},
+		{nil, "https://lke637329.api.us-ord.enterprise.linodelke.net:6443", "637329"},
+	} {
+		if got, err := LKEClusterOfContext(tc.nodes, tc.server); err != nil || got != tc.want {
+			t.Errorf("LKEClusterOfContext(%v, %q) = %q, %v; want %q", tc.nodes, tc.server, got, err, tc.want)
+		}
+	}
+	// Fail closed: nothing to read, two clusters, or a node that is not LKE's.
+	for _, tc := range []struct {
+		nodes  []string
+		server string
+	}{
+		{nil, ""},
+		{nil, "https://10.0.0.1:6443"},
+		{[]string{"lke12-3-aa", "lke13-3-aa"}, ""},
+		{[]string{"lke12-3-aa", "kind-control-plane"}, ""},
+		{[]string{"kind-control-plane"}, "https://lke12.api.example:6443"},
+	} {
+		if got, err := LKEClusterOfContext(tc.nodes, tc.server); err == nil {
+			t.Errorf("LKEClusterOfContext(%v, %q) = %q, want a refusal", tc.nodes, tc.server, got)
+		}
+	}
+}
+
+func TestTargetIsDeployment(t *testing.T) {
+	if err := TargetIsDeployment("prod", "inst-prod", "4242", []uint64{4242}); err != nil {
+		t.Errorf("matching cluster refused: %v", err)
+	}
+	if err := TargetIsDeployment("prod", "inst-prod", "4242", nil); err == nil {
+		t.Error("no cluster with the spec's label, yet the target was accepted")
+	}
+	if err := TargetIsDeployment("prod", "inst-prod", "1", []uint64{4242}); err == nil {
+		t.Error("a different cluster was accepted")
+	}
+}
+
+// After a rebuild the bucket holds two OpenBao clusters' snapshots; --latest must
+// refuse without --from-cluster, and restore the named cluster's newest with it.
+func TestRestoreLatestNeedsFromClusterAfterARebuild(t *testing.T) {
+	f, _ := withRestoreFixture(t, "c-1")
+	err := RunRestore(RestoreOpts{Region: "prod", Latest: true, FromCluster: "someone-else"})
+	if err == nil || !strings.Contains(err.Error(), "c-1") {
+		t.Errorf("--from-cluster naming an absent cluster = %v, want an error listing what is there", err)
+	}
+	if err := RunRestore(RestoreOpts{Region: "prod", Latest: true, FromCluster: "c-1", Yes: true, Confirm: "restore:prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.restored != 1 {
+		t.Errorf("restored=%d, want 1", f.restored)
 	}
 }

@@ -130,7 +130,13 @@ never transit GitHub.
 
 * **`assert_loki`** — default false for normal instances. The release-e2e gate sets it
   true so the check runs inside the converge that already holds cluster access,
-  instead of a separate `validate` pass dispatching `cluster-health.yml`.
+  instead of a separate `validate` pass dispatching `cluster-health.yml`. It arms the
+  read-only e2e battery only — **not** the OpenBao restore drill.
+* **`restore_drill`** — release-e2e only, default false. Arms the OpenBao backup →
+  restore drill, which rolls the deployment's live OpenBao back in place. It is its own
+  input because it used to ride on `assert_loki`, whose description promised a
+  read-only check; the verb additionally refuses any deployment that is not an e2e lane
+  (`e2e`, `e2e-<forge>`), so a mistaken dispatch fails rather than restores.
 * **`bootstrap_cluster`** — set by `llz-terraform.yml`'s chained call so cluster +
   OpenBao bootstrap share ONE container-init + checkout + cluster-access/ACL cycle.
   The former standalone `bootstrap-cluster` job paid its own, ~1.5–2m of pure overhead
@@ -636,7 +642,7 @@ live parameters.
 
 ### Step: (e2e) assert OpenBao backup restores (drill)
 
-`llz ci assert-openbao-restore` — release-e2e only (`assert_loki`), and the gate for
+`llz ci assert-openbao-restore` — release-e2e only (`restore_drill`), and the gate for
 OpenBao backup **and** restore. It writes a canary into OpenBao, runs a Job built from
 the `openbaoBackup` CronJob (so the real ServiceAccount, `openbao-backup` role and
 policy, mTLS identity, NetworkPolicy, chart `allowedClientPods` entry and bucket key are
@@ -655,10 +661,18 @@ until the day it is needed.
 `sys/storage/raft/snapshot`, which no in-cluster role holds by design, and this job
 revokes its root token in the very next step — the same reason `assert-database` sits
 here. It restores the **live** e2e store in place, to state seconds old; that is
-acceptable only on a throwaway cluster, which is why it is not part of any instance's
-scheduled checks. The drill Job is owned by the CronJob, so its success supersedes a
-scheduled tick that failed earlier in bootstrap (before the role existed) in
-converge's failed-Job check.
+acceptable only on a throwaway cluster, which is why it has its own input and why the
+verb refuses any `--region` that is not an e2e lane's deployment. The drill Job is owned
+by the CronJob, so its success supersedes a scheduled tick that failed earlier in
+bootstrap (before the role existed) in converge's failed-Job check.
+
+**What the rollback could break later, and why it does not.** Converge, the storage
+invariant and the assert suite all run after this step and read credentials OpenBao
+holds. A rotator that re-minted one of them between the snapshot and the restore would
+have its new key reverted to the one it had just revoked. The drill reads every tracked
+credential path (`credpaths.CredPaths`) immediately before the restore and re-writes any
+the restore changed, so those later checks read live keys. It cannot simply move after
+them: they run after the root revoke, and a restore needs root.
 
 ### Step: Revoke root token
 
@@ -745,6 +759,20 @@ the ExternalSecrets, collapsing that cron-paced tail to the Job's own runtime.
 Best-effort by design (the verb always exits 0): the cron schedule remains the standing
 safety net and the converge poll is the verdict. Skipped on standby (no in-cluster
 Harbor).
+
+### Step: Take a first OpenBao backup (prove the backup path works here)
+
+`llz ci assert-openbao-restore --backup-only` — on **every** deployment, after converge,
+skipped only when `restore_drill` already ran the same Job. It creates a Job from the
+real `openbaoBackup` CronJob, waits for it, then fetches and verifies the exact snapshot
+that Job reports uploading through the restore path's temporary read-only key. No canary,
+no root, no restore. Self-skips when the component is disabled.
+
+**What stays green without it:** a producer that cannot work on this deployment until
+the first scheduled tick fails, up to one interval later — and the only other check on
+the OpenBao behaviour it relies on (`read` without `sudo` on
+`sys/storage/raft/snapshot`, the archive member names `Verify` checks) is release e2e.
+Fails the job on purpose; opt out by disabling `components.openbaoBackup`.
 
 ### Step: Wait for cluster to converge — why `--budget 1200`
 

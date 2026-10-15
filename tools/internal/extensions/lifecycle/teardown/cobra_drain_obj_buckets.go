@@ -36,3 +36,28 @@ func DrainObjBucketsCmd() *cobra.Command {
 	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose buckets to empty")
 	return c
 }
+
+// OpenBaoBackupDestroyGuardCmd is `llz ci openbao-backup-destroy-guard`.
+func OpenBaoBackupDestroyGuardCmd() *cobra.Command {
+	var region string
+	var allow bool
+	c := &cobra.Command{
+		Use:   "openbao-backup-destroy-guard",
+		Short: "before an object-storage destroy: refuse while the OpenBao backup bucket holds a snapshot, unless --allow-delete",
+		Long: "Run by the object-storage destroy job before anything is drained. The deployment's\n" +
+			"openbao-backup bucket exists to outlive the cluster, so a destroy may not delete it\n" +
+			"while it holds any object version (noncurrent ones included) unless the caller opts in\n" +
+			"with --allow-delete (the workflow's drain_data_buckets). With the opt-in it deletes every\n" +
+			"version and delete marker and re-lists to prove the bucket is empty. Fails closed on\n" +
+			"anything it cannot read. --allow-delete also needs --yes. Needs LINODE_API_TOKEN; run\n" +
+			"from the instance repo root.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return RunOpenBaoBackupGuard(region, allow, cliopts.Global.Yes)
+		},
+	}
+	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose backup bucket to guard")
+	c.Flags().BoolVar(&allow, "allow-delete", false, "consent to deleting the OpenBao backups with the bucket (drain_data_buckets)")
+	return c
+}

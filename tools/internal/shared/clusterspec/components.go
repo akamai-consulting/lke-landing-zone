@@ -444,9 +444,10 @@ var Components = []Component{
 	},
 	{
 		// Scheduled OpenBao backup — the openbao-backup CronJob (`llz ci
-		// openbao-backup`) snapshots the Raft store every six hours into this
-		// deployment's openbao-backup bucket and prunes to the newest 28, plus the
-		// PrometheusRule that alerts when it stops. OpenBao is the one piece of
+		// openbao-backup`) snapshots the Raft store every six hours (backupIntervalHours)
+		// into this deployment's openbao-backup bucket and prunes to the newest 28
+		// (backupKeep) PER OpenBao cluster id, plus the PrometheusRule that alerts
+		// when it fails or goes stale. OpenBao is the one piece of
 		// platform state nothing can re-derive, so this is DEFAULT-ON: an instance
 		// opts out of backups explicitly, never by omission.
 		//
@@ -460,10 +461,21 @@ var Components = []Component{
 		// bootstrap-openbao.yml (writes the openbao-backup policy/role and seeds the
 		// key), and the chart's allowedClientPods entry (llz-openbao-platform
 		// 0.1.34). Until then every tick fails, converge reports the failed Job, and
-		// LLZOpenBaoBackupNeverSucceeded fires — loud, by design.
+		// LLZOpenBaoBackupFailing fires — loud, by design.
 		Name:              "openbaoBackup",
 		DependsOn:         []string{"openbao", "observability"},
 		ManifestResources: []string{"openbao-backup"},
+		// The CronJob's schedule and KEEP, from the spec's backupIntervalHours /
+		// backupKeep (RenderOpenBaoBackupPatch). ALWAYS emitted, defaults included,
+		// so the values the cluster runs are the ones the rendered tree shows — not
+		// a literal in a managed manifest an instance cannot change.
+		Patches: []Patch{{
+			Path:    "openbao-backup-schedule-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "openbao-backup",
+		}},
 		// Its own health-inert Application, like the rotator: a failing backup must
 		// fail its own App, never platform-bootstrap. Wave 5, after OpenBao.
 		CarvedApp: &CarvedApp{AppName: "llz-openbao-backup", AppWave: 5, Namespace: "llz-openbao-backup"},

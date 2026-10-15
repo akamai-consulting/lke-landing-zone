@@ -296,10 +296,13 @@ jobs:
           # converge job runs `llz ci assert-loki` (Loki bootstrapped + S3-backed)
           # inside the cluster access it already holds. Harmless on a plan (the
           # apply-gated bootstrap chain doesn't run).
+          # restore_drill=true arms the OpenBao backup -> restore drill, which rolls
+          # the e2e cluster's OpenBao back in place. Its own input, never implied by
+          # assert_loki, and refused by the verb on any non-e2e deployment.
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
-            --field assert_loki=true
+            --field assert_loki=true --field restore_drill=true
 
       # ── The no-op plan check ──────────────────────────────────────────────────
       # A SECOND DISPATCH, not a step inside the first: the plan has to run after

@@ -209,7 +209,11 @@ var atRestAllowed = map[string]atRestRule{
 			"barrier keyring, which only the deployment's OPENBAO_SEAL_KEY unwraps — so the bucket " +
 			"leaking does not leak a secret. What it DOES expose in the clear is storage metadata: the " +
 			"key names of the Raft FSM (KV secret paths, policy and role names, lease paths), object " +
-			"sizes and timestamps. See docs/runbooks/openbao-backup-restore.md",
+			"sizes and timestamps. THE MODEL HOLDS ONLY WHILE THE SEAL KEY STAYS OUT OF EVERY BUCKET: " +
+			"bucket read + OPENBAO_SEAL_KEY is the whole store, so any other backup of the cluster (Velero, " +
+			"or anything snapshotting namespaces and volumes) MUST exclude the llz-openbao namespace — its " +
+			"openbao-unseal-key Secret is that key, and its Raft volumes are a second, unverified copy of " +
+			"the store. See docs/runbooks/openbao-backup-restore.md",
 		exit: "deliberately NOT the objProxy gateway: SSE-C would encrypt each snapshot under a key " +
 			"that lives in OpenBao, so losing OpenBao would lose the means to read its own backups. The " +
 			"backup CronJob addresses this bucket virtual-hosted precisely so the gateway's CoreDNS " +

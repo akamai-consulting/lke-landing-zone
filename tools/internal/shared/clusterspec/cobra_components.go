@@ -154,6 +154,12 @@ func SizingSummary(t ComponentToggle) string {
 		parts = append(parts, "replicas="+strconv.Itoa(*t.Replicas))
 	}
 	add("registryStorage", t.RegistryStorage)
+	if t.BackupIntervalHours != nil {
+		parts = append(parts, "backupIntervalHours="+strconv.Itoa(*t.BackupIntervalHours))
+	}
+	if t.BackupKeep != nil {
+		parts = append(parts, "backupKeep="+strconv.Itoa(*t.BackupKeep))
+	}
 	return strings.Join(parts, " ")
 }
 

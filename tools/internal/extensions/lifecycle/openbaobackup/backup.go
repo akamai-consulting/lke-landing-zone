@@ -37,6 +37,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/baosnap"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cli"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/openbao"
 )
 
@@ -48,10 +49,13 @@ const (
 	// Service. Verifying against it while dialing the -active Service is what
 	// keeps TLS verified rather than skipped.
 	DefaultTLSServerName = "platform-openbao.llz-openbao.svc.cluster.local"
-	// DefaultKeep is 28 snapshots: seven days at the CronJob's six-hourly
+	// DefaultKeep is 28 snapshots: seven days at the CronJob's default six-hourly
 	// schedule. Long enough to reach back past a bad change noticed after a
 	// weekend; short enough that the bucket stays a few hundred megabytes at most.
-	DefaultKeep = 28
+	// It is the spec default (components.openbaoBackup.backupKeep), read from the
+	// one constant render also uses, and it is PER OpenBao cluster id — see
+	// baosnap.Prune.
+	DefaultKeep = clusterspec.OpenBaoBackupDefaultKeep
 )
 
 // Seams. Package vars so the run is testable with no cluster, no OpenBao and no

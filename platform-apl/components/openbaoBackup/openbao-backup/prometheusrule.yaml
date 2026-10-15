@@ -1,11 +1,17 @@
 # Alerts that make a stopped backup loud. A backup that silently stops is
 # indistinguishable from one that works until the day a restore is needed, so the
-# signal is FRESHNESS — when did the CronJob last succeed — not the presence of a
-# Job or of objects in the bucket (the bucket keeps its history for seven days
-# after the producer dies).
+# signals are FRESHNESS — when did a backup last succeed — and FAILURE of the most
+# recent attempt, never the presence of a Job or of objects in the bucket (the
+# bucket keeps its history for days after the producer dies).
 #
 # Inputs are kube-state-metrics series (kube-prometheus-stack ships it), so no
 # exporter is added for this.
+#
+# SCHEDULE-INDEPENDENT ON PURPOSE. The interval is a spec knob
+# (components.openbaoBackup.backupIntervalHours), so no threshold here may assume
+# six hours: Stale derives the interval from the CronJob's own last and next
+# schedule times, which kube-state-metrics computes from whatever schedule the
+# CronJob carries.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -23,32 +29,81 @@ spec:
     - name: llz-openbao-backup
       interval: 60s
       rules:
-        - alert: LLZOpenBaoBackupStale
-          # Two missed six-hourly ticks plus slack. One miss is a blip (a node
-          # drain, an object-storage hiccup); two is a producer that is not
-          # producing.
-          expr: time() - max(kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"}) > 13 * 3600
+        - alert: LLZOpenBaoBackupFailing
+          # The newest FAILED backup Job is newer than the last success — i.e. the
+          # most recent attempt failed and nothing has succeeded since. Covers the
+          # very first run (no success yet: the comparison is against 0), the
+          # first-backup Job bootstrap-openbao creates, and every scheduled tick.
+          # It is what makes a producer that can never work (an OpenBao that wants
+          # `sudo` on the snapshot endpoint, an archive layout Verify does not
+          # know, a bucket never applied) page within minutes of its first try
+          # instead of after two missed intervals. Failed Jobs are kept
+          # (failedJobsHistoryLimit) and TTL'd after a day, and every new tick
+          # makes a new one, so this stays firing for as long as it keeps failing.
+          expr: |
+            max by (namespace) (
+              kube_job_created{namespace="llz-openbao-backup"}
+              and on (namespace, job_name)
+              (max by (namespace, job_name) (kube_job_status_failed{namespace="llz-openbao-backup"}) > 0)
+            )
+            >
+            (
+              max by (namespace) (kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"})
+              or
+              max by (namespace) (kube_cronjob_info{namespace="llz-openbao-backup",cronjob="openbao-backup"}) * 0
+            )
           for: 15m
           labels:
             severity: warning
             service: openbao-backup
           annotations:
-            summary: OpenBao has not been backed up for over 13 hours
+            summary: The most recent OpenBao backup failed
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/openbao-backup-restore.md"
-            description: The openbao-backup CronJob's last successful run is older than two schedule intervals. Every hour this persists is an hour of OpenBao writes with no restore point.
-        - alert: LLZOpenBaoBackupNeverSucceeded
-          # The case the rule above cannot see: a CronJob that has NEVER
-          # succeeded has no last-successful-time series at all, and a threshold
-          # over an absent series never evaluates. Fires when the CronJob exists
-          # but that series does not.
+            description: The newest openbao-backup Job in llz-openbao-backup failed and no backup has succeeded since. Its last log line is a JSON record naming the step that failed (login, key read, snapshot, upload, read-back). LLZOpenBaoBackupStale escalates if it persists.
+        - alert: LLZOpenBaoBackupStale
+          # Two missed intervals plus an hour. One miss is a blip (a node drain, an
+          # object-storage hiccup); two is a producer that is not producing. The
+          # interval is next_schedule - last_schedule, so this follows the spec's
+          # backupIntervalHours rather than restating it.
+          #
+          # CRITICAL, not warning: every hour this holds is an hour of OpenBao
+          # writes with no restore point, and OpenBao is the one piece of platform
+          # state nothing can re-derive.
           expr: |
-            count(kube_cronjob_info{namespace="llz-openbao-backup",cronjob="openbao-backup"}) > 0
-            unless on() kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"}
-          for: 13h
+            (
+              time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"})
+            )
+            >
+            (
+              2 * (
+                max by (namespace) (kube_cronjob_next_schedule_time{namespace="llz-openbao-backup",cronjob="openbao-backup"})
+                - max by (namespace) (kube_cronjob_status_last_schedule_time{namespace="llz-openbao-backup",cronjob="openbao-backup"})
+              ) + 3600
+            )
+          for: 15m
+          labels:
+            severity: critical
+            service: openbao-backup
+          annotations:
+            summary: OpenBao has not been backed up for over two backup intervals
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/openbao-backup-restore.md"
+            description: The openbao-backup CronJob's last successful run is older than two schedule intervals plus an hour. Every hour this persists is an hour of OpenBao writes with no restore point.
+        - alert: LLZOpenBaoBackupNeverSucceeded
+          # The case neither rule above can see: a CronJob that has never succeeded
+          # AND never produced a failed Job — it was never scheduled at all (a
+          # missed startingDeadlineSeconds, a suspended CronJob, a controller that
+          # is not running it). kube-state-metrics computes the first tick from the
+          # creation time, so "that tick is an hour past and there is still no
+          # success" is the signal, whatever the interval.
+          expr: |
+            (time() - max by (namespace) (kube_cronjob_next_schedule_time{namespace="llz-openbao-backup",cronjob="openbao-backup"}) > 3600)
+            unless on (namespace)
+            max by (namespace) (kube_cronjob_status_last_successful_time{namespace="llz-openbao-backup",cronjob="openbao-backup"})
+          for: 15m
           labels:
             severity: warning
             service: openbao-backup
           annotations:
             summary: OpenBao backups have never succeeded on this cluster
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/openbao-backup-restore.md"
-            description: The openbao-backup CronJob has existed for over 13 hours without a single successful run. Common causes are a deployment configured before the openbao-backup role existed (re-run bootstrap-openbao) or a backup bucket that was never applied.
+            description: The openbao-backup CronJob's first scheduled run is over an hour past and no backup has ever succeeded. Common causes are a suspended CronJob, a deployment configured before the openbao-backup role existed (re-run bootstrap-openbao), or a backup bucket that was never applied.

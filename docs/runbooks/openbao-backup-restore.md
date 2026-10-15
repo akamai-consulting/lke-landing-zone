@@ -1,8 +1,9 @@
 # OpenBao backup and restore
 
 **Applies to:** a deployment whose OpenBao data is lost or damaged and must come back
-from a backup; or `LLZOpenBaoBackupStale` / `LLZOpenBaoBackupNeverSucceeded` is
-firing; or you are deciding who may hold the backup bucket. Not for a sealed or
+from a backup; or `LLZOpenBaoBackupFailing` / `LLZOpenBaoBackupStale` /
+`LLZOpenBaoBackupNeverSucceeded` is firing; or you are deciding who may hold the backup
+bucket, or what else may back the cluster up. Not for a sealed or
 half-bootstrapped OpenBao whose data is intact — that is
 [bootstrap-openbao](bootstrap-openbao.md).
 
@@ -15,12 +16,19 @@ half-bootstrapped OpenBao whose data is intact — that is
 >
 > **Never lose `OPENBAO_SEAL_KEY`.** A snapshot is ciphertext that only the seal key
 > of the cluster that took it can open. Without that key every backup is unrecoverable.
+>
+> **Rebuilding after a loss? Turn the backup off first.** A rebuilt OpenBao is a new,
+> empty cluster that starts backing itself up into the same bucket. Set
+> `components.openbaoBackup.enabled: false` for the deployment *before* the rebuild's
+> bootstrap, and back on after the restore — see
+> [the rebuild procedure](#restore-the-cluster-was-lost-and-rebuilt).
 
 <!-- toc -->
 ## Contents
 
 - [What is backed up, when, and where](#what-is-backed-up-when-and-where)
 - [What the bucket gives away](#what-the-bucket-gives-away)
+- [Other backups of the cluster must exclude `llz-openbao`](#other-backups-of-the-cluster-must-exclude-llz-openbao)
 - [What a restore needs](#what-a-restore-needs)
 - [List the backups](#list-the-backups)
 - [Restore: the data is damaged, the cluster is fine](#restore-the-data-is-damaged-the-cluster-is-fine)
@@ -36,7 +44,8 @@ half-bootstrapped OpenBao whose data is intact — that is
 ## What is backed up, when, and where
 
 The `openbaoBackup` component (on by default) runs the `openbao-backup` CronJob in its
-own `llz-openbao-backup` namespace. Every six hours (`23 */6 * * *`) it:
+own `llz-openbao-backup` namespace. Every six hours by default (`23 */6 * * *`;
+`components.openbaoBackup.backupIntervalHours`, any divisor of 24) it:
 
 1. logs in to OpenBao with the `openbao-backup` Kubernetes-auth role — a client
    certificate at the transport, the pod's ServiceAccount token at the auth mount, the
@@ -48,9 +57,29 @@ own `llz-openbao-backup` namespace. Every six hours (`23 */6 * * *`) it:
 5. uploads it to `<prefix>-openbao-backup-<deployment>` as
    `openbao-raft/<UTC timestamp>_<cluster id>.snap`, and reads it back to prove the
    bucket returns the same bytes;
-6. deletes all but the newest **28** (seven days). It never deletes the snapshot it just
-   wrote, never acts on a listing that does not contain that snapshot, and never touches
-   an object whose name it did not produce.
+6. deletes all but the newest **28** (seven days at the default interval;
+   `components.openbaoBackup.backupKeep`) **of each OpenBao cluster id** in the bucket.
+   It never deletes the snapshot it just wrote, never acts on a listing that does not
+   contain that snapshot, and never touches an object whose name it did not produce.
+
+**Retention is per cluster id, and that is what keeps a rebuild from erasing the
+history.** A rebuilt OpenBao is a new Raft cluster with a new id, backing up an empty
+store. If retention counted the whole bucket, its empty snapshots would push every
+snapshot of the lost data out within a week. Counted per id, nothing the rebuilt cluster
+writes can delete the old cluster's newest 28 — only that cluster could, and it is gone.
+The cost: a bucket keeps up to 28 snapshots of every cluster id it has ever seen. Delete
+a dead cluster's snapshots by hand once you no longer need them; the job never will.
+
+The bucket is **versioned**: a snapshot retention deletes (or anything else deletes or
+overwrites) stays recoverable as a noncurrent version for 30 days
+(`openbao_backup_noncurrent_days` on the `llz-object-storage` module) before a lifecycle
+rule expires it. That is a net under retention and under mistakes — not protection from
+someone holding a write key, who can delete versions too.
+
+**Bootstrap takes the first backup.** Every `bootstrap-openbao` run, after converge, runs
+a Job from this CronJob and verifies the snapshot it uploaded through the restore path
+(`llz ci assert-openbao-restore --backup-only`). A producer that cannot work on this
+deployment fails that bootstrap, with the Job's log, instead of the first scheduled tick.
 
 The `openbao-backup` policy is `read` on `sys/storage/raft/snapshot` plus a read of its
 own bucket key. It cannot restore (that is `update` on the same path), and it cannot
@@ -63,6 +92,18 @@ and anything holding it could otherwise delete every backup.
 
 Each deployment backs up its own OpenBao into its own bucket. In an HA pair both
 halves back up independently.
+
+**The backups live in the same region as the cluster** (the deployment's
+`cluster.objectStorage.cluster`), so a regional Object Storage outage takes the backups
+with the cluster. A separate backup region is not configurable yet — it touches the
+bucket placement, the key scoping, the in-cluster endpoint, the CronJob's egress and the
+restore path at once — and is tracked as a follow-up. Until then, an HA pair is the
+cross-region copy: each half is an independent store in its own region.
+
+**The bucket outlives the deployment.** Destroying the cluster never touches it.
+Destroying object-storage (`terraform.yml`, module `object-storage`) refuses — before
+anything is drained or deleted — while the bucket holds any snapshot, unless you pass
+`drain_data_buckets=true`; copy the snapshots out first if you might want them.
 
 ## What the bucket gives away
 
@@ -81,10 +122,28 @@ Someone who can **read** the bucket gets:
 | How many snapshots exist, their sizes and timestamps (so: roughly how much the store changes) | Anything else, without the seal key |
 
 **Bucket read plus `OPENBAO_SEAL_KEY` is everything in OpenBao.** That is the
-confidentiality boundary: keep the seal key away from anyone who can read the bucket.
-It lives in the `infra-<deployment>` GitHub environment (write-only there) and should
-also be escrowed offline; it is never in the bucket and never in an in-cluster identity
-other than OpenBao's own pods.
+confidentiality boundary — and today both halves sit in the **same place**. The
+`infra-<deployment>` GitHub environment holds `OPENBAO_SEAL_KEY` **and**
+`LINODE_API_TOKEN`, and that token can mint a read key on the backup bucket (it is how
+`llz openbao restore` reads it). So the real boundary is **who can run a workflow in the
+`infra-<deployment>` environment** (or change one that does): anyone who can is one
+`llz` command from the whole store. Treat that environment's deployment protection rules
+and required reviewers as the control on OpenBao's backups, not the bucket's privacy.
+
+What to do about it:
+
+- **Escrow the seal key offline** (a password manager or HSM-backed vault outside
+  GitHub), so losing GitHub is not losing every backup. The environment secret is
+  write-only, so do this when you first create it — it cannot be read back later.
+- **Restrict who can run workflows in `infra-<deployment>`** with environment protection
+  rules (required reviewers, deployment branches).
+- The planned structural fix is to take the seal key out of the environment that holds the
+  Linode token altogether, with custody of the seal and recovery keys outside GitHub —
+  the custody ADR proposed in [#568](https://github.com/akamai-consulting/lke-landing-zone/pull/568).
+  Until that lands, the two live together and the bullets above are the mitigation.
+
+The seal key is never in the bucket and never in an in-cluster identity other than
+OpenBao's own pods — which is why the next section matters.
 
 Someone who can **write or delete** the bucket (the backup key, or `LINODE_API_TOKEN`)
 can destroy backups — an availability risk, not a confidentiality one. They cannot
@@ -97,6 +156,22 @@ lives in OpenBao, so losing OpenBao would lose the means of reading its own back
 backup CronJob addresses the bucket virtual-hosted (`<bucket>.<endpoint>`) precisely so
 the gateway's CoreDNS rewrite, which matches the bare endpoint host, never captures it.
 
+## Other backups of the cluster must exclude `llz-openbao`
+
+Everything above assumes the seal key never lands in a bucket. A **cluster** backup tool
+breaks that the moment it includes the `llz-openbao` namespace: the `openbao-unseal-key`
+Secret there **is** `OPENBAO_SEAL_KEY`, and the Raft volumes are a crash-consistent copy
+of the store. A Velero backup of every namespace therefore puts seal key and data in one
+bucket — whoever can read it has the whole store — and the volume snapshots are a second
+restore path that nothing has proven restores.
+
+So: **any Velero `Schedule` / `Backup` (or any other namespace- or volume-level backup)
+must exclude `llz-openbao`** — e.g. `excludedNamespaces: [llz-openbao]` beside
+`includedNamespaces: ["*"]`. OpenBao is backed up by this component, through the API,
+as an archive whose integrity is checked before it is uploaded and again before it is
+restored. The landing zone's own Velero component carries that exclusion with a test
+that holds it; a Schedule you add yourself needs the same line.
+
 ## What a restore needs
 
 | You need | From |
@@ -104,7 +179,7 @@ the gateway's CoreDNS rewrite, which matches the bare endpoint host, never captu
 | The snapshot | the backup bucket — read with a temporary key minted from `LINODE_API_TOKEN` (OpenBao holds the backup key, and OpenBao is what you are restoring) |
 | The **same** `OPENBAO_SEAL_KEY` the snapshot's cluster used | already in the `openbao-unseal-key` Secret on a cluster that was not rebuilt; restored from the `infra-<deployment>` environment secret by `llz ci bao-seed-seal-key` on one that was |
 | A root token **on the cluster you restore into**, exported in your shell | `llz openbao regen-root <deployment>` with 3 recovery shares you hold. (`breakglass-openbao.yml` reconstitutes root from the shares in `infra-<deployment>`, but writes the token back into that environment, where only workflows can read it — `llz openbao restore` runs from your workstation.) |
-| kubectl reach to that cluster | your kube-context — the command prints it before it does anything |
+| kubectl reach to that cluster | your kube-context. The command checks it is **this** deployment's LKE cluster — the cluster id on its nodes must be the one the Linode account labels with the spec's `cluster.clusterLabel` for `--region` — on the dry run and again just before applying, and refuses otherwise. `--force` does not waive this |
 
 After a restore, the store's tokens, leases and **recovery-key configuration** are the
 snapshot's. The root token you used to restore is gone.
@@ -124,7 +199,9 @@ llz openbao backups --region <deployment>
 ```
 
 Newest first, with each one's age and the OpenBao cluster id it came from. An empty
-list means the CronJob has never uploaded one — see [the alerts](#the-alerts).
+list means the CronJob has never uploaded one — see [the alerts](#the-alerts). When the
+bucket holds more than one cluster id (what a rebuild leaves behind) it says so: the
+newest are then usually the rebuilt cluster's backups of its own empty store.
 
 ## Restore: the data is damaged, the cluster is fine
 
@@ -161,7 +238,14 @@ Someone deleted a path, overwrote a policy, or a bad automation run wrote garbag
 The LKE cluster (or the `llz-openbao` namespace and its volumes) is gone and you have
 rebuilt it with the normal pipeline.
 
-1. **Before anything else, confirm you still hold the snapshot-era recovery shares** —
+0. **Before the rebuild's bootstrap, turn the backup off for this deployment:** set
+   `components.openbaoBackup.enabled: false` in `environments/<deployment>.yaml`, run
+   `llz render <deployment>`, and commit. Otherwise the rebuilt — empty — OpenBao starts
+   backing itself up into the same bucket. Retention can no longer delete the lost
+   cluster's snapshots because of it, and `--latest` refuses to guess between the two,
+   but there is no reason to fill the bucket with backups of nothing. (If you already
+   rebuilt with it on, carry on — nothing pre-loss has been pruned.)
+1. **Confirm you still hold the snapshot-era recovery shares** —
    the escrowed ciphertext from the original bootstrap, or the `OPENBAO_RECOVERY_KEY_*`
    you recorded. The rebuild's `bao-init` mints NEW shares and overwrites the copies in
    `infra-<deployment>`; after the restore the store answers only to the OLD ones.
@@ -175,32 +259,38 @@ rebuilt it with the normal pipeline.
    export OPENBAO_ROOT_TOKEN=...
    ```
 
-4. Restore. The ids will NOT match (it is a new cluster), so the dry run will say
-   `MISMATCH` and the restore needs `--force`. Check the dry run names **this**
-   deployment's kube-context before you add it:
+4. Restore. List the backups and note the **lost** cluster's id — the one whose snapshots
+   predate the loss. If the backup ran on the rebuilt cluster, the bucket now holds two
+   ids and `--latest` on its own refuses; name the old one with `--from-cluster`. The ids
+   will NOT match the live (new) cluster, so the dry run says `MISMATCH` and the restore
+   needs `--force`. The dry run also proves the kube-context is this deployment's LKE
+   cluster, whatever `--force` says:
 
    ```bash
-   llz openbao restore --region <deployment> --latest
-   llz openbao restore --region <deployment> --latest --force --yes --confirm restore:<deployment>
+   llz openbao backups --region <deployment>
+   llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id>
+   llz openbao restore --region <deployment> --latest --from-cluster <lost-cluster-id> --force --yes --confirm restore:<deployment>
    ```
 
 5. Put the snapshot-era recovery shares back into `infra-<deployment>`
    (`OPENBAO_RECOVERY_KEY_1`..`3`) — the ones the rebuild wrote no longer open this store,
    and the next break-glass would fail on them.
-6. Re-run `bootstrap-openbao.yml` for the deployment. Its configure step re-applies the
+6. Turn the backup back on (`enabled: true`, or delete the line), re-render, commit.
+7. Re-run `bootstrap-openbao.yml` for the deployment. Its configure step re-applies the
    platform policies, roles and auth-mount configuration against the restored store —
    a rebuilt cluster usually has a new domain, which the team-login (Keycloak) mount
-   points at.
-7. Work through [After a restore](#after-a-restore).
+   points at — and it takes and verifies a first backup of the restored store.
+8. Work through [After a restore](#after-a-restore).
 
 ## Restore: an HA pair
 
 The two clusters of a pair are independent stores; `llz openbao set` keeps the
 operator-managed paths in step by writing both. So:
 
-- **Restore only the damaged deployment, from its own bucket.** `--region` selects both
-  the bucket and, through your kube-context, the cluster; the cluster-id check catches a
-  context pointing at the peer.
+- **Restore only the damaged deployment, from its own bucket.** `--region` selects the
+  bucket; your kube-context selects the cluster; the command refuses unless the context's
+  LKE cluster is `--region`'s own (the spec's `cluster.clusterLabel`), so a context
+  pointing at the peer is caught even with `--force`.
 - **The peer is the more recent copy of every dual-written path.** After the restore,
   run the drift check in [docs/secrets.md](../secrets.md#drift-verification) against both
   halves and re-apply the newer values with `llz openbao set` (which dual-writes).
@@ -241,10 +331,11 @@ The store is now exactly as it was when the snapshot was taken.
 
 ## The alerts
 
-| Alert | Means | First check |
-|---|---|---|
-| `LLZOpenBaoBackupStale` | no successful backup for over 13h (two missed ticks) | `kubectl -n llz-openbao-backup get cronjob,jobs` and the failed Job's logs |
-| `LLZOpenBaoBackupNeverSucceeded` | the CronJob has existed 13h and never once succeeded | almost always an upgrade step not taken — see the next section |
+| Alert | Severity | Means | First check |
+|---|---|---|---|
+| `LLZOpenBaoBackupFailing` | warning | the newest backup Job failed and nothing has succeeded since — fires ~15m after the first failure, including the very first run | `kubectl -n llz-openbao-backup get jobs` and the failed Job's logs |
+| `LLZOpenBaoBackupStale` | **critical** | no successful backup for over two intervals plus an hour (13h at the default 6h) — derived from the CronJob's own schedule, so it follows `backupIntervalHours` | as above; every hour it holds is an hour of writes with no restore point |
+| `LLZOpenBaoBackupNeverSucceeded` | warning | the CronJob's first tick is over an hour past and it has never succeeded **or** failed — it is not being scheduled at all (suspended, or a missed deadline) | `kubectl -n llz-openbao-backup get cronjob openbao-backup -o yaml` |
 
 The Job's last log line is a JSON record (`"event":"openbao-backup"`). On failure the
 error names the step: login (role missing → re-run `bootstrap-openbao.yml`), key read
@@ -256,7 +347,8 @@ read-back (bucket or key wrong — the S3 error code is in the message).
 
 The CronJob arrives with the template upgrade, but three things it depends on are not
 in the cluster yet. Until all three are done every tick fails, converge reports the
-failed Job, and `LLZOpenBaoBackupNeverSucceeded` fires — loudly, on purpose.
+failed Job, and `LLZOpenBaoBackupFailing` fires — loudly, on purpose. Step 2's bootstrap
+also takes a first backup and fails if it cannot, so do the steps in this order.
 
 1. **Apply the object-storage root** (`terraform.yml`, module `object-storage`). It
    creates `<prefix>-openbao-backup-<deployment>`.
@@ -272,9 +364,15 @@ re-render. Nothing else backs OpenBao up.
 
 ## What proves it works
 
-`llz ci assert-openbao-restore` runs in every release e2e, in the bootstrap job just
-before the root token is revoked. It writes a canary, runs a Job built from the real
-CronJob, fetches the exact snapshot that Job uploaded, overwrites the canary, restores
-the snapshot through the same code `llz openbao restore` uses, and fails unless the
-canary reads back its snapshotted value. See
+`llz ci assert-openbao-restore` runs in every release e2e (its own `restore_drill`
+input), in the bootstrap job just before the root token is revoked. It writes a canary,
+runs a Job built from the real CronJob, fetches the exact snapshot that Job uploaded,
+overwrites the canary, restores the snapshot through the same code `llz openbao restore`
+uses, fails unless the canary reads back its snapshotted value, and re-writes any
+rotated credential the rollback reverted. It restores in place, so it refuses any
+deployment that is not an e2e lane's.
+
+Every other deployment runs the safe half on each bootstrap
+(`assert-openbao-restore --backup-only`): the real Job, then a fetch and verify of
+exactly what it uploaded, through the restore path, with nothing restored. See
 [docs/workflows/llz-bootstrap-openbao.md](../workflows/llz-bootstrap-openbao.md).

@@ -46,7 +46,12 @@ on:
         type: string
         default: ''
       assert_loki:
-        description: 'Forwarded to bootstrap-openbao: after converge, assert Loki is S3-backed (`llz ci assert-loki`). Default false; the release-e2e gate sets it true.'
+        description: 'Forwarded to bootstrap-openbao: after converge, assert Loki is S3-backed (`llz ci assert-loki`) and run the read-only e2e assert battery. Default false; the release-e2e gate sets it true. Does NOT run the OpenBao restore drill (restore_drill).'
+        required: false
+        type: boolean
+        default: false
+      restore_drill:
+        description: 'RELEASE-E2E ONLY. Forwarded to bootstrap-openbao: run the OpenBao backup -> restore drill, which ROLLS BACK the live OpenBao of this deployment to a seconds-old snapshot. Default false; the verb refuses any deployment that is not an e2e lane (e2e, e2e-<forge>). Not implied by assert_loki.'
         required: false
         type: boolean
         default: false
@@ -56,7 +61,7 @@ on:
         type: boolean
         default: false
       drain_data_buckets:
-        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable.'
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable. ALSO the explicit consent to delete OpenBao backups: a module=object-storage destroy refuses, before deleting anything, while the openbao-backup bucket holds a snapshot, unless this is true. A cluster destroy never touches that bucket.'
         required: false
         type: boolean
         default: false
@@ -855,6 +860,7 @@ jobs:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
       assert_loki: ${{ inputs.assert_loki }}
+      restore_drill: ${{ inputs.restore_drill }}
       bootstrap_cluster: true
       cluster_id: ${{ needs.apply-cluster.outputs.cluster_id }}
       # Only ever read on a FIRST init; a re-bootstrap of an initialized cluster
@@ -1384,11 +1390,26 @@ jobs:
           state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
+      # ── The OpenBao backups are NOT this destroy's to delete by default ───────
+      # The openbao-backup bucket exists to OUTLIVE the cluster it backs up, and
+      # "destroy object-storage" is exactly what a team runs while rebuilding after
+      # a loss. So before anything is drained, this refuses while that bucket holds
+      # any object version (it is versioned; pruned snapshots count) unless the
+      # caller opted in with drain_data_buckets=true — in which case it deletes
+      # every version and delete marker and re-lists to prove the bucket empty, so
+      # TF can delete it. Fails closed on anything it cannot read. The decision is
+      # in Go (`llz ci openbao-backup-destroy-guard`, unit-tested), not here.
+      # NO working-directory: it reads the spec at the repo root for the bucket.
+      - name: Guard the OpenBao backup bucket (refuses unless drain_data_buckets)
+        env:
+          LINODE_API_TOKEN:   ${{ secrets.LINODE_API_TOKEN }}
+          DRAIN_DATA_BUCKETS: ${{ inputs.drain_data_buckets }}
+        run: llz --yes ci openbao-backup-destroy-guard --region "$REGION" --allow-delete="${DRAIN_DATA_BUCKETS:-false}"
+
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
-      # destroy with "bucket is not empty" — drain first. SINGLE_BUCKETS are the
-      # one-bucket outputs (Harbor registry, OpenBao Raft snapshots); an output an
-      # older module version never wrote reads empty and is skipped. Destroying
-      # object-storage therefore deletes this deployment's OpenBao backups too. Uses s5cmd (static Go
+      # destroy with "bucket is not empty" — drain first. The OpenBao backup bucket
+      # is NOT drained here: the guard above already emptied it (with consent) or
+      # stopped the job. Uses s5cmd (static Go
       # binary) because TF_IMAGE ships neither awscli nor python+pip. Tolerant by
       # design: a failed drain only warns, and TF destroy then names the bucket.
       - name: Drain S3 buckets before destroy
@@ -1474,8 +1495,8 @@ jobs:
             bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
             [ -n "$bucket" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$bucket"
           done
-          SINGLE_BUCKETS="$(read_output harbor_registry_bucket) $(read_output openbao_backup_bucket)"
-          for b in $SINGLE_BUCKETS; do BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$b"; done
+          HARBOR_BUCKET="$(read_output harbor_registry_bucket)"
+          [ -n "$HARBOR_BUCKET" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$HARBOR_BUCKET"
           if [ -z "$BUCKET_LIST" ]; then
             echo "no buckets left in state — nothing to drain."
             exit 0
@@ -1488,12 +1509,12 @@ jobs:
           TEMP_SK="$(grep '^TEMP_OBJKEY_SECRET=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
           mask "$TEMP_SK"
 
-          # Loki — 3 buckets; Harbor registry — 1; OpenBao backups — 1. All under the temp key.
+          # Loki — 3 buckets; Harbor registry — 1. All under the temp key.
           for b in chunks ruler admin; do
             bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
             drain_bucket "loki/$b" "$TEMP_AK" "$TEMP_SK" "$bucket"
           done
-          for b in $SINGLE_BUCKETS; do drain_bucket "$b" "$TEMP_AK" "$TEMP_SK" "$b"; done
+          drain_bucket "harbor-registry" "$TEMP_AK" "$TEMP_SK" "$HARBOR_BUCKET"
 
           echo "drain pass complete."
 

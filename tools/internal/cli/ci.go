@@ -128,7 +128,7 @@ func ciCmd() *cobra.Command {
 		// team-login-smoke it IS workflow-driven: llz-scheduled-checks runs it weekly.
 		assertidentity.AssertOpenBaoExtensionsCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
+	c.AddCommand(assertobs.AssertLokiCmd(), assertobs.WaitHarborCmd(), assertobs.HarborTrustObjProxyCACmd(), teardown.DrainObjBucketsCmd(), teardown.OpenBaoBackupDestroyGuardCmd(), assertplatform.HealthWorkflowCmd(), tokeninv.ValidateTokensCmd())
 	// THE FIRST REGISTRY-DRIVEN VERB. `llz ci gates` runs every gate binding the
 	// registry declares AND can drive, rather than a list typed here — issue #399's
 	// Phase 2 acceptance criterion. The driver lives in the registry, not in this

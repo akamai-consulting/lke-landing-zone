@@ -61,10 +61,10 @@ func TestFetchRefusesACorruptSnapshot(t *testing.T) {
 	newer := ObjectKey(time.Unix(2000, 0), "c1")
 	f.objects[ObjectKey(time.Unix(1000, 0), "c1")] = good
 	f.objects[newer] = []byte("truncated garbage")
-	if _, _, _, err := Fetch(context.Background(), s, ""); err == nil || !strings.Contains(err.Error(), "refusing to restore") {
+	if _, _, _, err := Fetch(context.Background(), s, "", ""); err == nil || !strings.Contains(err.Error(), "refusing to restore") {
 		t.Errorf("Fetch of a corrupt newest snapshot = %v, want a refusal", err)
 	}
-	snap, data, m, err := Fetch(context.Background(), s, ObjectKey(time.Unix(1000, 0), "c1"))
+	snap, data, m, err := Fetch(context.Background(), s, ObjectKey(time.Unix(1000, 0), "c1"), "")
 	if err != nil || !bytes.Equal(data, good) || m.Index != 42 || snap.ClusterID != "c1" {
 		t.Errorf("Fetch named = %+v, %d bytes, %+v, %v", snap, len(data), m, err)
 	}

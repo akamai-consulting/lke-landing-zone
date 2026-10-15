@@ -125,14 +125,139 @@ func TestPruneRefusesWhenTheListingMissedOurWrite(t *testing.T) {
 
 func TestSelectNeverSubstitutes(t *testing.T) {
 	snaps := snapsAt(0, 6)
-	if s, err := Select(snaps, ""); err != nil || s.Key != snaps[0].Key {
+	if s, err := Select(snaps, "", ""); err != nil || s.Key != snaps[0].Key {
 		t.Errorf("Select latest = %+v, %v", s, err)
 	}
-	if _, err := Select(snaps, "openbao-raft/typo.snap"); err == nil {
+	if _, err := Select(snaps, "openbao-raft/typo.snap", ""); err == nil {
 		t.Error("Select returned something for a key that is not in the bucket")
 	}
-	if _, err := Select(nil, ""); err == nil {
+	if _, err := Select(nil, "", ""); err == nil {
 		t.Error("Select on an empty bucket must fail, not return a zero snapshot")
+	}
+	if _, err := Select(snaps, snaps[1].Key, "someone-else"); err == nil {
+		t.Error("Select returned a named key whose cluster disagrees with --from-cluster")
+	}
+}
+
+// rebuiltBucket is the bucket after a lost-and-rebuilt OpenBao: `old` wrote the
+// real history every six hours for oldN ticks; then, after the loss, the rebuilt
+// cluster `new` (an empty store) kept ticking into the same bucket for newN ticks.
+func rebuiltBucket(oldN, newN int) (snaps []Snapshot, oldKeys, newKeys []string) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	var objs []Object
+	for i := 0; i < oldN; i++ {
+		k := ObjectKey(base.Add(time.Duration(i*6)*time.Hour), "old-cluster")
+		oldKeys = append(oldKeys, k)
+		objs = append(objs, Object{Key: k})
+	}
+	after := base.Add(time.Duration(oldN*6+12) * time.Hour)
+	for i := 0; i < newN; i++ {
+		k := ObjectKey(after.Add(time.Duration(i*6)*time.Hour), "new-cluster")
+		newKeys = append(newKeys, k)
+		objs = append(objs, Object{Key: k})
+	}
+	snaps, _ = Catalog(objs)
+	return snaps, oldKeys, newKeys
+}
+
+// THE REBUILD SCAR. A rebuilt OpenBao is a new cluster id backing up an empty
+// store into the same bucket. Under bucket-wide retention its empty snapshots
+// pushed every pre-loss one out within a week. Simulate the whole week, tick by
+// tick, through the producer's real Prune, and require the old cluster's newest
+// keep to survive all of it.
+func TestPruneNeverLetsARebuiltClusterBuryTheLostOnesHistory(t *testing.T) {
+	const keep = 28
+	snaps, oldKeys, _ := rebuiltBucket(40, 0)
+	// Steady state before the loss: the old cluster pruned itself to keep.
+	live := map[string]bool{}
+	for _, s := range snaps {
+		live[s.Key] = true
+	}
+	for _, k := range Prune(snaps, keep, oldKeys[len(oldKeys)-1]) {
+		delete(live, k)
+	}
+	survivorsBefore := len(live)
+	if survivorsBefore != keep {
+		t.Fatalf("pre-loss retention kept %d, want %d", survivorsBefore, keep)
+	}
+	// Two weeks of ticks from the rebuilt cluster.
+	after := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 56; i++ {
+		k := ObjectKey(after.Add(time.Duration(i*6)*time.Hour), "new-cluster")
+		live[k] = true
+		var objs []Object
+		for key := range live {
+			objs = append(objs, Object{Key: key})
+		}
+		cat, _ := Catalog(objs)
+		for _, d := range Prune(cat, keep, k) {
+			delete(live, d)
+		}
+	}
+	oldLeft, newLeft := 0, 0
+	for k := range live {
+		s, _ := ParseObjectKey(k)
+		if s.ClusterID == "old-cluster" {
+			oldLeft++
+		} else {
+			newLeft++
+		}
+	}
+	if oldLeft != keep {
+		t.Errorf("after two weeks of rebuilt-cluster ticks the lost cluster has %d snapshots left, want all %d — "+
+			"retention is letting an empty store's backups push out the real ones", oldLeft, keep)
+	}
+	if newLeft != keep {
+		t.Errorf("the rebuilt cluster retained %d of its own, want %d (it must still prune itself)", newLeft, keep)
+	}
+	// And the newest of the old cluster is the one that must never go.
+	if !live[oldKeys[len(oldKeys)-1]] {
+		t.Error("the lost cluster's newest snapshot was pruned")
+	}
+}
+
+func TestPruneKeepsEachClustersOwnNewest(t *testing.T) {
+	snaps, oldKeys, newKeys := rebuiltBucket(5, 5)
+	got := Prune(snaps, 2, newKeys[len(newKeys)-1])
+	want := map[string]bool{oldKeys[0]: true, oldKeys[1]: true, oldKeys[2]: true, newKeys[0]: true, newKeys[1]: true, newKeys[2]: true}
+	if len(got) != len(want) {
+		t.Fatalf("Prune keep=2 across two clusters deleted %v, want the three oldest of EACH", got)
+	}
+	for _, k := range got {
+		if !want[k] {
+			t.Errorf("Prune deleted %s, which is among its cluster's newest 2", k)
+		}
+	}
+}
+
+// After a rebuild the newest object is the rebuilt cluster's empty store, and its
+// id matches the live cluster's, so `--latest` would pick it and the dry run would
+// say "match". It must refuse instead, and say what IS there.
+func TestSelectLatestRefusesAcrossClusters(t *testing.T) {
+	snaps, oldKeys, newKeys := rebuiltBucket(3, 2)
+	_, err := Select(snaps, "", "")
+	if err == nil {
+		t.Fatal("Select --latest on a bucket holding two clusters' snapshots picked one; it must refuse")
+	}
+	for _, want := range []string{"old-cluster", "new-cluster", "--from-cluster"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not name %q: %v", want, err)
+		}
+	}
+	s, err := Select(snaps, "", "old-cluster")
+	if err != nil || s.Key != oldKeys[len(oldKeys)-1] {
+		t.Errorf("Select --latest --from-cluster old-cluster = %+v, %v; want %s", s, err, oldKeys[len(oldKeys)-1])
+	}
+	s, err = Select(snaps, "", "NEW-cluster ")
+	if err != nil || s.Key != newKeys[len(newKeys)-1] {
+		t.Errorf("Select --from-cluster is not normalised like the key: %+v, %v", s, err)
+	}
+	if _, err := Select(snaps, "", "nobody"); err == nil || !strings.Contains(err.Error(), "old-cluster") {
+		t.Errorf("Select --from-cluster for an absent id = %v, want an error naming what is there", err)
+	}
+	// A named key needs no disambiguation.
+	if s, err := Select(snaps, oldKeys[0], ""); err != nil || s.Key != oldKeys[0] {
+		t.Errorf("Select named key in a mixed bucket = %+v, %v", s, err)
 	}
 }
 

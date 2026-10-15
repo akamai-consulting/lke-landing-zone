@@ -86,17 +86,17 @@ var MaskFn = func(v string) {
 	}
 }
 
-// Fetch lists the bucket, picks the snapshot (key, or the newest when key is ""),
-// downloads it, and VERIFIES it. A snapshot that does not verify is never handed
-// to OpenBao: restoring a corrupt archive into a live store is the one outcome
-// worse than not restoring.
-func Fetch(ctx context.Context, st Store, key string) (Snapshot, []byte, Manifest, error) {
+// Fetch lists the bucket, picks the snapshot (see Select: key, or the newest —
+// of fromCluster's, when set — when key is ""), downloads it, and VERIFIES it. A
+// snapshot that does not verify is never handed to OpenBao: restoring a corrupt
+// archive into a live store is the one outcome worse than not restoring.
+func Fetch(ctx context.Context, st Store, key, fromCluster string) (Snapshot, []byte, Manifest, error) {
 	objs, err := st.List(ctx, Prefix)
 	if err != nil {
 		return Snapshot{}, nil, Manifest{}, err
 	}
 	snaps, _ := Catalog(objs)
-	snap, err := Select(snaps, key)
+	snap, err := Select(snaps, key, fromCluster)
 	if err != nil {
 		return Snapshot{}, nil, Manifest{}, fmt.Errorf("%s: %w", st.Bucket, err)
 	}

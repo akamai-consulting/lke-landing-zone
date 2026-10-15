@@ -118,6 +118,8 @@ func mergeToggle(base, over ComponentToggle) ComponentToggle {
 		RegistryStorage:     pickStr(base.RegistryStorage, over.RegistryStorage),
 		BroadPATLabel:       pickStr(base.BroadPATLabel, over.BroadPATLabel),
 		BroadPATDeployments: pickStr(base.BroadPATDeployments, over.BroadPATDeployments),
+		BackupIntervalHours: pickIntPtr(base.BackupIntervalHours, over.BackupIntervalHours),
+		BackupKeep:          pickIntPtr(base.BackupKeep, over.BackupKeep),
 	}
 }
 
