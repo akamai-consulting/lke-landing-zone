@@ -121,7 +121,7 @@ func RunAssertEncryption(d Deps, endpoint, bucket, harborBucket, region string, 
 	// The skip is LOUD. A gate that quietly passes when disabled is a gate that can
 	// be silenced by disabling the thing it guards, so this prints what it did not
 	// check rather than printing nothing.
-	if !ssecSeedEnabled(lz, region) {
+	if !ssecSeedEnabled(lz, region, objProxyComponent) {
 		fmt.Printf("::notice::assert-obj-encryption: spec.components.%s is NOT enabled for %q — "+
 			"object storage on this deployment is UNENCRYPTED by design, and this gate checked nothing.\n",
 			objProxyComponent, region)

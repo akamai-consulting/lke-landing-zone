@@ -1,0 +1,12 @@
+# spec.components.velero → Velero in its own namespace. Template-managed.
+# See docs/runbooks/velero-dr.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - network-policy.yaml
+  # The two Secrets the server mounts/reads, from OpenBao via ESO (wave -5).
+  - externalsecret.yaml
+  # The upstream chart as an Argo Application (wave 0, after the Secrets).
+  - velero.yaml
+  - prometheusrule.yaml

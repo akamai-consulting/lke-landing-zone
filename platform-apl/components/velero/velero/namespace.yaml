@@ -1,0 +1,27 @@
+# Dedicated namespace for Velero. Its server holds cluster-admin (it must read
+# every object it backs up and recreate every object it restores), a key that can
+# read and delete every backup, and the SSE-C key those backups are encrypted
+# under — so it shares a namespace, a blast radius and a NetworkPolicy scope with
+# nothing else.
+#
+# RESTRICTED Pod Security. The server and the AWS plugin init container run
+# non-root with every capability dropped; there is no node-agent (file-system
+# backup would need a privileged hostPath DaemonSet — see
+# docs/runbooks/velero-dr.md, "What is not backed up"), so nothing here needs
+# more than restricted.
+#
+# This namespace is ALSO EXCLUDED FROM EVERY BACKUP (clusterspec
+# VeleroMandatoryExcludes): its Secrets are Velero's own key and SSE-C key, and a
+# backup holding the key it is encrypted under is no protection at all.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    kubernetes.io/metadata.name: llz-velero
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    app.kubernetes.io/part-of: platform

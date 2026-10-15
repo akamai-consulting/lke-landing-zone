@@ -160,6 +160,8 @@ func SizingSummary(t ComponentToggle) string {
 	if t.BackupKeep != nil {
 		parts = append(parts, "backupKeep="+strconv.Itoa(*t.BackupKeep))
 	}
+	add("backupIncludeNamespaces", t.BackupIncludeNamespaces)
+	add("backupExcludeNamespaces", t.BackupExcludeNamespaces)
 	return strings.Join(parts, " ")
 }
 

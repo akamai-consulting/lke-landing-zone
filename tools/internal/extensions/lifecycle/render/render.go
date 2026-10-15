@@ -600,6 +600,12 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		// render the defaults, so the file is always there to read.
 		tog := e.Components[c.Name]
 		content["openbao-backup-schedule-patch.yaml"] = clusterspec.RenderOpenBaoBackupPatch(tog.BackupIntervalHours, tog.BackupKeep)
+	case "velero":
+		// This deployment's bucket (the same derivation the key is scoped to) on its
+		// object-storage endpoint, plus the schedule knobs (Validate bounds them;
+		// unset knobs render the defaults, so the file is always there to read).
+		oc := e.Cluster.ObjectStorage.Cluster
+		content["velero-values-patch.yaml"] = clusterspec.RenderVeleroPatch(oc, clusterspec.ObjVeleroBucket(objLabelPrefix, env), e.Components[c.Name])
 	case "objProxy":
 		// The endpoint the SSE-C gateway proxies to, and the dnsNames its serving
 		// cert must carry — both from the one object-storage cluster id, so the

@@ -83,6 +83,18 @@ var defaultScrapeRuleGroups = []string{
 	"llz-openbao-backup",
 }
 
+// componentGatedRuleGroups are tracked PrometheusRule groups that ship with a
+// DEFAULT-DISABLED component, so they are deliberately NOT in
+// defaultScrapeRuleGroups: on a deployment without the component the group never
+// exists, and listing it would make the gating lane permanently red there — the
+// Harbor mistake above, for rules. Each names where its own load IS gated, so the
+// exemption is a pointer rather than a hole.
+var componentGatedRuleGroups = map[string]string{
+	"llz-velero": "spec.components.velero (default off); the e2e drill step runs " +
+		"`assert-scrape-targets --monitors llz-velero/velero --rule-groups llz-velero` " +
+		"on the e2e deployment, which enables it",
+}
+
 // activeTarget is the subset of a /api/v1/targets active target the gate reads.
 type activeTarget struct {
 	ScrapePool string

@@ -1,0 +1,18 @@
+# spec.components.velero → this kustomize Component (default-disabled): the Velero
+# server (the upstream vmware-tanzu chart, as its own Argo Application), the
+# credentials it reads from OpenBao, its NetworkPolicies, and the alerts that say
+# when backups stop. Rendered into its own carved Application (llz-velero), so a
+# Velero that cannot converge fails that App and nothing else.
+#
+# Per-env values — the bucket, the endpoint, the schedule, the TTL and the
+# namespace scope — are NOT here: `llz render` writes them as
+# velero-values-patch.yaml beside the carved App's kustomization
+# (clusterspec.RenderVeleroPatch). The placeholders in velero/velero.yaml are what
+# a build WITHOUT that patch carries, and they fail closed (a bucket that does not
+# exist; a schedule that backs up nothing but excludes llz-openbao).
+#
+# Template-managed. See docs/runbooks/velero-dr.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - velero

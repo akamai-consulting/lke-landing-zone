@@ -138,11 +138,13 @@ func SeedSSECKeyCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "seed-ssec-key",
-		Short: "generate and seed the obj-proxy SSE-C key when the objProxy component is enabled",
-		Long: "Bootstrap seed for the object-storage encryption key.\n\n" +
-			"No-ops unless spec.components.objProxy is enabled for --region. When enabled,\n" +
-			"generates a 32-byte AES-256 key and writes it to " + SSECKVPath + " (key=),\n" +
-			"where the proxy's ExternalSecret reads it.\n\n" +
+		Short: "generate and seed the SSE-C keys (obj-proxy, Velero) for the components enabled here",
+		Long: "Bootstrap seed for the object-storage encryption keys.\n\n" +
+			"For each key whose component is enabled for --region, generates a 32-byte AES-256\n" +
+			"key and writes it (key=, base64): " + SSECKVPath + " for spec.components.objProxy\n" +
+			"(the proxy's ExternalSecret reads it), " + VeleroSSECKVPath + " for\n" +
+			"spec.components.velero (Velero's AWS plugin encrypts every backup under it).\n" +
+			"A key whose component is off is not generated.\n\n" +
 			"STRICTLY ADDITIVE. An existing key is never overwritten: Linode discards\n" +
 			"SSE-C keys on receipt and they are per-object, so replacing this value does\n" +
 			"not rotate anything — it orphans every object already written, unreadably and\n" +
@@ -153,6 +155,6 @@ func SeedSSECKeyCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return RunSeedSSECKey(ObjencDeps(), region) },
 	}
-	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose objProxy toggle gates the seed (required)")
+	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose objProxy / velero toggles gate the seeds (required)")
 	return c
 }

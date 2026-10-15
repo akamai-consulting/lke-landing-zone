@@ -98,8 +98,18 @@ func TestDefaultScrapeSetsCoverTrackedTemplateMonitoringSurface(t *testing.T) {
 		}
 	}
 	for _, group := range surface.ruleGroups {
-		if !ruleDefaults[group] {
+		if !ruleDefaults[group] && componentGatedRuleGroups[group] == "" {
 			t.Errorf("tracked PrometheusRule group %q is missing from defaultScrapeRuleGroups", group)
+		}
+	}
+	// An exemption must name a group that exists, and must not also be a default:
+	// both would be the exemption list drifting from the tree it describes.
+	for group := range componentGatedRuleGroups {
+		if !surface.ruleGroupSet[group] {
+			t.Errorf("componentGatedRuleGroups exempts %q, but no tracked PrometheusRule group backs it", group)
+		}
+		if ruleDefaults[group] {
+			t.Errorf("%q is both a default rule group and a component-gated exemption", group)
 		}
 	}
 

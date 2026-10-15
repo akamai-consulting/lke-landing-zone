@@ -111,15 +111,17 @@ func mergeComponents(base, over map[string]ComponentToggle) map[string]Component
 // mergeToggle returns over with base filling any field over leaves unset.
 func mergeToggle(base, over ComponentToggle) ComponentToggle {
 	return ComponentToggle{
-		Enabled:             pickBoolPtr(base.Enabled, over.Enabled),
-		Retention:           pickStr(base.Retention, over.Retention),
-		Storage:             pickStr(base.Storage, over.Storage),
-		Replicas:            pickIntPtr(base.Replicas, over.Replicas),
-		RegistryStorage:     pickStr(base.RegistryStorage, over.RegistryStorage),
-		BroadPATLabel:       pickStr(base.BroadPATLabel, over.BroadPATLabel),
-		BroadPATDeployments: pickStr(base.BroadPATDeployments, over.BroadPATDeployments),
-		BackupIntervalHours: pickIntPtr(base.BackupIntervalHours, over.BackupIntervalHours),
-		BackupKeep:          pickIntPtr(base.BackupKeep, over.BackupKeep),
+		Enabled:                 pickBoolPtr(base.Enabled, over.Enabled),
+		Retention:               pickStr(base.Retention, over.Retention),
+		Storage:                 pickStr(base.Storage, over.Storage),
+		Replicas:                pickIntPtr(base.Replicas, over.Replicas),
+		RegistryStorage:         pickStr(base.RegistryStorage, over.RegistryStorage),
+		BroadPATLabel:           pickStr(base.BroadPATLabel, over.BroadPATLabel),
+		BroadPATDeployments:     pickStr(base.BroadPATDeployments, over.BroadPATDeployments),
+		BackupIntervalHours:     pickIntPtr(base.BackupIntervalHours, over.BackupIntervalHours),
+		BackupKeep:              pickIntPtr(base.BackupKeep, over.BackupKeep),
+		BackupIncludeNamespaces: pickStr(base.BackupIncludeNamespaces, over.BackupIncludeNamespaces),
+		BackupExcludeNamespaces: pickStr(base.BackupExcludeNamespaces, over.BackupExcludeNamespaces),
 	}
 }
 
