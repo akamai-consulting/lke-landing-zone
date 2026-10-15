@@ -166,6 +166,26 @@ times. Response: [runbooks/openbao-backup-restore](runbooks/openbao-backup-resto
 | The first tick is over an hour past and the CronJob has neither succeeded nor failed (never scheduled) | `LLZOpenBaoBackupNeverSucceeded` | warning | ✅ covered |
 | A snapshot restores | — | — | e2e gate, not an alert: `llz ci assert-openbao-restore` |
 
+#### Velero backups (when the `velero` component is enabled)
+
+Covered by `llz-velero` (in
+[platform-apl/components/velero/](../platform-apl/components/velero/), shipped with the
+default-off `velero` component), over Velero's own metrics for the `velero-cluster`
+schedule, scraped through the chart's ServiceMonitor. Same doctrine as the OpenBao
+backups: the latest attempt and freshness, never "objects exist". The rule group is
+absent where the component is off, so the default scrape gate does not expect it; the
+component's own gate (`llz ci assert-velero-restore`) asserts the scrape and the rule
+load wherever it is on. Response: [runbooks/velero-dr](runbooks/velero-dr.md).
+
+| Condition | Alert | Severity | Status |
+|-----------|-------|----------|--------|
+| The newest backup ended Failed / PartiallyFailed | `LLZVeleroBackupFailing` | warning | ✅ covered |
+| No successful backup for 49h (two runs of the longest allowed interval + 1h) | `LLZVeleroBackupStale` | critical | ✅ covered |
+| The Schedule has existed 26h without a single success | `LLZVeleroBackupNeverSucceeded` | warning | ✅ covered |
+| The BackupStorageLocation cannot list its bucket | `LLZVeleroStorageUnavailable` | warning | ✅ covered |
+| Velero's series are absent (server down or unscraped — every rule above blind) | `LLZVeleroMetricsAbsent` | warning | ✅ covered |
+| A backup is encrypted and restores | — | — | gate, not an alert: `llz ci assert-velero-restore` (every bootstrap; `--drill` in release-e2e) |
+
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under

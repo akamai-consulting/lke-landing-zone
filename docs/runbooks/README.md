@@ -14,6 +14,7 @@ are read by operators who do not have this repo checked out, often mid-incident.
 | Your first `llz up` / `llz build` went red and you need to know what to do | [first-build-failed](first-build-failed.md) |
 | Standing up OpenBao on a new cluster, or recovering a sealed/half-configured one | [bootstrap-openbao](bootstrap-openbao.md) |
 | OpenBao data is lost or damaged and you need it back from a backup — or `LLZOpenBaoBackupStale` is firing | [openbao-backup-restore](openbao-backup-restore.md) |
+| Workload resources (a namespace, its Secrets) must come back from a Velero backup — or an `LLZVelero*` alert is firing | [velero-dr](velero-dr.md) |
 | An in-cluster alert is firing and you need the response for it | [reconciler-alerts](reconciler-alerts.md) |
 | A recreated cluster will not converge; the values repo still has the old `apl-<env>` branch | [apl-branch-recreate-wedge](apl-branch-recreate-wedge.md) |
 | apl-core is not picking up values, or you need to know how values reach the cluster | [apl-values-propagation](apl-values-propagation.md) |

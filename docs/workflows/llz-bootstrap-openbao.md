@@ -133,7 +133,8 @@ never transit GitHub.
   instead of a separate `validate` pass dispatching `cluster-health.yml`. It arms the
   read-only e2e battery only — **not** the OpenBao restore drill.
 * **`restore_drill`** — release-e2e only, default false. Arms the OpenBao backup →
-  restore drill, which rolls the deployment's live OpenBao back in place. It is its own
+  restore drill, which rolls the deployment's live OpenBao back in place, and the
+  Velero canary-namespace backup → delete → restore drill (`--drill`). It is its own
   input because it used to ride on `assert_loki`, whose description promised a
   read-only check; the verb additionally refuses any deployment that is not an e2e lane
   (`e2e`, `e2e-<forge>`), so a mistaken dispatch fails rather than restores.
@@ -504,6 +505,11 @@ CronJob needs no per-env patch. It is a rotation-table entry, so the reconciler'
 `linode-creds` lane rotates it with the platform key. See
 [runbooks/openbao-backup-restore](../runbooks/openbao-backup-restore.md).
 
+Where `components.velero` is enabled it also mints **Velero's key**
+(`<prefix>-velero-<region>`, `read_write` on the velero bucket alone) into
+`secret/obj/velero`. That entry is component-gated: not minted where the component is
+off, and rotated in-cluster only once seeded. See [runbooks/velero-dr](../runbooks/velero-dr.md).
+
 ### Step: Mint + seed the in-cluster Linode PAT
 
 Same one-owner shape as the object-storage keys: `llz ci mint-bootstrap-pat` mints the
@@ -773,6 +779,26 @@ the first scheduled tick fails, up to one interval later — and the only other 
 the OpenBao behaviour it relies on (`read` without `sudo` on
 `sys/storage/raft/snapshot`, the archive member names `Verify` checks) is release e2e.
 Fails the job on purpose; opt out by disabling `components.openbaoBackup`.
+
+### Step: Velero backup check (and the e2e restore drill)
+
+`llz ci assert-velero-restore --drill=<restore_drill>` — on every deployment, after
+converge; self-skips unless `components.velero` is enabled (it is off by default). It
+reads the **live** Schedule and fails unless it excludes `llz-openbao` and `llz-velero`,
+waits for the BackupStorageLocation to be Available, takes a backup from the Schedule's
+own template (labelled as the schedule's, so it is also the freshness alerts' first
+success) and requires Completed with items and no errors, then reads it back from the
+**consumer** side: the tarball must be in the velero bucket (a temporary read-only key)
+and a GET without the SSE-C key must answer 400. Finally it re-runs
+`assert-scrape-targets` for `llz-velero/velero` and the `llz-velero` rule group. With
+`restore_drill` it also backs up, deletes and restores the `llz-velero-drill` canary
+namespace and requires its ConfigMap and Secret back with the nonce and the restore's
+label — refused on any deployment that is not an e2e lane.
+
+**What stays green without it:** everything. The `llz-velero` App is Healthy the moment
+the Deployment is; the BSL reads Available against an empty bucket; the Schedule exists
+whether or not its backups restore, or are encrypted. See
+[runbooks/velero-dr](../runbooks/velero-dr.md).
 
 ### Step: Wait for cluster to converge — why `--budget 1200`
 

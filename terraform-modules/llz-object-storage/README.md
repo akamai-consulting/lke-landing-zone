@@ -47,7 +47,7 @@ former.
 
 The `velero` bucket holds the `velero` component's backups (Kubernetes resources,
 Secrets included, written SSE-C-encrypted by Velero's AWS plugin under a key held in
-OpenBao) — see `docs/runbooks/velero-dr.md`. It
+OpenBao) — see [`docs/runbooks/velero-dr.md`](../../docs/runbooks/velero-dr.md). It
 is created on every deployment and stays empty unless the component is enabled; the
 scoped key is minted by llz only where it is. Versioned like `openbao-backup`, with
 noncurrent versions expiring after `velero_noncurrent_days` (default 14).

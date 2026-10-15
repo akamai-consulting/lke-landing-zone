@@ -829,6 +829,16 @@ environment; the seal/recovery-key custody ADR proposed in
 namespace**: its `openbao-unseal-key` Secret is the seal key, so a Velero schedule over
 every namespace would put key and data in one bucket. The backup key is scoped to that one
 bucket and is deliberately not the platform key apl-core hands to Loki and Harbor.
+The landing zone's own `velero` component excludes it from every Schedule and cannot be
+configured otherwise ([runbooks/velero-dr](runbooks/velero-dr.md)).
+
+**Velero's two keys** (only where `components.velero` is enabled): `secret/obj/velero`,
+an object-storage key scoped to the velero bucket alone (minted at bootstrap, rotated by
+the in-cluster rotator like the other object-storage keys), and `secret/obj/velero-ssec`,
+the 32-byte SSE-C key every backup object is encrypted under — generate-once by
+`llz ci seed-ssec-key`, never rotated, and lost-means-backups-lost, so escrow it with the
+seal key. Both reach `llz-velero` through ESO; it is OpenBao's restore that brings them
+back after a loss, which is why OpenBao is restored first and never from Velero.
 
 **Restore** replaces the whole store, needs a root token on the target cluster and the
 same seal key the snapshot's cluster used, refuses a kube-context that is not `--region`'s
@@ -850,6 +860,7 @@ read back. Every deployment's bootstrap runs its non-destructive half (`--backup
 - [docs/architecture/convergence-contract.md](architecture/convergence-contract.md) — cluster convergence contract
 - [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md) — OpenBao bring-up procedure
 - [docs/runbooks/openbao-backup-restore.md](runbooks/openbao-backup-restore.md) — OpenBao backup, restore, and what the bucket exposes
+- [docs/runbooks/velero-dr.md](runbooks/velero-dr.md) — Velero backups of workload resources: scope, encryption, restore
 - [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) — lke-admin credential rotation
 - [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) — Linode token rotation
 - [docs/runbooks/apl-values-propagation.md](runbooks/apl-values-propagation.md) — apl-values propagation
