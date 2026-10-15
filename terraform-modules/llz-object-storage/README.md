@@ -1,7 +1,7 @@
 # `object-storage`
 
 Linode Object Storage buckets for a platform's container registry, log
-storage, and OpenBao Raft snapshots. **Buckets only** — the scoped access keys are NOT Terraform-managed.
+storage, OpenBao Raft snapshots, and Velero backups. **Buckets only** — the scoped access keys are NOT Terraform-managed.
 
 > **MAJOR interface change (SemVer):** earlier releases minted the Loki/Harbor
 > scoped keys here with a 120-day `time_rotating` clock and exported them as
@@ -33,7 +33,7 @@ setting values instead of copying YAML. The operational scars travel with the mo
 
 | Resource | Count | Notes |
 |---|---|---|
-| `linode_object_storage_bucket` | 5 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>` |
+| `linode_object_storage_bucket` | 6 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>`, `<prefix>-openbao-backup-<suffix>`, `<prefix>-velero-<suffix>` |
 
 The `openbao-backup` bucket holds OpenBao Raft snapshots (barrier-encrypted
 ciphertext). It is its own bucket so the llz-minted backup key can be scoped to
@@ -45,6 +45,13 @@ S3 calls: the calling root's provider needs `obj_use_temp_keys = true` (or
 `obj_access_key`/`obj_secret_key`) — the embedded `object-storage` root sets the
 former.
 
+The `velero` bucket holds the `velero` component's backups (Kubernetes resources,
+Secrets included, written SSE-C-encrypted by Velero's AWS plugin under a key held in
+OpenBao) — see `docs/runbooks/velero-dr.md`. It
+is created on every deployment and stays empty unless the component is enabled; the
+scoped key is minted by llz only where it is. Versioned like `openbao-backup`, with
+noncurrent versions expiring after `velero_noncurrent_days` (default 14).
+
 ## Inputs
 
 | Variable | Type | Default | Description |
@@ -53,16 +60,17 @@ former.
 | `obj_cluster` | string | — | Linode OBJ cluster id (e.g. `us-ord-1`) |
 | `label_prefix` | string | `"platform"` | Bucket label prefix. **Override per sibling deployment** so labels don't collide. Key labels (minted by llz) mirror it. |
 | `openbao_backup_noncurrent_days` | number | `30` | Days a deleted/overwritten OpenBao snapshot stays recoverable as a noncurrent version in the versioned `openbao-backup` bucket. |
+| `velero_noncurrent_days` | number | `14` | Days a deleted/overwritten Velero backup object stays recoverable as a noncurrent version in the versioned `velero` bucket. |
 
 ## Outputs
 
-`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `s3_endpoint`.
+`bucket_names`, `harbor_registry_bucket`, `openbao_backup_bucket`, `velero_bucket`, `s3_endpoint`.
 
 ## Provider
 
 Inherits the `linode` provider from the calling root (configure
 `provider "linode" { token = … }` there). The root's provider must also be able to
-make S3 calls for the `openbao-backup` bucket's versioning and lifecycle rule:
+make S3 calls for the `openbao-backup` and `velero` buckets' versioning and lifecycle rules:
 set `obj_use_temp_keys = true` (as the embedded root does) or supply
 `obj_access_key`/`obj_secret_key`.
 
@@ -78,7 +86,7 @@ set `obj_use_temp_keys = true` (as the embedded root does) or supply
 ```hcl
 provider "linode" {
   token             = var.linode_token
-  obj_use_temp_keys = true # versioning + lifecycle on the openbao-backup bucket
+  obj_use_temp_keys = true # versioning + lifecycle on the openbao-backup and velero buckets
 }
 
 module "object_storage" {

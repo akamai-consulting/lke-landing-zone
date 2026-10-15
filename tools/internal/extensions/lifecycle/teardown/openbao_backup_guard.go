@@ -26,6 +26,13 @@ package teardown
 //
 // It runs BEFORE the drain step and before anything is deleted, so a refusal
 // leaves every bucket exactly as it was.
+//
+// TWO BACKUP BUCKETS, ONE GUARD. The velero bucket (the `velero` component's
+// cluster backups) is the same kind of bucket for the same reason — it exists to
+// restore a cluster that is gone — so it is held to the same rule, by the same
+// verb and the same consent, rather than by a second step a workflow edit could
+// drop. Each bucket is judged on its own: an empty or absent one never blocks the
+// other. The verb keeps its name because the delivered workflow calls it by name.
 
 import (
 	"context"
@@ -62,16 +69,38 @@ var (
 // number of delete markers. It returns whether to delete everything, or the
 // refusal.
 func BackupGuardVerdict(bucket string, data, markers int, allowDelete bool) (deleteAll bool, err error) {
+	return guardVerdict(openBaoGuarded, bucket, data, markers, allowDelete)
+}
+
+// guarded is one backup bucket the destroy may not take by default: what it holds
+// (for the refusal), and how an operator lists it before consenting.
+type guarded struct {
+	what, inspect string
+}
+
+var (
+	openBaoGuarded = guarded{
+		what:    "OpenBao snapshot",
+		inspect: "`llz openbao backups --region <deployment>` lists them",
+	}
+	veleroGuarded = guarded{
+		what: "Velero backup object",
+		inspect: "`velero backup get -n llz-velero` lists them while the cluster is up; the objects are SSE-C, so " +
+			"copying them out needs secret/obj/velero-ssec — see docs/runbooks/velero-dr.md",
+	}
+)
+
+func guardVerdict(g guarded, bucket string, data, markers int, allowDelete bool) (deleteAll bool, err error) {
 	switch {
 	case data == 0:
 		// Nothing recoverable is here. Bare delete markers still block the bucket
 		// delete, so clear them.
 		return markers > 0, nil
 	case !allowDelete:
-		return false, fmt.Errorf("refusing to destroy object-storage: %s holds %d OpenBao snapshot version(s) — the backups of this "+
-			"deployment's OpenBao, which this destroy would delete with the bucket. Nothing has been drained or deleted. "+
-			"Copy them out first if you may need them (`llz openbao backups --region <deployment>` lists them), then re-run "+
-			"with drain_data_buckets=true to delete them", bucket, data)
+		return false, fmt.Errorf("refusing to destroy object-storage: %s holds %d %s version(s) — backups of this "+
+			"deployment, which this destroy would delete with the bucket. Nothing has been drained or deleted. "+
+			"Copy them out first if you may need them (%s), then re-run "+
+			"with drain_data_buckets=true to delete them", bucket, data, g.what, g.inspect)
 	default:
 		return true, nil
 	}
@@ -86,7 +115,7 @@ func RunOpenBaoBackupGuard(region string, allowDelete, yes bool) error {
 		return fmt.Errorf("--region is required")
 	}
 	if allowDelete && !yes {
-		return fmt.Errorf("--allow-delete deletes every OpenBao backup of %q — pass --yes as well", region)
+		return fmt.Errorf("--allow-delete deletes every OpenBao and Velero backup of %q — pass --yes as well", region)
 	}
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
@@ -100,63 +129,99 @@ func RunOpenBaoBackupGuard(region string, allowDelete, yes bool) error {
 	if objCluster == "" {
 		return fmt.Errorf("deployment %q declares no cluster.objectStorage.cluster", region)
 	}
-	bucket := clusterspec.ObjOpenBaoBackupBucket(lz.ObjLabelPrefix(), region)
+	prefix := lz.ObjLabelPrefix()
 	token := os.Getenv("LINODE_API_TOKEN")
 	if token == "" {
-		return fmt.Errorf("LINODE_API_TOKEN must be set — the guard reads the backup bucket with a temporary key minted from it")
+		return fmt.Errorf("LINODE_API_TOKEN must be set — the guard reads the backup buckets with a temporary key minted from it")
 	}
 	ctx := context.Background()
 	api := backupGuardClient(token)
 
 	all, err := api.ListObjectStorageBuckets(ctx)
 	if err != nil {
-		return fmt.Errorf("list the account's buckets (could not tell whether %s exists, so refusing): %w", bucket, err)
+		return fmt.Errorf("list the account's buckets (could not tell whether %s's backup buckets exist, so refusing): %w", region, err)
 	}
-	if !bucketExists(all, bucket, objCluster) {
-		fmt.Printf("no %s in the account — no OpenBao backups to protect; the destroy may proceed.\n", bucket)
-		return nil
-	}
-
-	perms := "read_only"
-	if allowDelete {
-		perms = "read_write"
-	}
-	st, revoke, err := backupGuardStore(ctx, api, "llz-destroy-guard-"+region, objCluster, bucket, clusterspec.ObjEndpointHost(objCluster), perms)
-	if err != nil {
-		return fmt.Errorf("could not read %s, so refusing to destroy it: %w", bucket, err)
-	}
-	defer revoke()
-
-	vs, err := st.ListVersions(ctx)
-	if err != nil {
-		return fmt.Errorf("could not list %s, so refusing to destroy it: %w", bucket, err)
-	}
-	data, markers := countVersions(vs)
-	deleteAll, err := BackupGuardVerdict(bucket, data, markers, allowDelete)
-	if err != nil {
-		return err
-	}
-	if !deleteAll {
-		fmt.Printf("%s holds no object versions — nothing to protect; the destroy may proceed.\n", bucket)
-		return nil
-	}
-	if data > 0 {
-		fmt.Printf("drain_data_buckets=true: deleting %d OpenBao snapshot version(s) and %d delete marker(s) from %s.\n", data, markers, bucket)
-	} else {
-		fmt.Printf("clearing %d bare delete marker(s) from %s so the bucket can be deleted.\n", markers, bucket)
-	}
-	// With no consent, the key is read_only and only markers are to go — which a
-	// read_only key cannot delete. Mint a write key for that narrow case.
-	if !allowDelete {
-		revoke()
-		st, revoke, err = backupGuardStore(ctx, api, "llz-destroy-guard-"+region, objCluster, bucket, clusterspec.ObjEndpointHost(objCluster), "read_write")
+	// OpenBao first: it is the store nothing re-derives, so its refusal is the one
+	// an operator should read first. EVERY bucket is judged before ANY is emptied,
+	// so a refusal on the second leaves the first exactly as it was too.
+	var todo []guardPlan
+	for _, b := range []struct {
+		label string
+		g     guarded
+	}{
+		{clusterspec.ObjOpenBaoBackupBucket(prefix, region), openBaoGuarded},
+		{clusterspec.ObjVeleroBucket(prefix, region), veleroGuarded},
+	} {
+		if !bucketExists(all, b.label, objCluster) {
+			fmt.Printf("no %s in the account — no %ss to protect there.\n", b.label, b.g.what)
+			continue
+		}
+		p, err := inspectGuarded(ctx, api, region, objCluster, b.label, b.g, allowDelete)
 		if err != nil {
 			return err
 		}
-		defer revoke()
+		if p != nil {
+			todo = append(todo, *p)
+		}
 	}
+	for _, p := range todo {
+		if err := emptyGuarded(ctx, api, region, objCluster, p, allowDelete); err != nil {
+			return err
+		}
+	}
+	fmt.Println("✓ no backup bucket blocks the destroy; it may proceed.")
+	return nil
+}
+
+// guardPlan is one bucket inspectGuarded found something to delete in.
+type guardPlan struct {
+	bucket        string
+	g             guarded
+	vs            []baosnap.Version
+	data, markers int
+}
+
+// inspectGuarded lists one bucket's versions under a read-only key and returns
+// the refusal, nil (nothing to delete), or what to delete. It deletes nothing.
+func inspectGuarded(ctx context.Context, api backupGuardAPI, region, objCluster, bucket string, g guarded, allowDelete bool) (*guardPlan, error) {
+	st, revoke, err := backupGuardStore(ctx, api, "llz-destroy-guard-"+region, objCluster, bucket, clusterspec.ObjEndpointHost(objCluster), "read_only")
+	if err != nil {
+		return nil, fmt.Errorf("could not read %s, so refusing to destroy it: %w", bucket, err)
+	}
+	defer revoke()
+	vs, err := st.ListVersions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not list %s, so refusing to destroy it: %w", bucket, err)
+	}
+	data, markers := countVersions(vs)
+	deleteAll, err := guardVerdict(g, bucket, data, markers, allowDelete)
+	if err != nil {
+		return nil, err
+	}
+	if !deleteAll {
+		fmt.Printf("%s holds no object versions — nothing to protect there.\n", bucket)
+		return nil, nil
+	}
+	return &guardPlan{bucket: bucket, g: g, vs: vs, data: data, markers: markers}, nil
+}
+
+// emptyGuarded deletes what inspectGuarded found — every version with consent,
+// only bare delete markers without — under a write key, then LISTS AGAIN and fails
+// unless the bucket really is empty.
+func emptyGuarded(ctx context.Context, api backupGuardAPI, region, objCluster string, p guardPlan, allowDelete bool) error {
+	bucket := p.bucket
+	if p.data > 0 {
+		fmt.Printf("drain_data_buckets=true: deleting %d %s version(s) and %d delete marker(s) from %s.\n", p.data, p.g.what, p.markers, bucket)
+	} else {
+		fmt.Printf("clearing %d bare delete marker(s) from %s so the bucket can be deleted.\n", p.markers, bucket)
+	}
+	st, revoke, err := backupGuardStore(ctx, api, "llz-destroy-guard-"+region, objCluster, bucket, clusterspec.ObjEndpointHost(objCluster), "read_write")
+	if err != nil {
+		return err
+	}
+	defer revoke()
 	var failed []string
-	for _, v := range vs {
+	for _, v := range p.vs {
 		if !allowDelete && !v.DeleteMarker {
 			// Defence in depth: without consent only tombstones may go. The verdict
 			// already guarantees there is no data here (data == 0).

@@ -17,6 +17,11 @@ output "openbao_backup_bucket" {
   value       = linode_object_storage_bucket.openbao_backup.label
 }
 
+output "velero_bucket" {
+  description = "Velero backup bucket label for this region. The velero component's BackupStorageLocation names it; llz render derives the same label from the instance spec (clusterspec.ObjVeleroBucket) rather than reading this output, and a coupling test holds the two together."
+  value       = linode_object_storage_bucket.velero.label
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (the full endpoint host, e.g. 'us-ord-10' → E3), which the buckets above are pinned to via endpoint_type — so this host actually serves them, and destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = "https://${var.obj_cluster}.linodeobjects.com"

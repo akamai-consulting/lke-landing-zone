@@ -43,21 +43,21 @@ func OpenBaoBackupDestroyGuardCmd() *cobra.Command {
 	var allow bool
 	c := &cobra.Command{
 		Use:   "openbao-backup-destroy-guard",
-		Short: "before an object-storage destroy: refuse while the OpenBao backup bucket holds a snapshot, unless --allow-delete",
+		Short: "before an object-storage destroy: refuse while a backup bucket (OpenBao snapshots, Velero backups) holds data, unless --allow-delete",
 		Long: "Run by the object-storage destroy job before anything is drained. The deployment's\n" +
-			"openbao-backup bucket exists to outlive the cluster, so a destroy may not delete it\n" +
-			"while it holds any object version (noncurrent ones included) unless the caller opts in\n" +
-			"with --allow-delete (the workflow's drain_data_buckets). With the opt-in it deletes every\n" +
-			"version and delete marker and re-lists to prove the bucket is empty. Fails closed on\n" +
-			"anything it cannot read. --allow-delete also needs --yes. Needs LINODE_API_TOKEN; run\n" +
-			"from the instance repo root.",
+			"openbao-backup and velero buckets exist to outlive the cluster, so a destroy may not\n" +
+			"delete either while it holds any object version (noncurrent ones included) unless the\n" +
+			"caller opts in with --allow-delete (the workflow's drain_data_buckets). Every bucket is\n" +
+			"judged before any is emptied. With the opt-in it deletes every version and delete marker\n" +
+			"and re-lists to prove each bucket is empty. Fails closed on anything it cannot read.\n" +
+			"--allow-delete also needs --yes. Needs LINODE_API_TOKEN; run from the instance repo root.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
 			return RunOpenBaoBackupGuard(region, allow, cliopts.Global.Yes)
 		},
 	}
-	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose backup bucket to guard")
-	c.Flags().BoolVar(&allow, "allow-delete", false, "consent to deleting the OpenBao backups with the bucket (drain_data_buckets)")
+	c.Flags().StringVar(&region, "region", os.Getenv("REGION"), "deployment whose backup buckets to guard")
+	c.Flags().BoolVar(&allow, "allow-delete", false, "consent to deleting the OpenBao and Velero backups with their buckets (drain_data_buckets)")
 	return c
 }

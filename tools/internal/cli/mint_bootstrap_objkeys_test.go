@@ -11,6 +11,7 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -244,5 +245,53 @@ func TestAnUnreachableLinodeAPIStillSkipsASeededPath(t *testing.T) {
 	if stub.objCreates != 0 || len(*puts) != 0 {
 		t.Errorf("mints=%d puts=%d — an unverified path must not be reseeded",
 			stub.objCreates, len(*puts))
+	}
+}
+
+// Velero's key is component-gated: minted where spec.components.velero is on,
+// scoped to the velero bucket alone, and never minted where it is off (the
+// default) — the account must not hold a credential nothing consumes.
+func TestMintBootstrapObjkeysMintsTheVeleroKeyOnlyWhereEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			dir := chdirTempDir(t)
+			t.Setenv("OPENBAO_ROOT_TOKEN", "root")
+			t.Setenv("LINODE_API_TOKEN", "linode-tok")
+			withGHASummaryFile(t)
+			prevNow := credrotate.Now
+			credrotate.Now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+			t.Cleanup(func() { credrotate.Now = prevNow })
+			stub := &stubLinode{}
+			prevClient := credrotate.MintObjkeysLinodeClient
+			credrotate.MintObjkeysLinodeClient = func(string) credrotate.LinodeAPI { return stub }
+			t.Cleanup(func() { credrotate.MintObjkeysLinodeClient = prevClient })
+
+			mustWrite(t, filepath.Join(dir, "landingzone.yaml"),
+				"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: acme\nspec:\n  instance:\n    repo: o/acme\n")
+			if err := os.MkdirAll(filepath.Join(dir, "environments"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustWrite(t, filepath.Join(dir, "environments", "primary.yaml"),
+				"apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: ClusterDefinition\nmetadata:\n  name: primary\nspec:\n  cluster:\n    region: us-ord\n  components:\n    velero: {enabled: "+strconv.FormatBool(enabled)+"}\n")
+			writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
+			puts := stubBaoSeedKV(t, "", "")
+			if err := credrotate.RunMintBootstrapObjkeys("primary", false); err != nil {
+				t.Fatal(err)
+			}
+			var velero []string
+			for _, p := range *puts {
+				if j := strings.Join(p, " "); strings.Contains(j, "secret/obj/velero") {
+					velero = append(velero, j)
+				}
+			}
+			switch {
+			case !enabled && (len(velero) != 0 || stub.objCreates != 2):
+				t.Errorf("velero disabled: mints=%d velero puts=%v, want 2 mints and none for velero", stub.objCreates, velero)
+			case enabled && (len(velero) != 1 || stub.objCreates != 3):
+				t.Errorf("velero enabled: mints=%d velero puts=%v, want 3 mints and one velero seed", stub.objCreates, velero)
+			case enabled && !strings.HasPrefix(velero[0], "kv put secret/obj/velero AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at="):
+				t.Errorf("velero seed = %q", velero[0])
+			}
+		})
 	}
 }

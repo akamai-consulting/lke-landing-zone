@@ -77,7 +77,23 @@ type CredEntry struct {
 	// the rotator or an earlier bootstrap already owns).
 	PresentField string
 	Fields       func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
+	// Component, when set, names the spec component this credential exists for.
+	// The bootstrap mint SKIPS the entry unless that component is enabled for the
+	// deployment (it reads the spec), and the in-cluster rotator — which has no spec
+	// — rotates it only once it has been seeded. Empty means always minted.
+	//
+	// It exists because the alternative is a key in every Linode account for a
+	// component most deployments never enable: exactly the "minted and re-minted,
+	// consumed by nothing" scar the comment on the retired per-app keys below
+	// records, and one more credential the account's 100-key cap has to hold.
+	Component string
 }
+
+// VeleroBaoPath is where Velero's object-storage key lives. The velero
+// component's ExternalSecret reads it (as obj/velero), the platform-ci policy
+// grants that read, and this table writes it — the const keeps the table and the
+// coupling test on one spelling.
+const VeleroBaoPath = "secret/obj/velero"
 
 // BuildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
 // region/objCluster come from the CronJob env (rendered per-env, like the
@@ -89,6 +105,7 @@ type CredEntry struct {
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
 func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
 	backupBucket := clusterspec.ObjOpenBaoBackupBucket(prefix, region)
+	veleroBucket := clusterspec.ObjVeleroBucket(prefix, region)
 	return []CredEntry{
 		// THE TWO PER-APP OBJ KEYS ARE GONE, and the broad one below is what
 		// replaced them. loki-object-store and harbor-registry-s3 minted read_write
@@ -152,6 +169,33 @@ func BuildRotationTable(prefix, region, objCluster string) []CredEntry {
 					"BUCKET": backupBucket, "ENDPOINT": clusterspec.ObjEndpointHost(objCluster),
 				}
 			},
+		},
+		{
+			// VELERO's key — read_write on the velero bucket and nothing else. Its
+			// consumer is the Velero server (spec.components.velero), which reads it as
+			// an AWS credentials file the velero-cloud-credentials ExternalSecret
+			// assembles from these two fields.
+			//
+			// A SEPARATE KEY, NOT ANOTHER BUCKET ON obj-platform, for the reason the
+			// backup key above gives: obj-platform is handed to apl-core's Loki and
+			// Harbor, and a grant on this bucket would let either of them delete every
+			// cluster backup. Velero needs read_write — it writes backups and its GC
+			// deletes expired ones — so the narrowest grant is this bucket alone.
+			//
+			// COMPONENT-GATED (see CredEntry.Component): minted at bootstrap only
+			// where spec.components.velero is enabled, rotated in-cluster only once
+			// seeded. The bucket exists everywhere; the key only where it is used.
+			//
+			// No BUCKET/ENDPOINT fields: the Velero BackupStorageLocation carries
+			// both, rendered per env from the same spec (RenderVeleroPatch), and the
+			// ExternalSecret reads only the key pair.
+			Name: "velero", Kind: CredKindObjKey, Label: prefix + "-velero-" + region,
+			ObjCluster:  objCluster,
+			Buckets:     []string{veleroBucket},
+			Permissions: "read_write",
+			BaoPath:     "secret/obj/velero", PresentField: "AWS_ACCESS_KEY_ID",
+			Fields:    func(access, secret string) map[string]string { return objPlatformFields(access, secret) },
+			Component: "velero",
 		},
 	}
 }
@@ -261,6 +305,16 @@ func RunRotateLinodeCreds(ctx context.Context, apply bool) error {
 		rotatedAt, _, err := bao.Get(ctx, e.BaoPath, "rotated_at")
 		if err != nil {
 			return fmt.Errorf("read %s rotated_at: %w", e.BaoPath, err)
+		}
+		if e.Component != "" && strings.TrimSpace(rotatedAt) == "" {
+			// A component-gated key nobody has seeded: the bootstrap mint skips it
+			// where the component is off, and this rotator has no spec to ask. IsDue
+			// would read the empty stamp as "due" and mint a key the deployment never
+			// uses, so a never-seeded gated path is left alone. The bootstrap's mint
+			// is what brings it under rotation once the component is enabled.
+			skipped = append(skipped, e.Name)
+			fmt.Printf("%s: %s not seeded (spec.components.%s not enabled here) — nothing to rotate\n", e.Name, e.BaoPath, e.Component)
+			continue
 		}
 		if !IsDue(rotatedAt, now, rotateAfter) {
 			// AGE IS NOT THE ONLY REASON TO ROTATE. IsDue asks how old the

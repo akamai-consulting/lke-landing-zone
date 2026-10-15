@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       drain_data_buckets:
-        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable. ALSO the explicit consent to delete OpenBao backups: a module=object-storage destroy refuses, before deleting anything, while the openbao-backup bucket holds a snapshot, unless this is true. A cluster destroy never touches that bucket.'
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable. ALSO the explicit consent to delete OpenBao and Velero backups: a module=object-storage destroy refuses, before deleting anything, while the openbao-backup or velero bucket holds any version, unless this is true. A cluster destroy never touches those buckets.'
         required: false
         type: boolean
         default: false
@@ -1390,26 +1390,28 @@ jobs:
           state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
-      # ── The OpenBao backups are NOT this destroy's to delete by default ───────
-      # The openbao-backup bucket exists to OUTLIVE the cluster it backs up, and
-      # "destroy object-storage" is exactly what a team runs while rebuilding after
-      # a loss. So before anything is drained, this refuses while that bucket holds
-      # any object version (it is versioned; pruned snapshots count) unless the
-      # caller opted in with drain_data_buckets=true — in which case it deletes
-      # every version and delete marker and re-lists to prove the bucket empty, so
-      # TF can delete it. Fails closed on anything it cannot read. The decision is
-      # in Go (`llz ci openbao-backup-destroy-guard`, unit-tested), not here.
-      # NO working-directory: it reads the spec at the repo root for the bucket.
-      - name: Guard the OpenBao backup bucket (refuses unless drain_data_buckets)
+      # ── The backups are NOT this destroy's to delete by default ───────────────
+      # The openbao-backup and velero buckets exist to OUTLIVE the cluster they back
+      # up, and "destroy object-storage" is exactly what a team runs while
+      # rebuilding after a loss. So before anything is drained, this refuses while
+      # either bucket holds any object version (both are versioned; pruned or
+      # expired backups count) unless the caller opted in with
+      # drain_data_buckets=true — in which case it deletes every version and delete
+      # marker and re-lists to prove each bucket empty, so TF can delete them. Every
+      # bucket is judged before any is emptied. Fails closed on anything it cannot
+      # read. The decision is in Go (`llz ci openbao-backup-destroy-guard`,
+      # unit-tested), not here; the verb name predates the velero bucket.
+      # NO working-directory: it reads the spec at the repo root for the buckets.
+      - name: Guard the OpenBao and Velero backup buckets (refuses unless drain_data_buckets)
         env:
           LINODE_API_TOKEN:   ${{ secrets.LINODE_API_TOKEN }}
           DRAIN_DATA_BUCKETS: ${{ inputs.drain_data_buckets }}
         run: llz --yes ci openbao-backup-destroy-guard --region "$REGION" --allow-delete="${DRAIN_DATA_BUCKETS:-false}"
 
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
-      # destroy with "bucket is not empty" — drain first. The OpenBao backup bucket
-      # is NOT drained here: the guard above already emptied it (with consent) or
-      # stopped the job. Uses s5cmd (static Go
+      # destroy with "bucket is not empty" — drain first. The OpenBao backup and
+      # velero buckets are NOT drained here: the guard above already emptied them
+      # (with consent) or stopped the job. Uses s5cmd (static Go
       # binary) because TF_IMAGE ships neither awscli nor python+pip. Tolerant by
       # design: a failed drain only warns, and TF destroy then names the bucket.
       - name: Drain S3 buckets before destroy
