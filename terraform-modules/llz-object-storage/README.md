@@ -55,7 +55,7 @@ noncurrent versions expiring after `velero_noncurrent_days` (default 14).
 The `cnpg` bucket holds apl-core's CloudNativePG database backups (Harbor and
 Keycloak: barman base backups plus the continuous WAL archive) when the
 `cnpgBackup` component is on — see
-`docs/runbooks/cnpg-backup-restore.md`.
+[`docs/runbooks/cnpg-backup-restore.md`](../../docs/runbooks/cnpg-backup-restore.md).
 Unlike `openbao-backup` and `velero` it has **no key of its own**: apl-core gives
 every app one object-storage credential, so the platform key Loki and Harbor use
 is scoped to this bucket too, and anything holding it can delete database

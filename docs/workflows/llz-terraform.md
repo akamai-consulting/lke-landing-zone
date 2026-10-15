@@ -977,9 +977,9 @@ sigv4 signing even though Linode OBJ ignores the value. `s3://bucket/*` matches
 all objects recursively in s5cmd's wildcard semantics. Errors when the bucket is
 already empty are tolerated by the `||` guard.
 
-**The OpenBao backup and Velero buckets are not drained here.** The step before it,
-`Guard the OpenBao and Velero backup buckets`, runs `llz ci openbao-backup-destroy-guard`
-over both (every bucket is judged before any is emptied). Each
+**The OpenBao backup, Velero and CNPG buckets are not drained here.** The step before it,
+`Guard the OpenBao, Velero and CNPG backup buckets`, runs `llz ci openbao-backup-destroy-guard`
+over all three (every bucket is judged before any is emptied). Each
 bucket exists to outlive the cluster it backs up, and destroying object-storage is what
 a team does while rebuilding after a loss, so the guard lists every version in it (the
 bucket is versioned; pruned snapshots count) and **refuses the destroy** — before anything

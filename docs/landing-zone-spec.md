@@ -336,7 +336,10 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 [runbooks/openbao-backup-restore](runbooks/openbao-backup-restore.md)), `velero` (default
 **off**; requires `externalSecrets` + `observability`; scheduled Kubernetes-resource
 backups to object storage, never including `llz-openbao` — see
-[runbooks/velero-dr](runbooks/velero-dr.md)), `clusterHealthWorkflow`
+[runbooks/velero-dr](runbooks/velero-dr.md)), `cnpgBackup` (default **off**; requires
+`observability`; switches on apl-core's own CNPG backups of the Keycloak and Harbor
+databases to the deployment's cnpg bucket, on the platform key Loki and Harbor share — see
+[runbooks/cnpg-backup-restore](runbooks/cnpg-backup-restore.md)), `clusterHealthWorkflow`
 (requires `argoWorkflows`). `llz components` prints this table live — it is the
 authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
@@ -395,6 +398,19 @@ the default list of credential-holding and provider namespaces; `llz-openbao` an
 `llz-velero` are always appended). `llz render` writes them into the carved `llz-velero`
 app as a patch on the chart Application, with this deployment's bucket and endpoint.
 Example: `velero: { enabled: true, backupIntervalHours: 12, retention: 14d }`.
+`cnpgBackup` takes `backupIntervalHours` (base backups every N hours at :07, N a divisor
+of 24; default `24`, daily at 01:07 UTC), `retention` (barman's `retentionPolicy`, in
+`d`/`w`/`m` where `m` is **months**; default `30d`; at least two intervals, at most a
+year), `backupDatabases` (space-separated `harbor` / `keycloak`; default both, minus
+`harbor` where the harbor component does not emit; `gitea` is refused, an explicit
+`harbor` with Harbor off is refused) and `backupGeneration` (default `1`; the
+`<db>-<generation>` object prefix — bump it after a restore, because CNPG will not
+archive over an existing archive). `llz render` writes them into
+`apl-overlay/platformBackups.yaml` (apl-core's `AplBackupCollection` CR), which the
+apl-overlay reconciler merges key-level onto `env/settings/platformBackups.yaml`.
+Turning the component off stops LLZ asserting the backups; delete that file too, and
+turn them off in the Console, to stop them.
+Example: `cnpgBackup: { enabled: true, retention: 2w, backupDatabases: keycloak }`.
 Those are the whole set. An unset knob keeps the base default; a knob set
 on a component that doesn't read it (or a bad duration/quantity) is a validation
 error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.

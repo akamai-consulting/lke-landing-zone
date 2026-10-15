@@ -238,8 +238,8 @@ step, no GitHub secret — by the `linodeCredRotator` CronJob (`llz ci
 rotate-linode-creds`; see [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md)
 and [docs/designs/linode-credential-rotator.md](designs/linode-credential-rotator.md)):
 
-- `secret/obj/platform` — the platform's Object Storage key, scoped to every
-  provisioned bucket
+- `secret/obj/platform` — the platform's Object Storage key, scoped to the Loki,
+  Harbor and **cnpg** buckets (not the openbao-backup or velero buckets)
 
 When the OpenBao `rotated_at` stamp is older than the threshold (or absent on a fresh
 seed), the rotator mints a replacement via the Linode API, **verifies it before
@@ -326,7 +326,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain. Age-tracked (`class="automated"`) — on the 90-day SLA, so a stalled rotation workflow alerts |
 | `secret/linode/broad-pat` | **Broad account `read_write` PAT** — the provisioning credential the `broadPatRotator` CronJob owns; the highest-privilege Linode credential the platform holds | **Automated** in-cluster — `broadPatRotator` (weekly check, `ROTATE_AFTER_DAYS`), mint→verify→write→drain. Age-tracked (`class="automated"`) on the 90d SLA; its *expiry* is separately visible via the token-inventory's Linode enumeration |
 | `secret/linode/cloud-firewall` | **Opt-in** least-privilege firewall token (`linodes:ro` + `vpcs:ro` + `firewall:rw`) for the cidr-firewall controller + discover CronJob. Most instances never seed it and read `linode/api-token` instead | **On-demand** — operator-seeded and re-seeded by hand (`llz openbao set`), documented ≤90-day policy. Age-tracked (`class="on-demand"`) when seeded; an unseeded instance 404s and publishes nothing |
-| `secret/obj/platform` | Platform Object Storage key (Loki + Harbor buckets) | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
+| `secret/obj/platform` | Platform Object Storage key (Loki + Harbor buckets, and the cnpg bucket apl-core's database backups write to — apl-core has one credential for every app) | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/obj/openbao-backup` | OpenBao backup Object Storage key — `read_write` on the `openbao-backup` bucket only, plus `BUCKET`/`ENDPOINT`; read by the backup CronJob under its own role, never projected into a Kubernetes Secret | **Automated** in-cluster — same rotator and threshold as `obj/platform`; minted at bootstrap by `mint-bootstrap-objkeys`. Age-tracked (`class="automated"`) |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
 | `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
@@ -840,6 +840,17 @@ the 32-byte SSE-C key every backup object is encrypted under — generate-once b
 seal key. Both reach `llz-velero` through ESO; it is OpenBao's restore that brings them
 back after a loss, which is why OpenBao is restored first and never from Velero.
 
+**apl-core's database backups have no key of their own** (where `components.cnpgBackup` is
+enabled). apl-core's otomi-db chart builds barman's credential from the same
+`accessKeyId` + `obj-secrets` pair every apl-core app reads, so the cnpg bucket is in the
+scope of `secret/obj/platform`, and **Loki, Harbor and anything that can read
+`obj-secrets` can read and delete the Keycloak and Harbor database backups** — Keycloak's
+holds every user's credential hash and the realm signing keys. The bucket is versioned
+with a 30-day noncurrent window (`cnpg_noncurrent_days`) so a delete stays reversible;
+that is the whole mitigation, and it does not stop a key holder deleting versions on
+purpose. The backups are SSE-C under `secret/obj/ssec` only where objProxy is on;
+plaintext at rest otherwise ([runbooks/cnpg-backup-restore](runbooks/cnpg-backup-restore.md)).
+
 **Restore** replaces the whole store, needs a root token on the target cluster and the
 same seal key the snapshot's cluster used, refuses a kube-context that is not `--region`'s
 own LKE cluster (whatever `--force` says), refuses a snapshot from a different OpenBao
@@ -861,6 +872,7 @@ read back. Every deployment's bootstrap runs its non-destructive half (`--backup
 - [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md) — OpenBao bring-up procedure
 - [docs/runbooks/openbao-backup-restore.md](runbooks/openbao-backup-restore.md) — OpenBao backup, restore, and what the bucket exposes
 - [docs/runbooks/velero-dr.md](runbooks/velero-dr.md) — Velero backups of workload resources: scope, encryption, restore
+- [docs/runbooks/cnpg-backup-restore.md](runbooks/cnpg-backup-restore.md) — apl-core's CNPG database backups: the shared key, encryption, restore
 - [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) — lke-admin credential rotation
 - [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) — Linode token rotation
 - [docs/runbooks/apl-values-propagation.md](runbooks/apl-values-propagation.md) — apl-values propagation

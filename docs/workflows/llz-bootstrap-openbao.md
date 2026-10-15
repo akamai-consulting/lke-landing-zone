@@ -133,8 +133,9 @@ never transit GitHub.
   instead of a separate `validate` pass dispatching `cluster-health.yml`. It arms the
   read-only e2e battery only — **not** the OpenBao restore drill.
 * **`restore_drill`** — release-e2e only, default false. Arms the OpenBao backup →
-  restore drill, which rolls the deployment's live OpenBao back in place, and the
-  Velero canary-namespace backup → delete → restore drill (`--drill`). It is its own
+  restore drill, which rolls the deployment's live OpenBao back in place, the
+  Velero canary-namespace backup → delete → restore drill, and the CNPG canary-database
+  restore into a scratch cluster (both `--drill`). It is its own
   input because it used to ride on `assert_loki`, whose description promised a
   read-only check; the verb additionally refuses any deployment that is not an e2e lane
   (`e2e`, `e2e-<forge>`), so a mistaken dispatch fails rather than restores.
@@ -799,6 +800,29 @@ label — refused on any deployment that is not an e2e lane.
 the Deployment is; the BSL reads Available against an empty bucket; the Schedule exists
 whether or not its backups restore, or are encrypted. See
 [runbooks/velero-dr](../runbooks/velero-dr.md).
+
+### Step: CNPG database backup check (and the e2e restore drill)
+
+`llz ci assert-cnpg-backup --drill=<restore_drill>` — on every deployment, after the
+Velero step; self-skips unless `components.cnpgBackup` is enabled (off by default). For
+the keycloak database, and harbor's where Harbor runs, it reads the **live** Cluster and
+waits (bounded) for the barman-cloud plugin to be its WAL archiver — the proof the
+apl-overlay reconciler's `platformBackups.yaml` reached apl-core and apl-operator synced
+it — refusing the in-tree path the alerts cannot see; requires the ObjectStore it names to
+write to this deployment's cnpg bucket and endpoint (and, with objProxy, to trust the proxy
+CA); waits for continuous WAL archiving; takes an on-demand plugin Backup and requires it
+completed; then, through a temporary read-only key, requires the base backup and its end
+WAL in the bucket under the path a recovery reads — derived from the live objects — and
+ciphertext where objProxy is on. Last, `assert-scrape-targets` for the `llz-cnpg-backup`
+rule group. With `restore_drill` it also writes a canary database into the live cluster
+before the backup and requires it back from a scratch recovery cluster in its own
+namespace — refused on any deployment that is not an e2e lane. 40m step; the verb bounds
+itself at 38m.
+
+**What stays green without it:** everything. The settings CR reads enabled the moment the
+reconciler writes it; the Cluster is healthy whether or not its archiver reaches the
+bucket; the ScheduledBackup exists whether or not its backups land where a restore looks.
+See [runbooks/cnpg-backup-restore](../runbooks/cnpg-backup-restore.md).
 
 ### Step: Wait for cluster to converge — why `--budget 1200`
 

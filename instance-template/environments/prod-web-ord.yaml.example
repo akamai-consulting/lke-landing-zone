@@ -97,3 +97,7 @@ spec:
       registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
     imageScanning: { enabled: true }               # Trivy
     policyEngine:   { enabled: true }              # Kyverno + policy-reporter
+    # apl-core's own CNPG backups of the Keycloak (and Harbor) databases to this
+    # deployment's cnpg bucket — default OFF. The bucket's key is the platform key
+    # Loki and Harbor share; see docs/runbooks/cnpg-backup-restore.md before enabling.
+    # cnpgBackup: { enabled: true, retention: 30d }  # backupIntervalHours, backupDatabases, backupGeneration
