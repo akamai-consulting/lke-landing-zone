@@ -9,11 +9,14 @@ package clusterspec
 // App Platform pivot (ADR 0005). Nothing failed when that target disappeared,
 // because a field with no renderer produces no error; it produces nothing at all.
 //
-// So an operator sets `spec.alerting.receivers: [slack]`, seeds the webhook, reads
-// the docs describing the flow, and is paged by nothing. The gap is not that the
-// capability is missing — it is that the spec keeps claiming to have it. This list
-// is what turns that silence into a `llz doctor` finding, and it is deliberately
-// small and hand-maintained: every row is a promise the spec is currently breaking.
+// So an operator set `spec.alerting.receivers: [slack]`, seeded the webhook, read
+// the docs describing the flow, and was paged by nothing — for the whole life of
+// the managed platform, until spec.alerting was wired — Slack as apl-core's own
+// AplAlertSet, PagerDuty as an AlertmanagerConfig (alerting.go) — and its row
+// here was deleted. The gap is not that the capability
+// is missing — it is that the spec keeps claiming to have it. This list is what
+// turns that silence into a `llz doctor` finding, and it is deliberately small and
+// hand-maintained: every row is a promise the spec is currently breaking.
 //
 // THE RATCHET. TestInertSpecFieldsAreStillInert renders a spec that sets each
 // field and asserts its value does NOT appear in the render output. That test
@@ -45,38 +48,10 @@ type InertSpecField struct {
 	Marker func(lz *LandingZone)
 }
 
-// InertSpecFields is the whole list. See docs/upstream-asks.md §3 and §4 for what
-// would let each row be deleted.
+// InertSpecFields is the whole list. See docs/upstream-asks.md §3 for what would
+// let the remaining row be deleted.
 func InertSpecFields() []InertSpecField {
 	return []InertSpecField{
-		{
-			Path: "alerting.receivers / alerting.slack",
-			Why: "apl-core renders Alertmanager's route+receiver config from a TOP-LEVEL `alerts:` " +
-				"values block. The apl-overlay's only channel into apl-core is per-app " +
-				"(apps.<name>._rawValues on its AplApp CR), which cannot reach a top-level key, and " +
-				"the per-env values file that used to carry it is gone. So this setting reaches no " +
-				"cluster: alerts aggregate in Alertmanager and notify nobody. NEITHER HALF WORKS — " +
-				"secret/alerts/webhooks is seeded, age-tracked and rotated, but the " +
-				"kyverno-alertmanager-slack-webhook policy that repointed apl-core's " +
-				"alertmanager-credentials ExternalSecret at it was deleted with the rest of the " +
-				"shared Kyverno policy base when LLZ went managed-only, and nothing replaced it. " +
-				"Only two Kyverno policies ship now. So the " +
-				"secret is written to a path no cluster reads, exactly like the routing. " +
-				"See docs/upstream-asks.md §4",
-			Probe: func(lz *LandingZone) bool {
-				for _, r := range lz.Spec.Alerting.Receivers {
-					if r != "" && r != "none" {
-						return true
-					}
-				}
-				return lz.Spec.Alerting.Slack.Channel != "" || lz.Spec.Alerting.Slack.ChannelCrit != ""
-			},
-			Marker: func(lz *LandingZone) {
-				lz.Spec.Alerting.Receivers = []string{"slack"}
-				lz.Spec.Alerting.Slack.Channel = inertMarker + "-channel"
-				lz.Spec.Alerting.Slack.ChannelCrit = inertMarker + "-channel-crit"
-			},
-		},
 		{
 			Path: "components.observability.retention / .storage / .replicas, components.harbor.registryStorage",
 			Why: "these are FIRST-CLASS keys on apl-core's AplApp CR (retention, storageSize, " +

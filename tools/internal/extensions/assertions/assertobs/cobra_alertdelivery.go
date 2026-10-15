@@ -26,9 +26,8 @@ func AlertDeliveryCmd() *cobra.Command {
 			"no receivers is not a failure condition for Prometheus.\n\n" +
 			"Checks /api/v1/alertmanagers has at least one ACTIVE endpoint, and that\n" +
 			"Alertmanager itself answers /api/v2/status and /api/v2/alerts.\n\n" +
-			"Scope: this is the link this repo owns. It does NOT assert Alertmanager\n" +
-			"forwards to a human destination — apl-core owns receivers and none ship here,\n" +
-			"so gating on them would fail every cluster that deliberately has none.\n\n" +
+			"Scope: Prometheus → Alertmanager only. Whether Alertmanager routes to the\n" +
+			"receiver spec.alerting names (PagerDuty / Slack) is assert-alert-routing.\n\n" +
 			"Does not require any alert to be firing. Read-only. Exit 0 / 1.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

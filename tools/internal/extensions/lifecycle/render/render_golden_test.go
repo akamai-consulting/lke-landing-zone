@@ -83,6 +83,10 @@ kind: LandingZone
 metadata: { name: goldeninst }
 spec:
   instance: { upstreamOrg: akamai-consulting, repo: akamai-consulting/goldeninst, forge: github, templateVersion: main }
+  alerting:
+    receivers: [pagerduty, slack]
+    pagerduty: { url: "https://events.eu.pagerduty.com/v2/enqueue" }
+    slack: { channel: platform-alerts }
   environments:
     prod:
       cluster:
@@ -102,6 +106,11 @@ spec:
         nodePool: { type: g6-standard-4, count: 2 }
         bootstrap: { name: platform-staging, domainSuffix: staging.example.com }
         objectStorage: { cluster: us-sea-1 }
+      # Per-env override of spec.alerting: staging posts to its own Slack
+      # channel and pages nobody.
+      alerting:
+        receivers: [slack]
+        slack: { channel: staging-alerts }
 `
 
 const goldenPath = "testdata/render_golden.txt"

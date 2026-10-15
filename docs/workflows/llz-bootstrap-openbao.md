@@ -808,8 +808,23 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   `assert-scrape-targets` proves rules are loaded, `alert-eval` proves they evaluate —
   but a rule can evaluate to FIRING with no Alertmanager discovered, and Prometheus
   does not consider that an error. Asserts ≥1 *active* Alertmanager plus Alertmanager's
-  own `/api/v2/status`. Scoped to the link this repo owns: apl-core owns receivers, so
-  gating on a human destination would fail every cluster that deliberately has none.
+  own `/api/v2/status`. Stops at Alertmanager; the next hop is `alert-routing`.
+* **alert-routing** — does a firing alert reach the receivers `spec.alerting` names,
+  exactly once each? Reads the config Alertmanager is RUNNING and requires each
+  expected receiver with its key set (for Slack, also apl-core's
+  `alertmanager-credentials`), then creates a silence, posts silenced probe alerts
+  (one per severity, non-`monitoring` namespace, no namespace, and an `info` one
+  that must notify nobody) and COUNTS the PagerDuty and Slack paths Alertmanager
+  chose; then checks no team Alertmanager carries LLZ's receivers, and reports the
+  failed-notification counters. Writes only to Alertmanager's API; never notifies.
+  What stays green without it: an unseeded key (no Secret, so the operator rejects
+  the `AlertmanagerConfig`), an `AplAlertSet` that never reached apl-core, a route
+  scoped to `namespace="monitoring"` because the matcher strategy never reached the
+  `Alertmanager` CR, or a second Slack path — every manifest valid, every App
+  Synced, the wrong number of people notified. The e2e
+  spec declares a PagerDuty + Slack fixture (`.github/e2e/spec-alerting.yaml`, every
+  endpoint `.invalid`), and the `(e2e) seed placeholder …` steps put placeholder keys
+  in OpenBao before the root token is revoked.
 * **grafana-dash** — the dashboard sidecar is a label selector and nothing else. Drop
   or mistype the label and the ConfigMap sits there forever, valid and invisible, with
   Argo reporting Synced. Worse, the landing zone must render on BOTH stacks

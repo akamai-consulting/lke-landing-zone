@@ -128,41 +128,77 @@ cluster or apl-core itself can answer.
 
 ---
 
-## 4. Alertmanager receivers have no channel LLZ can write
+## 4. Alertmanager: team Alertmanagers merge every AlertmanagerConfig, and msteams' critical route is dead
 
-**Severity: every alert this repo ships pages nobody by default, including the ones
-that catch a total outage.**
+**Severity: a second page for every `namespace=monitoring` alert on any cluster
+with a team-managed Alertmanager; every critical Microsoft Teams notification
+fails.**
 
-apl-core renders the full Alertmanager route/receiver config from a top-level
-`alerts:` values block. That is not a per-app key, so the apl-overlay's per-app
-channel cannot reach it, and the per-env values file that used to carry it is gone.
+**Correction first.** This entry used to say apl-core's `alerts:` receivers had
+"no supported channel LLZ can write". That was wrong. apl-core maps a settings
+CR, `kind: AplAlertSet` at `env/settings/alerts.yaml`, onto `$.alerts`
+(`src/common/repo.ts` `getFileMaps`; fixture `tests/fixtures/env/settings/alerts.yaml`)
+— the same mechanism as `AplObjectStorage` at `env/settings/obj.yaml`, which LLZ
+has used for object storage all along — and reads the Slack webhook from
+`alerts-secrets` in `apl-secrets` through `core-secrets-store`
+(`values/prometheus-operator/prometheus-operator-raw.gotmpl`), paralleling
+`obj-secrets`. The mistaken premise sent Slack through a second, LLZ-owned
+receiver that duplicated apl-core's own critical route.
 
-`spec.alerting` — receivers, Slack channel, critical channel — is therefore
-validated and rendered nowhere. `llz ci assert-alert-delivery` already states the
-consequence plainly: it proves Prometheus reaches Alertmanager and deliberately
-does **not** assert Alertmanager reaches a human, "because apl-core owns the
-receiver configuration and this repo ships none".
+For the whole managed era before that, `spec.alerting` was validated and rendered
+nowhere — the routing and the secret both: `secret/alerts/webhooks` was seeded,
+age-tracked and rotated, but the `kyverno-alertmanager-slack-webhook` policy that
+repointed apl-core's `alertmanager-credentials` ExternalSecret at OpenBao had been
+deleted with the shared Kyverno policy base, so the seed went to a path no cluster
+read.
 
-**BOTH HALVES ARE DEAD, not just the routing.** The secret half looks healthy and is
-not: `secret/alerts/webhooks` is seeded, age-tracked and rotated on schedule, but
-the `kyverno-alertmanager-slack-webhook` policy that repointed apl-core's
-`alertmanager-credentials` ExternalSecret at OpenBao was deleted along with the
-rest of the shared Kyverno policy base when LLZ went managed-only (Kyverno itself
-is the managed App Platform's), and nothing replaced it. Only two Kyverno policies
-ship today
-(`verify-llz-image-signature`, `harbor-obj-proxy-ca`). So an operator who follows
-the documented procedure seeds a secret into a path no cluster reads, and gets a
-green credential-age series for it.
+**What LLZ does now** ([alerting.md](alerting.md) § "Wiring a notification receiver"):
 
-**What LLZ does today.** `InertSpecFields` plus a `doctor` finding, so an operator
-who configures Slack is told it reaches nothing instead of assuming it works.
+- **Slack** rides apl-core's own receiver: the apl-overlay merges an
+  `AplAlertSet` key-level onto `env/settings/alerts.yaml` (the Console co-writes
+  that file), and an ExternalSecret writes `apl-secrets/alerts-secrets` from
+  OpenBao. apl-core routes only `critical` (and `CPUThrottlingHigh`); LLZ's
+  `llz-alerting-slack` AlertmanagerConfig routes the other Slack severities,
+  reading apl-core's own `alertmanager-credentials` Secret, and never matches
+  what apl-core already posts.
+- **PagerDuty**, which apl-core has no receiver for, rides the `llz-alerting`
+  `AlertmanagerConfig`. That depends on apl-core leaving the platform
+  Alertmanager's `alertmanagerConfigSelector` /
+  `alertmanagerConfigNamespaceSelector` open, and on
+  `apps.alertmanager._rawValues` landing under kube-prometheus-stack's
+  `alertmanager:` key, where the apl-overlay sets
+  `alertmanagerConfigMatcherStrategy: OnNamespaceExceptForAlertmanagerNamespace`.
+- `llz ci assert-alert-routing` holds the line at the consumer — weekly per env
+  (`llz-scheduled-checks`) and as the release e2e's `alert-routing` lane.
 
-**The ask.** Either an `AplAlerts`-style settings CR under `env/settings/` that an
-external writer may own (as `AplObjectStorage` already is for object storage), or a
-documented supported path for setting `alerts.receivers` on a managed cluster.
+**What still breaks, and is apl-core's to fix:**
 
-**Exit condition.** `spec.alerting` renders into the overlay, leaves
-`InertSpecFields`, and `assert-alert-delivery` can drop its stated scope caveat.
+1. **Team Alertmanagers select everything.** `prometheus-operator-team.gotmpl`
+   leaves the team Alertmanager's selectors at the chart's `{}`, so a team with
+   `managedMonitoring.alertmanager: true` merges every AlertmanagerConfig in every
+   namespace — and the platform Prometheus's `alertingEndpoints` send it every
+   alert. LLZ's CRs therefore page a second time from each such Alertmanager (for
+   `namespace=monitoring` alerts, under its default `OnNamespace` strategy). LLZ
+   has no channel into a team Alertmanager's values. The gate fails on a team
+   Alertmanager that carries LLZ's receivers; the remedy meanwhile is turning that
+   team's managed Alertmanager off.
+2. **msteams' critical webhook targets the wrong port.** `helmfile.d/snippets/alertmanager.gotmpl`
+   (and `alertmanager-teams.gotmpl`) send `critical` to
+   `http://prometheus-msteams…:800/high_priority_channel`; the prometheus-msteams
+   Service listens on **2000** (as the low-priority URL beside it correctly says).
+   So LLZ does not surface `msteams`, although the AplAlertSet path could carry it.
+
+**The asks.** (1) Scope each team Alertmanager's `alertmanagerConfigNamespaceSelector`
+to its own namespace (or expose the selectors as team settings). (2) Fix the
+msteams high-priority port. (3) A documented commitment that the platform
+Alertmanager's selectors stay open and `alertmanagerConfigMatcherStrategy` stays
+settable — or a PagerDuty receiver in `alerts:`.
+
+**Exit conditions.** (1) → the team-Alertmanager half of the gate stays and stops
+failing; the remedy note goes. (2) → `msteams` is accepted by `validateAlerting`
+and routed through the AplAlertSet with an OpenBao-fed `msteams_highPrio` /
+`msteams_lowPrio`. (3) → `llz-alerting` either stays (commitment) or is replaced
+by apl-core's receiver, and `assert-alert-routing` stays either way.
 
 ---
 

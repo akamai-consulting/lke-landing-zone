@@ -495,12 +495,24 @@ var carvedLLZImageComponents = map[string]bool{
 	"llzReconciler": true, "harbor": true, "broadPatRotator": true, "objProxy": true,
 }
 
-func RenderCarvedAppKustomization(c Component, ref, imageTag string) string {
+// localResources are files rendered BESIDE the kustomization in the carved app's
+// source root and listed under resources: — instance-specific manifests a shared,
+// token-free component cannot carry (spec.alerting's alerting.yaml is the
+// one today). Variadic so the common case, none, renders byte-identically to
+// before: an instance that sets no such field sees no drift on upgrade.
+func RenderCarvedAppKustomization(c Component, ref, imageTag string, localResources ...string) string {
 	var b strings.Builder
 	b.WriteString(genHeader)
 	b.WriteString(`apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-components:
+`)
+	if len(localResources) > 0 {
+		b.WriteString("resources:\n")
+		for _, r := range localResources {
+			b.WriteString("  - " + r + "\n")
+		}
+	}
+	b.WriteString(`components:
   - ` + componentRef(c.Name, "../../../../../platform-apl/components/", ref) + "\n")
 	// Retag the llz image for this instance (release tag) or e2e (sha image); the
 	// shared component ships `:latest`. Only for components whose image is a plain

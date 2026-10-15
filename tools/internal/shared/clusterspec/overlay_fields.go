@@ -716,6 +716,14 @@ func OverlayUnmapped() map[string]string {
 			"the gate compares the two rather than either against a constant. A field row asserting " +
 			"`1536MB == 1536MB` would go green on exactly the cluster this was written for",
 
+		"alertmanager.alertmanagerSpec.alertmanagerConfigMatcherStrategy.type": "gated by `llz ci " +
+			"assert-alert-routing`, which reads a stronger consumer than this field: Alertmanager's own routing " +
+			"decision. It posts silenced probe alerts labelled with a non-monitoring namespace (and with none) and " +
+			"requires them to reach spec.alerting's receivers, which they cannot unless this strategy reached the " +
+			"Alertmanager CR AND the operator honoured it AND the AlertmanagerConfig was accepted. A field read on " +
+			"the CR would be green on a cluster where the operator ignored it. The field is mutable, so there is no " +
+			"create-time trap for an appliability probe to find either",
+
 		"loki.ingester.persistence.claims": "checked as part of loki.ingester.persistence.enabled, not beside it: " +
 			"the claim entries ARE the payload of that row's appliability probe (claimTemplate turns each into the " +
 			"PersistentVolumeClaim the StatefulSet would carry), so a row of its own would send the same patch twice " +

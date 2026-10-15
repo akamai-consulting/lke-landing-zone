@@ -121,6 +121,7 @@ var commands = []Command{
 	{"assertobjstore", assertobjstore.VerifyObjectStorageCmd},
 	{"assertobs", assertobs.AlertDeliveryCmd},
 	{"assertobs", assertobs.AlertEvalCmd},
+	{"assertobs", assertobs.AlertRoutingCmd},
 	{"assertobs", assertobs.AssertLokiCmd},
 	{"assertobs", assertobs.CheckPromRulesCmd},
 	{"assertobs", assertobs.GrafanaDashboardsCmd},

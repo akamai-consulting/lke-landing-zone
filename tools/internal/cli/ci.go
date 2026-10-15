@@ -350,9 +350,11 @@ func ciCmd() *cobra.Command {
 	// secret path: ESO is still RE-READING OpenBao, not just holding a Secret it
 	// materialized once and can no longer refresh.
 	c.AddCommand(assertsecrets.ESORoundTripCmd())
-	// alert path: a firing alert has somewhere to go. Prometheus treats "firing
-	// with no receivers" as normal, so this is invisible everywhere else.
-	c.AddCommand(assertobs.AlertDeliveryCmd())
+	// alert path: a firing alert has somewhere to go (delivery: Prometheus →
+	// Alertmanager), and Alertmanager routes it to the receivers spec.alerting
+	// names (routing). Firing with no receivers is normal to both, so this is
+	// invisible everywhere else.
+	c.AddCommand(assertobs.AlertDeliveryCmd(), assertobs.AlertRoutingCmd())
 	// dashboard path: the sidecar is a label selector, so a dropped label leaves a
 	// valid ConfigMap holding a dashboard nobody can see.
 	c.AddCommand(assertobs.GrafanaDashboardsCmd())

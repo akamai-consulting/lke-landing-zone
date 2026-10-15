@@ -140,11 +140,13 @@ spec:
   # it stays a REPLACE_PER_ENV placeholder you fill by hand).
   # dns:
   #   acmeEmail: ops@example.com
-  # Alertmanager receivers (default none: alerts aggregate but notify nobody).
-  # To notify Slack: uncomment, re-render, then seed the webhook into OpenBao
-  # (llz openbao set alerts/webhooks slack_url=...) — see docs/alerting.md.
+  # Alertmanager receivers (default none: alerts aggregate but notify nobody),
+  # inherited by every env; an env overrides them in environments/<env>.yaml.
+  # To notify: uncomment, re-render, then seed the keys into OpenBao
+  # (llz openbao set alerts/pagerduty routing_key=...; for slack,
+  # llz openbao set alerts/webhooks slack_url=...) — see docs/alerting.md.
   # alerting:
-  #   receivers: [slack]
+  #   receivers: [pagerduty, slack]
   # Shared defaults inherited by every environment (a per-env value overrides
   # field-by-field). Add spec.networks here to co-locate clusters in one VPC.
   defaults:

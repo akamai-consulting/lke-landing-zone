@@ -307,3 +307,33 @@ spec:
             summary: 'Harbor job queue is backing up ({{ $labels.type }})'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'A Harbor jobservice queue has exceeded 100 pending tasks for 30m ({{ $value | humanize }}) — Trivy scans / GC / replication are not draining; jobservice is saturated or stuck.'
+    # Alertmanager → provider. spec.alerting's gate (`llz ci assert-alert-routing`)
+    # proves Alertmanager PICKS the right receiver; it cannot see whether the
+    # provider then accepted the event — a revoked PagerDuty key, a deleted Slack
+    # webhook, egress blocked. Alertmanager counts every failed attempt, and this is
+    # the alert on that count. Scoped to the PLATFORM Alertmanager (namespace
+    # monitoring) and the integrations spec.alerting wires.
+    #
+    # REPORT-ONLY IN SPIRIT, and severity warning on purpose: when PagerDuty is the
+    # thing failing this cannot page anyone, so it rides Slack's warning route (and
+    # the gate's weekly delivery report); a broken Slack webhook is seen in the
+    # gate's report and Alertmanager's UI. kube-prometheus-stack's own
+    # AlertmanagerFailedToSendAlerts covers the same metric as a RATE (>1% over
+    # 5m), which a single failed page among few attempts in a quiet hour can stay
+    # under; this one fires on any failure.
+    - name: alert-delivery
+      interval: 30s
+      rules:
+        - alert: LLZAlertNotificationsFailing
+          expr: |
+            sum by (integration) (
+              increase(alertmanager_notifications_failed_total{namespace="monitoring", integration=~"pagerduty|slack"}[30m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: alertmanager
+          annotations:
+            summary: 'Alertmanager is failing to deliver {{ $labels.integration }} notifications'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/alerting.md#when-a-notification-does-not-arrive"
+            description: 'The platform Alertmanager failed {{ $value | humanize }} {{ $labels.integration }} notification attempt(s) in the last 30m — alerts routed there are not reaching anyone. Check the key / webhook in OpenBao (alerts/pagerduty, alerts/webhooks), the endpoint, and egress from the Alertmanager pod; `llz ci assert-alert-routing` reports the counters.'

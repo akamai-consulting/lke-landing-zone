@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -53,7 +54,10 @@ func (lz *LandingZone) Validate() []error {
 	errs = append(errs, validateHAGroups(lz)...)
 	errs = append(errs, validateNetworks(lz)...)
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
-	errs = append(errs, validateAlerting(lz.Spec.Alerting)...)
+	errs = append(errs, validateAlerting("alerting", lz.Spec.Alerting, lz.Spec.Alerting.HasReceiver)...)
+	for _, name := range lz.EnvNames() {
+		errs = append(errs, validateEnvAlerting(lz, name)...)
+	}
 	errs = append(errs, validateTeams(lz.Spec.Teams)...)
 	errs = append(errs, ValidateOpenBao(lz.Spec.OpenBao, lz.Spec.Teams)...)
 	return errs
@@ -235,29 +239,127 @@ func validateTeamResourceQuota(i int, t Team) []error {
 	return errs
 }
 
-// validateAlerting checks spec.alerting: receivers may only name channels the
-// landing zone wires ("slack", "none" — msteams et al. put secret webhook URLs
-// in committed values, which the OpenBao-backed slack path deliberately
-// avoids), "none" cannot be combined with a real channel, and slack channel
-// overrides only make sense when the slack receiver is selected.
-func validateAlerting(a Alerting) []error {
+// alertSeverityRe bounds a spec.alerting.*.severities entry. The values are
+// joined into an Alertmanager regex matcher, so a metacharacter here would widen
+// what notifies (".*" pages on everything) rather than fail anywhere.
+var alertSeverityRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// unroutableSeverities may not appear in any LLZ severity list.
+//
+// info IS NOISE BY CONSTRUCTION, and the usual guard against it is absent here.
+// kube-prometheus-stack ships an InfoInhibitor alert plus an inhibit rule so info
+// alerts notify only when nothing more serious fires in their namespace — and
+// apl-core DISABLES InfoInhibitor (apps.prometheus.disabledRules). An
+// InfoInhibitor-style inhibit rule on LLZ's routes would therefore have no source
+// alert and never fire, so a route that matched info would post every info alert
+// on the cluster, forever. `none` is the severity kube-prometheus-stack gives
+// Watchdog and InfoInhibitor themselves.
+var unroutableSeverities = map[string]string{
+	"info": "info alerts are informational by design; apl-core disables the InfoInhibitor that would otherwise keep them quiet, so routing them notifies on every one",
+	"none": "`none` is the severity of always-firing alerts (Watchdog, InfoInhibitor)",
+}
+
+// validateAlerting checks one spec.alerting block — the instance's, or an env's
+// override (where = "alerting" / "environments/<env>: alerting"). selected
+// answers "does the EFFECTIVE spec select this receiver", which for an env
+// override is the merged list, so an env may tune an inherited receiver without
+// re-listing it.
+//
+// Receivers may only name channels the landing zone wires:
+//   - msteams is refused although apl-core supports it: its critical webhook
+//     targets prometheus-msteams on port 800 (helmfile.d/snippets/alertmanager.gotmpl)
+//     while the Service listens on 2000, so every critical Teams notification would
+//     fail to connect — a receiver that is quiet exactly when it matters.
+//   - email is refused because apl-core's values schema does not accept it
+//     (alerts.receivers enum: slack, msteams, none — email is commented out).
+//   - opsgenie et al. are not in apl-core's schema either.
+func validateAlerting(where string, a Alerting, selected func(string) bool) []error {
 	var errs []error
-	hasSlack, hasNone := false, false
+	hasNone := false
+	seen := map[string]bool{}
 	for _, r := range a.Receivers {
+		if seen[r] {
+			errs = append(errs, fmt.Errorf("%s.receivers: %q is listed twice", where, r))
+		}
+		seen[r] = true
 		switch r {
-		case "slack":
-			hasSlack = true
+		case "slack", "pagerduty":
 		case "none":
 			hasNone = true
+		case "msteams":
+			errs = append(errs, fmt.Errorf("%s.receivers: msteams is not supported — apl-core sends critical Teams "+
+				"notifications to prometheus-msteams on port 800, which the Service does not listen on, so they would all fail; "+
+				"use pagerduty or slack", where))
+		case "email":
+			errs = append(errs, fmt.Errorf("%s.receivers: email is not supported — apl-core's values schema does not accept it "+
+				"as an alerts receiver; use pagerduty or slack", where))
 		default:
-			errs = append(errs, fmt.Errorf("alerting.receivers: %q is not supported (use slack or none; msteams would put its secret webhook URLs in committed values)", r))
+			errs = append(errs, fmt.Errorf("%s.receivers: %q is not supported (use pagerduty, slack or none)", where, r))
 		}
 	}
-	if hasNone && hasSlack {
-		errs = append(errs, fmt.Errorf("alerting.receivers: none cannot be combined with slack"))
+	if hasNone && len(a.Receivers) > 1 {
+		errs = append(errs, fmt.Errorf("%s.receivers: none cannot be combined with another receiver", where))
 	}
-	if (a.Slack.Channel != "" || a.Slack.ChannelCrit != "") && !hasSlack {
-		errs = append(errs, fmt.Errorf("alerting.slack.* is set but receivers does not include slack"))
+	if (a.Slack.Channel != "" || a.Slack.ChannelCrit != "" || len(a.Slack.Severities) > 0) && !selected("slack") {
+		errs = append(errs, fmt.Errorf("%s.slack.* is set but receivers does not include slack", where))
+	}
+	if (len(a.PagerDuty.Severities) > 0 || a.PagerDuty.URL != "") && !selected("pagerduty") {
+		errs = append(errs, fmt.Errorf("%s.pagerduty.* is set but receivers does not include pagerduty", where))
+	}
+	// ONE WEBHOOK, ONE CHANNEL — see AlertingSlack.
+	if cc := strings.TrimPrefix(a.Slack.ChannelCrit, "#"); cc != "" && cc != strings.TrimPrefix(a.Slack.Channel, "#") {
+		errs = append(errs, fmt.Errorf("%s.slack.channelCrit: %q differs from slack.channel — apl-core sends every Slack "+
+			"notification through ONE webhook URL, and a Slack-app webhook posts only to the channel it was created for, "+
+			"so critical alerts cannot go to a different channel. Remove channelCrit; page urgent alerts with pagerduty", where, a.Slack.ChannelCrit))
+	}
+	errs = append(errs, validateSeverities(where+".pagerduty.severities", a.PagerDuty.Severities)...)
+	errs = append(errs, validateSeverities(where+".slack.severities", a.Slack.Severities)...)
+	if len(a.Slack.Severities) > 0 && !slices.Contains(a.Slack.Severities, SeverityCritical) {
+		errs = append(errs, fmt.Errorf("%s.slack.severities: %v must include critical — apl-core's own critical route "+
+			"posts every critical alert to Slack whenever Slack is enabled, and LLZ cannot turn that route off", where, a.Slack.Severities))
+	}
+	if u := a.PagerDuty.URL; u != "" && !strings.HasPrefix(u, "https://") {
+		errs = append(errs, fmt.Errorf("%s.pagerduty.url: %q must be an https:// Events API v2 endpoint (e.g. https://events.eu.pagerduty.com/v2/enqueue)", where, u))
+	}
+	return errs
+}
+
+func validateSeverities(where string, sev []string) []error {
+	var errs []error
+	seen := map[string]bool{}
+	for _, s := range sev {
+		switch {
+		case !alertSeverityRe.MatchString(s):
+			errs = append(errs, fmt.Errorf("%s: %q is not a plain severity label value (lowercase letters, digits, - and _; it is matched literally, so a regex would widen what notifies)", where, s))
+		case unroutableSeverities[s] != "":
+			errs = append(errs, fmt.Errorf("%s: %q cannot be routed — %s", where, s, unroutableSeverities[s]))
+		case seen[s]:
+			errs = append(errs, fmt.Errorf("%s: %q is listed twice", where, s))
+		}
+		seen[s] = true
+	}
+	return errs
+}
+
+// validateEnvAlerting checks environments/<env>.yaml's spec.alerting override:
+// its own fields with the same rules as the instance's, judged against the
+// MERGED receiver list; and, if the env ITSELF asks for a receiver, that it
+// deploys observability. Inheriting the instance's receivers on an env without
+// observability is not an error — that env is skipped (AlertingApplies) — but an
+// env that names a receiver it cannot carry has asked for something LLZ would
+// silently not do.
+func validateEnvAlerting(lz *LandingZone, name string) []error {
+	e := lz.Spec.Environments[name]
+	if e.Alerting == nil {
+		return nil
+	}
+	where := "environments/" + name + ": alerting"
+	eff := MergeAlerting(lz.Spec.Alerting, e.Alerting)
+	errs := validateAlerting(where, *e.Alerting, eff.HasReceiver)
+	if len(e.Alerting.Receivers) > 0 && MergeAlerting(Alerting{}, e.Alerting).Active() && !AlertingApplies(e) {
+		errs = append(errs, fmt.Errorf("%s.receivers %v needs the observability component, which %s does not deploy "+
+			"(disabled, or `loki` not declared in cluster.bootstrap.managedApps) — Alertmanager is part of it. Enable "+
+			"observability for %s, or set its alerting.receivers to [none]", where, e.Alerting.Receivers, name, name))
 	}
 	return errs
 }

@@ -80,12 +80,13 @@ checkout, a failed ACL open, a bad image pull. That is precisely what this
 weekly run exists to prove still works, and a probe that cannot report itself
 broken re-proves nothing.
 
-Three of the checks fail on a real FINDING — as distinct from failing because they could not look, which every check here does:
+Four of the checks fail on a real FINDING — as distinct from failing because they could not look, which every check here does:
 
 | Check | Fails when |
 |---|---|
 | `assert-wave-health-vap` | the wave-health guard VAP stopped enforcing — the PR #142 bootstrap-wedge class it exists to prevent |
 | `assert-openbao-extensions` | a `spec.openbao.kubernetesRoles` entry, logged into as its bound service account, does not carry exactly its declared policies, lacks a declared capability, or reaches a mount of the wrong engine. A bound service account that does not exist yet only warns — the workload is not deployed — and an instance declaring no roles is a no-op. The e2e lane (`openbao-ext`) runs it with `--require-bound` |
+| `assert-alert-routing` | for this env's effective `spec.alerting` (`--region` = `$REGION`): a receiver it names is not in the config Alertmanager is running (unseeded key → no Secret → the operator rejected the `AlertmanagerConfig`; or the `AplAlertSet` never reached apl-core), apl-core's Slack Secret is empty, a silenced probe alert reaches a different NUMBER of PagerDuty/Slack paths than the spec says (namespace-scoped route, or a duplicate), or a team Alertmanager carries LLZ's receivers (a second page). Probes are silenced before they are posted and never notify. Failed-notification counters are reported, not gated. An env with no receiver (or no observability) gets a warning / note and passes |
 | `assert-apl-deployed-version` | the apl-core RUNNING here is a MAJOR away from the version this llz release targets, or its version cannot be read at all. On managed App Platform **Linode** moves that version on their own schedule, with no event this repo sees, so a weekly cron is the only thing that will ever notice. Set the repo variable `LLZ_ALLOW_APL_CHART_MAJOR_DRIFT=1` to stage a major deliberately; a minor or patch apart only warns |
 
 `health-loki-objkey` used to be on this list, and it is gone (#483) — it
@@ -113,8 +114,8 @@ these continuously and fires them as Prometheus alerts —
 `LLZESOStoreNotReady` (`llz-reconciler` PrometheusRule) — so a daily
 hosted-runner probe (fetch-kubeconfig + runner-ACL, the CIDR-fragile
 port-forward path this migration set out to retire) is redundant. The weekly run
-stays as belt-and-suspenders: it catches a cluster whose operator has not wired
-an Alertmanager receiver (`spec.alerting.receivers: [none]`) and it re-proves
+stays as belt-and-suspenders: it catches a cluster whose operator has not set an
+Alertmanager receiver (`spec.alerting.receivers` unset or `[none]`) and it re-proves
 the probe path itself. Still available on demand via `workflow_dispatch`.
 
 ### Step: Check cert-manager Certificate readiness

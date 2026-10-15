@@ -259,6 +259,14 @@ Two consequences worth knowing before you set it:
   `apl-values/<env>/apl-overlay/otomi.yaml` as well to hand the version back to
   Linode.
 
+**`alerting`** — `landingzone.yaml`'s `spec.alerting` (receivers `pagerduty`,
+`slack`, `none`; `pagerduty.{severities,url}`; `slack.{channel,severities}`) is
+inherited by every env that deploys the observability component, and
+`environments/<env>.yaml`'s `spec.alerting` overrides it **field by field** —
+`receivers: [none]` opts an env out (a dev cluster that should not page). An env
+without observability is skipped when it only inherits a receiver, and fails
+validation when it names one itself. See [alerting.md](alerting.md).
+
 While it is on, `cluster.bootstrap.aplChartVersion` stops being merely what
 `llz ci assert-apl-version` resolves and becomes **what deploys** — so `llz
 upgrade`'s pin sweep refuses to drop it, rather than silently moving a live
@@ -526,13 +534,19 @@ openbao:
 > source of truth the in-cluster reconciler merges onto the `apl-<env>` branch, so
 > the two writers never collide.
 >
-> **Consequence — three spec blocks are currently validated but never rendered:**
-> `spec.dns.*` (including `acmeEmail`), `spec.defaults.platform.*` (`externalDNS`,
-> `externalIDP`), and `spec.alerting.*` (`receivers`, `slack.channel*`). They were
-> written into `values.yaml` before the managed-only collapse and no renderer
-> replaced them, so setting them today changes `landingzone.yaml` and nothing else.
-> `llz import` still reads them back off a live site. Treat them as inert until
-> they are rewired or removed.
+> **Consequence — two spec blocks are currently validated but never rendered:**
+> `spec.dns.*` (including `acmeEmail`) and `spec.defaults.platform.*`
+> (`externalDNS`, `externalIDP`). They were written into `values.yaml` before the
+> managed-only collapse and no renderer replaced them, so setting them today
+> changes `landingzone.yaml` and nothing else. `llz import` still reads them back
+> off a live site. Treat them as inert until they are rewired or removed.
+>
+> `spec.alerting.*` used to be on this list. It now renders, per env (overridable
+> in `environments/<env>.yaml`): Slack as apl-core's own `AplAlertSet` settings CR
+> (`apl-overlay/alerts.yaml`) plus the `alerts-secrets` ExternalSecret, PagerDuty as
+> an `AlertmanagerConfig` (`apps/observability/alerting.yaml`). Receivers
+> `pagerduty` and `slack`; see [alerting.md](alerting.md) § "Wiring a notification
+> receiver".
 
 Cluster identity does still reach the platform, just not through `values.yaml`:
 `cluster.bootstrap.domainSuffix` drives the Harbor host patch

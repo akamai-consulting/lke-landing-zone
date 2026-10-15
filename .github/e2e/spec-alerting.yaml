@@ -1,0 +1,21 @@
+# spec.alerting fixture for the e2e lane (e2e-instantiate.yml → `llz spec set
+# alerting=@.github/e2e/spec-alerting.yaml`). Exercises both receiver types and
+# both Slack paths, so the alert-routing lane (assertobs/alertrouting.go) checks,
+# against the Alertmanager the e2e cluster actually runs: the PagerDuty CR, the
+# AplAlertSet reaching apl-core (critical → apl-core's own Slack receiver), LLZ's
+# warning route (llz-alerting-slack), exactly one Slack path per severity, and the
+# info probe that must notify nobody.
+#
+# NOTHING HERE CAN REACH A REAL PROVIDER. llz-bootstrap-openbao.yml's (e2e) seed
+# steps write placeholder keys, the PagerDuty endpoint is overridden to a
+# reserved `.invalid` name (RFC 2606), and the Slack placeholder webhook is one
+# too — so a real alert firing on the throwaway cluster fails DNS rather than
+# landing in anyone's pager or channel. The lane's own probes are silenced and
+# never notify regardless; the failed-notification counters it reports are
+# expected to be non-zero here, which is why that half is report-only.
+receivers: [pagerduty, slack]
+pagerduty:
+  url: https://events.pagerduty.invalid/v2/enqueue
+slack:
+  channel: llz-e2e
+  severities: [warning, critical]

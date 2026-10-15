@@ -105,9 +105,10 @@ var CredPaths = []CredPath{
 	{"secret/grafana/admin", "grafana-admin", CredClassGenerateOnce, false},
 	{"secret/otel/ingress", "otel-ingress", CredClassGenerateOnce, false},
 	{"secret/harbor/admin", "harbor-admin", CredClassTracksSource, false},
-	// Bootstrap seeds, re-seeded only by hand. `secret/alerts/webhooks` is
-	// operator-seeded and only when spec.alerting.receivers includes slack; an
-	// instance without it 404s and is skipped, same as any unseeded path.
+	// Bootstrap seeds, re-seeded only by hand. `secret/alerts/webhooks` and
+	// `secret/alerts/pagerduty` are operator-seeded and only when
+	// spec.alerting.receivers includes slack / pagerduty; an instance without them
+	// 404s and is skipped, same as any unseeded path.
 	{"secret/harbor/robot", "harbor-robot", CredClassStatic, false},
 	{"secret/harbor/pull-robot", "harbor-pull-robot", CredClassStatic, false},
 	{"secret/cert-automation/github-token", "cert-automation-github-token", CredClassStatic, false},
@@ -119,6 +120,10 @@ var CredPaths = []CredPath{
 	// otomi.git and the argocd repo Secrets.
 	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", CredClassStatic, false},
 	{"secret/alerts/webhooks", "alerts-webhooks", CredClassStatic, false},
+	// The PagerDuty Events API v2 routing key spec.alerting's PagerDuty
+	// AlertmanagerConfig pages through. Operator-seeded, and only when receivers includes pagerduty;
+	// unseeded instances 404 and publish nothing, like the webhook above.
+	{"secret/alerts/pagerduty", "alerts-pagerduty", CredClassStatic, false},
 	// OPT-IN least-privilege firewall token (docs/consume-lke-landing-zone-internal.md).
 	// Most instances never seed it — the sampler 404s and publishes nothing, same
 	// as any unseeded path. Where it IS seeded it is operator-managed on a

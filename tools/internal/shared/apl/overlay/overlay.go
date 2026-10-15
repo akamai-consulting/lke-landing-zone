@@ -62,7 +62,7 @@ type Config struct {
 // apl-operator's "otomi commit" so the two writers' history stays legible.
 // maxAttempts bounds the fast-forward retry loop against concurrent pushes.
 const (
-	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + app values + teams) [ci skip]"
+	commitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + app values + teams + alerts) [ci skip]"
 	maxAttempts   = 4
 )
 
@@ -88,6 +88,12 @@ var aplOverlayTargets = map[string]string{
 // writes whole. apl-core co-writes this one and LLZ owns a single key of it, so it
 // takes the key-level path (otomiOverlayFiles) exactly as the per-app CRs do.
 const aplOtomiTarget = "env/settings/otomi.yaml"
+
+// aplAlertsTarget is apl-core's AplAlertSet settings CR on the machine branch
+// (src/common/repo.ts maps it to `$.alerts`). Key-level like otomi.yaml, NOT in
+// aplOverlayTargets: the App Platform Console's alert settings write the same
+// file, and LLZ owns only receivers + the Slack channel.
+const aplAlertsTarget = "env/settings/alerts.yaml"
 
 // aplAppTarget is apl-core's per-app AplApp CR path on the machine branch.
 func aplAppTarget(app string) string { return "env/apps/" + app + ".yaml" }
@@ -212,6 +218,10 @@ func Reconcile(ctx context.Context, cfg Config, repo Repo, objCreds ObjCreds, re
 	}
 
 	if err := otomiOverlayFiles(ctx, repo, cfg, files, reg); err != nil {
+		return err
+	}
+
+	if err := alertsOverlayFiles(ctx, repo, cfg, files, reg); err != nil {
 		return err
 	}
 
@@ -503,6 +513,79 @@ func otomiOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[str
 	}
 	if changed {
 		files[aplOtomiTarget] = string(updated)
+	}
+	return nil
+}
+
+// alertsOverlayFiles asserts spec.alerting's apl-core half — the receiver list
+// and the Slack channel — onto apl-core's AplAlertSet.
+//
+// No source means spec.alerting is not declared for this env, so LLZ has no
+// opinion and says nothing.
+//
+// CREATE-IF-ABSENT, MERGE-IF-PRESENT, and the asymmetry with otomi.yaml is
+// deliberate. otomi.yaml refuses to create because a version-only CR would be
+// missing apl-core's eight other settings. An AplAlertSet has no required key
+// (apl-core's schema defaults every field), and the source is a complete CR of
+// that kind — so an absent target means "apl-core's defaults", and writing the
+// source over it says exactly what the spec says. Refusing would leave Slack
+// asserted by NOTHING on a cluster that simply never had alert settings saved.
+//
+// A present target that is not an AplAlertSet, or holds more than one document,
+// is refused (gauge, not error), for the reasons otomiOverlayFiles gives.
+func alertsOverlayFiles(ctx context.Context, repo Repo, cfg Config, files map[string]string, reg *metrics.Registry) error {
+	unusable := 0.0
+	defer func() {
+		reg.SetGauge("llz_apl_overlay_alerts_target_unusable",
+			"1 when spec.alerting is declared but apl-core's alert settings CR cannot be merged into, so Slack routing is asserted by nothing",
+			map[string]string{"branch": cfg.TargetBranch}, unusable)
+	}()
+
+	srcPath := envOverlayPath(cfg.Env, clusterspec.OverlayAlertsFile)
+	src, found, err := repo.ReadFile(ctx, cfg.SourceBranch, srcPath)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", srcPath, err)
+	}
+	if !found {
+		return nil // spec.alerting not declared for this env
+	}
+	// LLZ'S OWN FILE: a parse failure is a real error, as for otomi.yaml.
+	want, err := clusterspec.ParseAlertSetOverlay([]byte(src))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", srcPath, err)
+	}
+
+	current, exists, err := repo.ReadFile(ctx, cfg.TargetBranch, aplAlertsTarget)
+	if err != nil {
+		return fmt.Errorf("read target %s: %w", aplAlertsTarget, err)
+	}
+	if !exists {
+		files[aplAlertsTarget] = src
+		return nil
+	}
+	switch {
+	case !clusterspec.AlertSetCRIsMergeable([]byte(current)):
+		unusable = 1
+		fmt.Printf("apl-overlay: spec.alerting is declared but %s on %s is not an AplAlertSet, so apl-core's alert "+
+			"receivers are asserted by NOTHING\n", aplAlertsTarget, cfg.TargetBranch)
+		return nil
+	case !clusterspec.OtomiTargetIsSingleDocument([]byte(current)):
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s holds more than one YAML document; merging would truncate it, so "+
+			"apl-core's alert receivers are NOT being asserted\n", aplAlertsTarget, cfg.TargetBranch)
+		return nil
+	}
+	updated, changed, err := clusterspec.SetAlertSetSpec([]byte(current), want)
+	if err != nil {
+		// Same rule as otomi.yaml: a broken file on a branch LLZ does not own must
+		// not drop the rest of the pass.
+		unusable = 1
+		fmt.Printf("apl-overlay: %s on %s does not parse (%v), so apl-core's alert receivers are NOT being "+
+			"asserted — the rest of this pass still syncs\n", aplAlertsTarget, cfg.TargetBranch, err)
+		return nil
+	}
+	if changed {
+		files[aplAlertsTarget] = string(updated)
 	}
 	return nil
 }
