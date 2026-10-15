@@ -83,7 +83,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/verbs/upgrade"
 	"github.com/spf13/cobra"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/objenc"
 )
 
 func ciCmd() *cobra.Command {
@@ -461,9 +461,7 @@ func ciCmd() *cobra.Command {
 	// the race-ahead Kyverno policies) that used to be the cluster-bootstrap
 	// Terraform workspace. wait-apl-pipeline and apply-kyverno-policy are SEPARATE
 	// verbs that bootstrap-cluster does NOT call in-process — it imports neither
-	// package — so anything relying on one of them running must invoke it. See the
-	// header of platform-apl/components/objProxy/obj-proxy/kyverno-harbor-ca.yaml,
-	// which is why that policy ships through Argo rather than through this verb.
+	// package — so anything relying on one of them running must invoke it.
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
 	c.AddCommand(bootstrapcluster.BootstrapClusterCmd(), converge.WaitAplPipelineCmd(), kyverno.ApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ghsecret.ClearClusterSecretsCmd())

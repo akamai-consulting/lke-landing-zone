@@ -1658,7 +1658,11 @@ categories:
     #                       TokenRequests under a declaration that cannot create
     #                       Keycloak users — login-smoke's Writer can. The lane
     #                       logic is in assertions/assertidentity, unit-tested.
-    budget: 1954
+    #   1,953 / 129 files  -1 the `llz obj-proxy` registration, retired with the SSE-C
+    #                       gateway now that Linode applies SSE-S3 by default on
+    #                       E2/E3 endpoints. Its two CI verbs stay registered as
+    #                       hidden no-ops until vendored workflows stop calling them.
+    budget: 1953
     exact: true
     include:
       - "tools/internal/cli/*.go"

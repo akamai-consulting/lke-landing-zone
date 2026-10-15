@@ -33,35 +33,35 @@ func find(t *testing.T, es []Enablement, name string) Enablement {
 // its own configuration rather than by taking a different build". This is the
 // first test that could have failed on that claim.
 func TestAnInstanceCanTurnACapabilityOff(t *testing.T) {
-	on, err := EnabledFor(toggles(t, map[string]bool{"objProxy": true}))
+	on, err := EnabledFor(toggles(t, map[string]bool{"llzReconciler": true}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := find(t, on, "obj-encryption"); !e.Enabled {
-		t.Errorf("obj-encryption disabled with objProxy ON (reason %q)", e.Reason)
+	if e := find(t, on, "assert-reconciler"); !e.Enabled {
+		t.Errorf("assert-reconciler disabled with llzReconciler ON (reason %q)", e.Reason)
 	}
 
-	off, err := EnabledFor(toggles(t, map[string]bool{"objProxy": false}))
+	off, err := EnabledFor(toggles(t, map[string]bool{"llzReconciler": false}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := find(t, off, "obj-encryption")
+	e := find(t, off, "assert-reconciler")
 	if e.Enabled {
-		t.Error("obj-encryption still enabled with spec.components.objProxy disabled — this " +
+		t.Error("assert-reconciler still enabled with spec.components.llzReconciler disabled — this " +
 			"is the claim the whole model rests on, and it is the one nothing checked")
 	}
-	if !strings.Contains(e.Reason, "objProxy") {
+	if !strings.Contains(e.Reason, "llzReconciler") {
 		t.Errorf("reason %q does not name the component — an operator asking why a lane did "+
 			"not run needs to know WHICH toggle did it", e.Reason)
 	}
 }
 
 // BOTH DIRECTIONS. The model's own note demands it: "the registry must let an
-// instance override this field in both directions." obj-encryption ships
+// instance override this field in both directions." assert-reconciler ships
 // `Always: false`, so enabling its component must turn it ON — otherwise the
 // field is a floor rather than a default.
 func TestComponentEnablementOverridesAlwaysInBothDirections(t *testing.T) {
-	e := find(t, mustResolve(t, map[string]bool{"objProxy": true}), "obj-encryption")
+	e := find(t, mustResolve(t, map[string]bool{"llzReconciler": true}), "assert-reconciler")
 	if !e.Extension.Always && !e.Enabled {
 		t.Error("an Always:false extension stayed off with its component ON — component " +
 			"enablement must override the default upward as well as downward")
@@ -122,8 +122,6 @@ func TestComponentLinksArePinned(t *testing.T) {
 	// `assert-secrets` touches externalSecrets, openbao and broadPatRotator, and a
 	// single link would turn one of the three into a switch for all of them.
 	want := map[string]string{
-		// the SSE-C key exists to encrypt what the OBJ proxy writes
-		"obj-encryption": "objProxy",
 		// proves a minted Harbor robot can authenticate; no Harbor, no robot
 		"assert-registry": "harbor",
 		// measures the in-cluster reconciler the component deploys

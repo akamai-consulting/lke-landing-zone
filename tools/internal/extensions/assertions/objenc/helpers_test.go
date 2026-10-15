@@ -7,18 +7,10 @@ import (
 	"testing"
 )
 
-// testDeps is the Deps a unit test hands the encryption verbs.
-//
-// KVGet DEFAULTS TO KVUnknown, not KVAbsent, and that is the fixture doing the
-// same job the production code does. Absent means "not seeded, mint one"; unknown
-// means "refuse". A fixture defaulting to absent would let every seeding test pass
-// through the minting branch without ever asserting that the refusal branch works
-// — and the refusal branch is the one protecting every object already written.
+// testDeps is the Deps a unit test hands the encryption gate.
 func testDeps(t *testing.T) Deps {
 	t.Helper()
 	return Deps{
-		KVGet:      func(string, string) (string, KVVerdict) { return "", KVUnknown },
-		KVPut:      func(string, map[string]string) error { return nil },
 		KubectlOut: func(...string) (string, error) { return "", nil },
 		// SecretField does the REAL base64 decode. A no-op stub returned "" for
 		// every field, which made each secret-reading case pass through the
@@ -37,6 +29,5 @@ func testDeps(t *testing.T) Deps {
 			b, err := base64.StdEncoding.DecodeString(v)
 			return string(b), err
 		},
-		MaskGHALines: func(...string) {},
 	}
 }

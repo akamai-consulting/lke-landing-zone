@@ -333,7 +333,6 @@ func isInClusterPkg(pkg string, verbs map[string]bool) bool {
 		"harbor":     {"harbor-provisioner"},
 		"reconciler": {"reconcile"},
 		"converge":   {"health-incluster"},
-		"objproxy":   {"obj-proxy"},
 		"openbao":    {"bao-seed-all"},
 	}
 	for _, v := range byPkg[pkg] {

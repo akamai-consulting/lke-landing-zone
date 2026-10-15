@@ -224,24 +224,24 @@ func okCmd() func() *cobra.Command {
 func TestRunGatesSkipsADisabledExtension(t *testing.T) {
 	orig := gates
 	t.Cleanup(func() { gates = orig })
-	// wave-health follows no component, so pick one that does. obj-encryption is
+	// wave-health follows no component, so pick one that does. assert-reconciler is
 	// not a gate, so borrow its NAME for a synthetic entry: what is under test is
 	// the driver's skip logic keyed on the resolver, not the guard behind it.
-	gates = []Gate{{Extension: "obj-encryption", New: okCmd()}, {Extension: "guard-docs", New: okCmd()}}
+	gates = []Gate{{Extension: "assert-reconciler", New: okCmd()}, {Extension: "guard-docs", New: okCmd()}}
 
 	off := false
-	toggles := map[string]clusterspec.ComponentToggle{"objProxy": {Enabled: &off}}
+	toggles := map[string]clusterspec.ComponentToggle{"llzReconciler": {Enabled: &off}}
 
 	var out, errOut bytes.Buffer
 	if err := RunGates(nil, Run{Root: ".", Toggles: toggles}, &out, &errOut); err != nil {
 		t.Fatalf("RunGates failed: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "skipped obj-encryption") {
+	if !strings.Contains(got, "skipped assert-reconciler") {
 		t.Errorf("output %q does not skip the disabled extension — the resolver said off and "+
 			"the driver ran it anyway", got)
 	}
-	if !strings.Contains(got, "objProxy") {
+	if !strings.Contains(got, "llzReconciler") {
 		t.Errorf("output %q does not name the component that disabled it — an operator "+
 			"needs to know WHICH toggle did it", got)
 	}

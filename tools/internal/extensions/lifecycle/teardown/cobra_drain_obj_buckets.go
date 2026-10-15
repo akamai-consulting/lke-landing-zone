@@ -21,9 +21,10 @@ func DrainObjBucketsCmd() *cobra.Command {
 		Short: "delete every object in the deployment's Loki/Harbor buckets, leaving the buckets in place",
 		Long: "Empties the data buckets a deployment owns. DESTRUCTIVE: it deletes log chunks\n" +
 			"and registry blobs. Requires --yes.\n\n" +
-			"For a lane that recreates a cluster over the same buckets. Each cluster mints its\n" +
-			"own SSE-C key, so a previous cluster's objects are permanently unreadable and make\n" +
-			"Loki's index-gateway fail whole tables rather than skip them.\n\n" +
+			"For a lane that recreates a cluster over the same buckets, so it starts empty\n" +
+			"rather than inheriting a previous cluster's objects. Objects left by the retired\n" +
+			"SSE-C gateway are unreadable without its per-cluster key, and make Loki's\n" +
+			"index-gateway fail whole tables rather than skip them.\n\n" +
 			"EMPTIES rather than deletes: Linode does not free a bucket NAME promptly after\n" +
 			"deletion, so destroying the buckets fails the next provision with\n" +
 			"\"already exists\".",

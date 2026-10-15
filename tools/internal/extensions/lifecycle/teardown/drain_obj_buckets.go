@@ -3,13 +3,13 @@ package teardown
 // drain_obj_buckets.go — `llz ci drain-obj-buckets`: empty the data buckets
 // WITHOUT deleting them.
 //
-// WHY IT EXISTS. SSE-C keys are per-object and every cluster mints its own
-// (`llz ci seed-ssec-key` generates one whenever OpenBao has none, which on a fresh
-// cluster is always). So objects a destroyed cluster left behind are not stale —
-// they are permanently unreadable by its successor. Loki's index-gateway does not
-// skip an object it cannot decrypt; it fails the whole table and retries, which
-// degrades queries far enough to time out callers while every write-path check stays
-// color.Green. See #397's follow-up.
+// WHY IT EXISTS. A lane that recreates a cluster over the same buckets inherits
+// whatever the destroyed cluster left behind. That is never this cluster's data,
+// and while the retired SSE-C gateway ran, every cluster minted its own key — so
+// objects from that era are permanently unreadable by anyone. Loki's index-gateway
+// does not skip an object it cannot read; it fails the whole table and retries,
+// which degrades queries far enough to time out callers while every write-path
+// check stays green. See #397's follow-up.
 //
 // WHY EMPTY AND NOT DELETE. Destroying the buckets also works, and it was the first
 // attempt. Linode does not release the bucket NAME promptly: a recreate six minutes

@@ -371,14 +371,15 @@ jobs:
           echo "     then: export KUBECONFIG=... && kubectl get pods -A"
           echo "When done, destroy it manually:"
           echo "  gh workflow run terraform.yml -R ${INSTANCE_REPO} -f action=destroy -f module=cluster -f region=${E2E_ENV} -f confirm_destroy=destroy:${E2E_ENV}:cluster"
-          echo "     ^ add -f drain_data_buckets=true: this run's objects are encrypted with ITS SSE-C key,"
-          echo "       and leaving them makes the next run's Loki index unreadable (see the teardown step)."
+          echo "     ^ add -f drain_data_buckets=true so the next run starts on empty buckets"
+          echo "       rather than inheriting this run's objects (see the teardown step)."
 
       # drain_data_buckets=true EMPTIES the Loki/Harbor buckets once the cluster is
-      # gone. Each cluster mints its own SSE-C key, so objects the previous one wrote
-      # are permanently unreadable by the next — and Loki's index-gateway fails whole
-      # tables rather than skipping them, which times out queries while every
-      # write-path check stays green.
+      # gone, so each run starts on empty buckets rather than a previous cluster's
+      # objects. Any left by the retired SSE-C gateway are unreadable without its
+      # per-cluster key — and Loki's index-gateway fails whole tables rather than
+      # skipping them, which times out queries while every write-path check stays
+      # green.
       #
       # EMPTY, not delete. Destroying the buckets was the first attempt and it moved
       # the failure downstream: Linode does not release the NAME promptly, so a

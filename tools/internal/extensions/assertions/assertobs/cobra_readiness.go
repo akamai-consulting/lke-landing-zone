@@ -6,6 +6,7 @@ package assertobs
 // every file named cobra_*.go is flag wiring and help text, and nothing else.
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -81,25 +82,20 @@ func WaitHarborCmd() *cobra.Command {
 	_ = c.Flags().MarkDeprecated("registry-only", "it is ignored; the registry rollout is now the only behavior")
 	return c
 }
+
+// HarborTrustObjProxyCACmd is the retired obj-proxy CA retrofit, kept as a hidden
+// no-op. Instance repos vendor their workflows, so a not-yet-upgraded instance
+// still calls it; failing there would break that instance on an image bump alone.
+// It goes once `llz upgrade` has carried the new bootstrap workflow everywhere.
 func HarborTrustObjProxyCACmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "harbor-trust-obj-proxy-ca",
-		Short: "roll harbor-registry if its pods predate the obj-proxy CA policy (no-op when objProxy is off)",
-		Long: "Closes the admission race between apl-core's Harbor install and the Kyverno\n" +
-			"policy that mounts the obj-proxy CA. The policy mutates on ADMISSION, so pods\n" +
-			"that already existed when it landed carry no CA — and once the CoreDNS rewrite\n" +
-			"is live those pods cannot complete a single S3 call, without crashing and\n" +
-			"without reporting anything.\n\n" +
-			"MUST RUN AFTER CONVERGE. It keys off the ClusterPolicy's existence to decide\n" +
-			"whether objProxy is enabled here, and the policy arrives with the component's\n" +
-			"Argo sync — so running it earlier (it used to be folded into wait-harbor) sees\n" +
-			"no policy, concludes the component is off, and silently does nothing.\n\n" +
-			"Always exits 0: a failure to repair is a ::warning::, and\n" +
-			"`llz ci assert-obj-encryption` is the gate that fails.",
-		Args: cobra.NoArgs,
+		Use:    "harbor-trust-obj-proxy-ca",
+		Short:  "retired — the obj-proxy SSE-C gateway is gone; accepted and does nothing",
+		Hidden: true,
+		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			retrofitHarborObjProxyCA()
+			fmt.Println("::notice::harbor-trust-obj-proxy-ca is retired with the obj-proxy SSE-C gateway and " +
+				"does nothing. Run `llz upgrade` to drop the call from the vendored bootstrap workflow.")
 			return nil
 		},
 	}

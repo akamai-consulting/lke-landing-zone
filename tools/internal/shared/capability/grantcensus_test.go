@@ -54,9 +54,9 @@ var citedCounts = map[extension.Grant]struct {
 	extension.CloudRead:     {20, 17, "cloud.go: \"20 declarations of cloud-read\"; model doc distribution table"},
 	extension.CloudMutate:   {21, 17, "cloud.go: \"21 of cloud-mutate\"; model doc distribution table"},
 	extension.SecretRead:    {11, 9, "secrets.go: \"eleven declare secret-read\"; model doc distribution table"},
-	extension.SecretCustody: {18, 12, "secrets.go: \"Eighteen bindings declare secret-custody\"; model doc distribution table"},
-	extension.ClusterRead:   {56, 23, "model doc distribution table"},
-	extension.ClusterWrite:  {23, 16, "model doc distribution table"},
+	extension.SecretCustody: {16, 11, "secrets.go: \"Sixteen bindings declare secret-custody\"; model doc distribution table"},
+	extension.ClusterRead:   {54, 23, "model doc distribution table"},
+	extension.ClusterWrite:  {22, 15, "model doc distribution table"},
 	extension.WriteRepo:     {9, 6, "model doc distribution table"},
 	extension.OwnPaths:      {1, 1, "model doc distribution table"},
 }

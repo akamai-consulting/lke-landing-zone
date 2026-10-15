@@ -34,7 +34,7 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/objstore"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/portfwd"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/objenc"
 )
 
 const (

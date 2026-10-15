@@ -80,7 +80,7 @@ secret half did:
    ExternalSecret at the `openbao` store. **That policy no longer ships.** It went
    with the whole `manifest/kyverno-policies/` base when LLZ became managed-only
    (Kyverno itself is the managed App Platform's), and nothing replaced it — only
-   `verify-llz-image-signature` and `harbor-obj-proxy-ca` ship today.
+   `verify-llz-image-signature` ships today.
 
    So the seed lands in OpenBao, is age-tracked, rotates on schedule, and is read
    by nothing. The parenthetical in the previous version of this page named the

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/cigate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/shared/health"
@@ -345,7 +344,7 @@ var lokiFlushWindow = time.Minute
 //
 // This proves FAILURE, not success: a quiet window can also mean Loki simply had
 // nothing to flush yet, which on a fresh bootstrap is normal. That asymmetry is why
-// assert-obj-encryption separately reports a bucket with no writes since the cutover
+// assert-obj-encryption separately reports a bucket with no recent writes
 // — between them, "nothing written" cannot pass as "everything fine".
 func lokiFlushFailures(nameMatch string) []string {
 	var out []string
@@ -446,88 +445,6 @@ func runCIWaitHarbor(_ string, _ bool) error {
 	}
 	return nil
 }
-
-// retrofitHarborObjProxyCA closes the admission race that would otherwise make the
-// obj-proxy CoreDNS rewrite a Harbor outage.
-//
-// THE RACE. The Kyverno policy that mounts the obj-proxy CA into registry pods is a
-// MUTATE-ON-ADMISSION rule, so it only ever affects pods created after it exists.
-// harbor-registry is installed by apl-core, and the objProxy component syncs
-// alongside it — so whether the registry's running pods carry the CA is decided by
-// which of the two won a race nobody controls. Once the DNS rewrite is live, a pod
-// that lost that race cannot complete a single S3 call: it dials the proxy, fails to
-// verify a certificate from a CA it does not trust, and every push and pull fails.
-// It does not crash, so nothing restarts it and nothing reports it — Harbor is
-// simply broken until a human notices.
-//
-// A previous run passing proves only that the race was won that time. This makes it
-// deterministic: check what is actually running, and roll the deployment if any pod
-// is missing the mutation.
-//
-// Best-effort by construction — it warns and returns rather than failing. The
-// convergence gate and `llz ci assert-obj-encryption`'s [pod] check are the hard
-// checks; this is the repair that stops them from having to fire.
-//
-// ORDERING IS LOAD-BEARING: see HarborTrustObjProxyCACmd. This reads the
-// ClusterPolicy to decide whether the component is enabled, so it is only correct
-// once that policy has synced.
-func retrofitHarborObjProxyCA() {
-	// Absent policy = the objProxy component is not enabled on this cluster. Not a
-	// problem to repair; nothing here applies.
-	if _, err := harborCARetrofitKubectl("get", "clusterpolicy", objProxyCAPolicy); err != nil {
-		return
-	}
-	findings := objenc.CheckRegistryPodsCarryCA(caps.ObjEncDeps())
-	if len(findings) == 0 {
-		fmt.Printf("harbor-registry pods already trust the obj-proxy CA (clusterpolicy/%s).\n", objProxyCAPolicy)
-		return
-	}
-	for _, f := range findings {
-		fmt.Printf("retrofit: %s\n", f.Problem)
-	}
-
-	fmt.Printf("::notice::harbor-registry pods predate clusterpolicy/%s — rolling them so the mutation applies.\n", objProxyCAPolicy)
-	for _, d := range health.HarborRegistryDeployments() {
-		if _, err := harborCARetrofitKubectl("-n", objenc.HarborNS, "rollout", "restart", "deploy/"+d); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::could not roll harbor/%s to pick up the obj-proxy CA (%v) — `kubectl -n %s rollout restart deploy/%s` by hand before relying on Harbor.\n", d, err, objenc.HarborNS, d)
-			return
-		}
-		if !cigate.WaitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborCARetrofitRolledOut(objenc.HarborNS, d) }) {
-			fmt.Fprintf(os.Stderr, "::warning::harbor/%s did not finish rolling within %s after the obj-proxy CA retrofit.\n", d, harborWaitBudget)
-			return
-		}
-	}
-
-	// Re-read rather than assume: the restart is only a fix if the new pods actually
-	// came back mutated. If Kyverno was down, they did not, and saying so here is the
-	// difference between a warning and a silent Harbor outage.
-	if findings := objenc.CheckRegistryPodsCarryCA(caps.ObjEncDeps()); len(findings) > 0 {
-		for _, f := range findings {
-			fmt.Fprintf(os.Stderr, "::warning::obj-proxy CA retrofit did not take: %s\n", f.Problem)
-		}
-		return
-	}
-	fmt.Println("retrofit: harbor-registry now trusts the obj-proxy CA.")
-}
-
-// objProxyCAPolicy is the ClusterPolicy whose presence means the objProxy component
-// is enabled here. Must match metadata.name in
-// platform-apl/components/objProxy/obj-proxy/kyverno-harbor-ca.yaml.
-const objProxyCAPolicy = "harbor-obj-proxy-ca"
-
-// harborCARetrofitKubectl is the write seam for the retrofit (checkRegistryPodsCarryCA
-// brings its own read seam). harborCARetrofitRolledOut seams the rollout wait for the
-// same reason, and for one more: deploymentRolledOut reaches kubectl directly, so
-// without it a test would poll the real harborWaitBudget against no cluster.
-var (
-	// DELEGATES rather than captures. `= caps.KubectlOut` would snapshot the
-	// DEFAULT at package-init time, before Install runs — so every retrofit call
-	// would reach the zero-value seam no matter what main wired. A package-level
-	// var initialised from an installed capability is a capture bug waiting to
-	// happen; the one-line closure is what makes it read through.
-	harborCARetrofitKubectl   = func(args ...string) (string, error) { return caps.KubectlOut(args...) }
-	harborCARetrofitRolledOut = deploymentRolledOut
-)
 
 // harborWaitBudget is the wall-clock deadline for each Harbor readiness poll
 // (the former harborPoll's 60 attempts × 10s). cigate.WaitPoll (ci_wait.go) bounds the

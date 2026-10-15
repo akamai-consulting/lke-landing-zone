@@ -69,7 +69,6 @@ var derivedRules = map[string]derivedRule{
 	// before stamping, so it retries.) An instance with more than one deployment
 	// could not express this field at all.
 	"OBJ_LABEL_PREFIX":      {shape: tokenShape, why: "namespaces every Object Storage bucket + key label; a wrong value points the in-cluster rotator at another instance's credentials"},
-	"OBJ_ENDPOINT_HOST":     {shape: hostShape, why: "the object-storage endpoint the SSE-C gateway dials; a sibling endpoint 404s NoSuchBucket on every request"},
 	"BROAD_PAT_DEPLOYMENTS": {shape: tokenListShape, why: "selects which deployments receive the rotated PAT"},
 }
 

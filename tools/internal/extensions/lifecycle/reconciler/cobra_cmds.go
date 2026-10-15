@@ -140,7 +140,7 @@ func Cmd() *cobra.Command {
 	// `--reconcile-volume-labels`. cobra rejects an unknown flag at startup, which
 	// CrashLoopBackOffs the pod and takes ALL NINE lanes down, not just this one.
 	//
-	// That is not hypothetical here: kustomize.go records objProxy doing exactly
+	// That is not hypothetical here: the retired obj-proxy DaemonSet did exactly
 	// this with `unknown flag: --listen`. Hidden so `--help` does not advertise a
 	// lane that no longer exists, and removable once no rendered manifest passes
 	// them.

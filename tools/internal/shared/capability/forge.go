@@ -472,7 +472,7 @@ func (f forge) Permits(args ...string) error {
 		// without custody could PUT a secret because the write graded as an
 		// ordinary mutation. Grading it custody fixed that and opened the other
 		// side: the bindings holding secret-custody WITHOUT cloud-mutate — the
-		// db-admin seeder, objenc's seed-ssec-key, two openbao lanes — gained a
+		// db-admin seeder, the (since retired) SSE-C key seed, two openbao lanes — gained a
 		// `gh api` write they had always been refused.
 		//
 		// Both directions are wrong for the same reason: writing a secret through

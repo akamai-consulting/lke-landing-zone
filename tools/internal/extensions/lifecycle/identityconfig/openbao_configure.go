@@ -39,7 +39,6 @@ path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
 path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
 path "secret/data/obj/platform"                 { capabilities = ["read"] }
-path "secret/data/obj/ssec"                     { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
 path "secret/metadata/alerts/webhooks"              { capabilities = ["read", "list"] }
@@ -55,7 +54,6 @@ path "secret/metadata/linode/api-token"             { capabilities = ["read", "l
 path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
 path "secret/metadata/obj/platform"                 { capabilities = ["read", "list"] }
-path "secret/metadata/obj/ssec"                     { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
 

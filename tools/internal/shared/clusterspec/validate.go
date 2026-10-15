@@ -1,6 +1,7 @@
 package clusterspec
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -348,9 +349,6 @@ func validateInstance(in Instance) []error {
 	return errs
 }
 
-// objProxyComponentName is the spec key for the SSE-C gateway.
-const objProxyComponentName = "objProxy"
-
 func validateEnv(name string, env Environment) []error {
 	var errs []error
 	prefix := func(format string, a ...any) error {
@@ -359,16 +357,6 @@ func validateEnv(name string, env Environment) []error {
 	if err := validate.EnvName(name); err != nil {
 		errs = append(errs, fmt.Errorf("environments key: %w", err))
 	}
-	// objProxy fronts the object-storage endpoint, so without one there is nothing to
-	// front: the proxy would start with an empty upstream, its certificate would name
-	// nothing, and the CoreDNS rewrite would have no host to rewrite. Rejecting it
-	// here is what keeps those renderers from having to invent a safe answer.
-	if t, ok := env.Components[objProxyComponentName]; ok && t.Enabled != nil && *t.Enabled &&
-		env.Cluster.ObjectStorage.Cluster == "" {
-		errs = append(errs, prefix("components.%s.enabled is true but cluster.objectStorage.cluster is empty — "+
-			"the SSE-C gateway has no endpoint to front", objProxyComponentName))
-	}
-
 	c := env.Cluster
 	if c.ClusterLabel == "" {
 		errs = append(errs, prefix("cluster.clusterLabel is required"))
@@ -622,6 +610,10 @@ func validateComponents(env string, components map[string]ComponentToggle) []err
 				errs = append(errs, fmt.Errorf("environments.%s.components.%s no longer exists — rename it to `certManagerBootstrapCA` (the OpenBao CA); letsencrypt/DNS-01 (the former certAutomation) is apl-core's on the MANAGED platform and is not an LLZ component", env, n))
 				continue
 			}
+			if n == retiredObjProxyComponent {
+				errs = append(errs, retiredObjProxyError(env, components[n]))
+				continue
+			}
 			errs = append(errs, fmt.Errorf("environments.%s.components.%s: unknown component (known: %s)", env, n, knownComponentList()))
 			continue
 		}
@@ -766,4 +758,30 @@ func knownComponentList() string {
 		out += n
 	}
 	return out
+}
+
+// retiredObjProxyComponent is the former SSE-C gateway's spec key.
+const retiredObjProxyComponent = "objProxy"
+
+// retiredObjProxyError is the migration aid for the retired SSE-C gateway.
+//
+// REFUSED, NOT IGNORED, even when the key says `enabled: false`. Linode now applies
+// SSE-S3 by default on E2/E3 endpoints, so the gateway is gone — but an instance
+// that ran it holds objects written under SSE-C, which Loki and Harbor could read
+// only because the proxy injected the key on every GET. Silently dropping the
+// component would turn those objects unreadable on the next sync, with nothing to
+// say why. Making the operator delete the key is what puts this message in front
+// of them first.
+func retiredObjProxyError(env string, t ComponentToggle) error {
+	base := fmt.Sprintf("environments.%s.components.%s no longer exists — the SSE-C gateway was retired "+
+		"because Linode applies SSE-S3 by default on E2/E3 endpoints (`llz ci assert-obj-encryption` "+
+		"proves it on real objects). Delete this key", env, retiredObjProxyComponent)
+	if t.Enabled == nil || !*t.Enabled {
+		return errors.New(base)
+	}
+	return fmt.Errorf("%s — but it is ENABLED here, so read this first: objects written through the "+
+		"gateway are SSE-C encrypted and readable only with the key at secret/obj/ssec. Once the proxy "+
+		"is gone Loki and Harbor cannot read them. Before upgrading, either rewrite them in place "+
+		"(copy-object supplying the source customer key, which re-encrypts under SSE-S3) or accept "+
+		"losing them; and back the key up offline either way", base)
 }

@@ -55,7 +55,6 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/assertions/templatecommit"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/credrotate"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/environments"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/reconciler"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/render"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/teardown"
@@ -198,7 +197,7 @@ func newRootCmd() *cobra.Command {
 		newCmd(), onboard.DoctorCmd(), upgrade.UpgradeCmd(), driftCmd(), envCmd(), environments.SpecCmd(), environments.NetworkCmd(), clusterspec.ComponentsCmd(),
 		importCmd(), onboard.SecretsCmd(), onboard.TokensCmd(), render.RenderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lint.LintCmd(), lint.FmtCmd(), lint.ValidateCmd(), lint.CheckCmd(), lint.HooksCmd(), lint.PrecommitCmd(),
-		teardown.ReapCmd(), openbaoext.OpenbaoCmd(), tofudriver.TofuCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), objenc.ObjProxyCmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
+		teardown.ReapCmd(), openbaoext.OpenbaoCmd(), tofudriver.TofuCmd(), ciCmd(), credrotate.CredentialsCmd(), reachability.VerifyCmd(), reconciler.Cmd(), versionCmd(), selfupgrade.SelfUpdateCmd(),
 		aplCmd(), extensionCmd(),
 	)
 

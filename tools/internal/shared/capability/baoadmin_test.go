@@ -49,7 +49,7 @@ func TestCustodyGetsBothHalves(t *testing.T) {
 
 // KV IS THE OTHER SURFACE AND MUST NOT BE REACHABLE HERE. Secrets.Get returns a
 // three-valued VERDICT so a refused read can never be mistaken for an absent path
-// — the property obj-encryption's SSE-C key depends on. A general argv that could
+// — the property every generate-once seeder depends on. A general argv that could
 // spell `kv get` would route around that and hand back a bare string.
 func TestKVIsNotReachableThroughTheAdminHandle(t *testing.T) {
 	h := capability.For(binding(extension.SecretCustody))

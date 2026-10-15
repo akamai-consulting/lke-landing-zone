@@ -43,7 +43,6 @@ var mixedBucket = map[string]string{
 	// The assert-* family: each mutates only to reach its verdict.
 	"assertidentity": "assertions",
 	"assertnetwork":  "assertions",
-	"assertobs":      "assertions",
 	"assertplatform": "assertions",
 	"assertsecrets":  "assertions",
 	"volumes":        "assertions", // assert-storage: reconciler lanes serve the assertion
@@ -56,7 +55,6 @@ var mixedBucket = map[string]string{
 	"converge":     "lifecycle",
 	"database":     "lifecycle",
 	"environments": "lifecycle",
-	"objenc":       "lifecycle",
 	"teardown":     "lifecycle",
 	"tofudriver":   "lifecycle",
 }
