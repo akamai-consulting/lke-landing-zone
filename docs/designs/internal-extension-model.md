@@ -3,7 +3,7 @@
 **Status:** **Shipped** — as the **declaration model**, which is what this document specifies: where
 an extension attaches to the platform lifecycle (bindings), what each attachment may touch (grants),
 and the rules between the two. That model is landed on `main`, load-bearing, and enforced in code.
-**77 extensions across 76 packages** declare **138 bindings** between them. The set is not enumerated
+**78 extensions across 77 packages** declare **139 bindings** between them. The set is not enumerated
 here, because a list beside the code it describes is the hand-maintained second copy this design
 exists to avoid — `llz extension list --verbose` is the listing, and it derives the package path from
 each declaration's constructor rather than transcribing it.
@@ -428,17 +428,17 @@ not a measurement**: the grants were assigned in the same pass that invented the
 reported the author's judgement about package `main`, and it "cannot become evidence until extensions
 declare their own grants and the distribution is *observed* rather than assigned".
 
-**That condition has since been met, and the observation disagrees.** 77 extensions now declare their
+**That condition has since been met, and the observation disagrees.** 78 extensions now declare their
 own grants. Measured against the live registry, per extension:
 
 | grant | extensions declaring it |
 |---|---|
-| `read-repo` | **55 / 77** |
-| `cluster-read` | 25 |
-| `cloud-mutate` | 19 |
+| `read-repo` | **55 / 78** |
+| `cluster-read` | 26 |
+| `cloud-mutate` | 20 |
 | `cloud-read` | 17 |
-| `cluster-write` | 18 |
-| `secret-custody` | 14 |
+| `cluster-write` | 19 |
+| `secret-custody` | 15 |
 | `secret-read` | 9 |
 | `write-repo` | 6 |
 | `own-paths` | 1 |

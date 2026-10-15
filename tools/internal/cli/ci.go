@@ -86,6 +86,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/objenc"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/openbaobackup"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/velero"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/cnpgbackup"
 )
 
 func ciCmd() *cobra.Command {
@@ -254,7 +256,7 @@ func ciCmd() *cobra.Command {
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
 	c.AddCommand(openbaoext.SeedBroadPATCmd())
 	c.AddCommand(objenc.SeedSSECKeyCmd())
-	c.AddCommand(objenc.AssertObjEncryptionCmd(), openbaobackup.BackupCmd(), openbaobackup.DrillCmd(), velero.DrillCmd())
+	c.AddCommand(objenc.AssertObjEncryptionCmd(), openbaobackup.BackupCmd(), openbaobackup.DrillCmd(), velero.DrillCmd(), cnpgbackup.CheckCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
 	c.AddCommand(assertsecrets.BroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed

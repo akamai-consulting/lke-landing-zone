@@ -99,6 +99,8 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/tofudriver"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/upstreamupdates"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/velero"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/extensions/lifecycle/cnpgbackup"
 )
 
 // Command pairs an extension name with one constructor it owns.
@@ -224,6 +226,7 @@ var commands = []Command{
 	{"openbaobackup", openbaobackup.BackupCmd},
 	{"openbaobackup", openbaobackup.DrillCmd},
 	{"velero", velero.DrillCmd},
+	{"cnpg-backup", cnpgbackup.CheckCmd},
 	{"openbao", openbao.BaoBreakglassCmd},
 	{"openbao", openbao.BaoEnsureReadyCmd},
 	{"openbao", openbao.BaoInitCmd},

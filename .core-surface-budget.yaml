@@ -1671,7 +1671,13 @@ categories:
     #                       AddCommand line. Its handles come from its own
     #                       declaration (deps.go); the logic is in lifecycle/velero
     #                       and shared/clusterspec, unit-tested.
-    budget: 1956
+    #   1,957 / 129 files  +1 the import of lifecycle/cnpgbackup, whose one verb
+    #                       (`llz ci assert-cnpg-backup`, the CNPG database backup
+    #                       check and e2e restore drill) rides the same existing
+    #                       AddCommand line. Its handles come from its own
+    #                       declaration (deps.go); the logic is in
+    #                       lifecycle/cnpgbackup and shared/clusterspec, unit-tested.
+    budget: 1957
     exact: true
     include:
       - "tools/internal/cli/*.go"
